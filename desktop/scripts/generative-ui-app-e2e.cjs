@@ -160,7 +160,7 @@ const server = http.createServer((req, res) => {
         res.write(delta({ role: 'assistant', content: 'The follow-up form is ready.' }));
       } else if (user.includes('GENUI_CANCEL')) {
         assert.equal(uiTools.length, 1);
-        const canceled = { version: 1, title: 'Canceled stream', fallback: 'Incomplete preview only.', blocks: [{ id: 'canceled', type: 'text', text: 'This generation can be stopped.' }] };
+        const canceled = { version: 2, title: 'Canceled stream', fallback: 'Incomplete preview only.', state: [], body: [{ id: 'canceled', type: 'text', text: 'This generation can be stopped.' }] };
         const partial = JSON.stringify({ spec: canceled }).slice(0, -3);
         res.write(delta({ role: 'assistant', tool_calls: [{ index: 0, id: 'genui-canceled-call', type: 'function', function: { name: uiTools[0], arguments: partial } }] }));
         canceledStream = { closed: false };
@@ -391,16 +391,28 @@ async function run() {
   await capture('05-app-reloaded.png', '[data-genui-block="draft"]');
   pass('full renderer reload restores native history and production plugin storage');
   await beginTurn('GENUI_CANCEL');
-  await wait(() => document.querySelector('[data-genui-block="canceled"]'));
+  await wait(() => document.querySelector('[data-genui-node="canceled"]'));
   const writesBeforeCancel = rpc.filter(entry => entry.channel === 'wuu:plugin-storage-set').length;
-  await capture('05a-before-stream-cancel.png', '[data-genui-block="canceled"]');
+  await capture('05a-before-stream-cancel.png', '[data-genui-node="canceled"]');
   await click('.composer-stop-button');
   await wait(() => !document.querySelector('.composer-stop-button'));
   await until(() => canceledStream?.closed, 'provider response closed after stop');
-  assert.ok(await evaluate(() => !document.querySelector('[data-genui-block="canceled"]')
-    || [...document.querySelector('[data-genui-block="canceled"]').querySelectorAll('input,button,select')].every(node => node.matches(':disabled'))));
+  await wait(() => {
+    const preview = document.querySelector('[data-genui-node="canceled"]')?.closest('[data-wuu-component="generated-ui"]');
+    return !preview || (preview.dataset.genuiPreview === 'true' && preview.getAttribute('aria-busy') === 'false'
+      && [...preview.querySelectorAll('input,button,select,textarea')].every(node => node.matches(':disabled')));
+  }, undefined, 'stopped UI is removed or retained as a settled read-only preview');
   assert.equal(rpc.filter(entry => entry.channel === 'wuu:plugin-storage-set').length, writesBeforeCancel);
-  pass('stopping an incomplete UI closes inference without persisting or enabling speculative output');
+  const cancelThreadId = rpc.filter(entry => entry.channel === 'wuu:turn-start').at(-1).args[0];
+  const stoppedHistory = await until(async () => {
+    const history = await evaluate(id => window.wuu.resumeThread(id), cancelThreadId);
+    return history.thread.turns.at(-1).status === 'in_progress' ? undefined : history;
+  }, 'durable interrupted turn after provider closure');
+  const stoppedTurn = stoppedHistory.thread.turns.at(-1);
+  assert.equal(stoppedTurn.status, 'interrupted');
+  assert.ok(stoppedTurn.items.every(item => !(item.result_detail?.content || []).some(part => part.type === 'resource')),
+    'Reloaded interrupted history contains no published speculative UI resource');
+  pass('stopping an incomplete UI closes inference without persisting or enabling speculative output', { interruptedTurn: stoppedTurn.id });
   await catalog(); await click(pluginSwitch);
   await wait(selector => document.querySelector(selector)?.getAttribute('aria-checked') === 'false' && !document.querySelector(selector).disabled, pluginSwitch);
   await conversation();
