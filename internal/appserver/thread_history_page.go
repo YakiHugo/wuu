@@ -15,6 +15,7 @@ import (
 )
 
 const historyPageTurns = 20
+const conversationHistoryTurns = 60
 const historyPageBytes = 256 * 1024
 const historyDisplayTranslations = 32
 const historyDisplayLocaleBytes = 64
@@ -25,20 +26,42 @@ const historyDisplayMetadataBytes = 1024
 // pages. A removed boundary fails explicitly instead of silently skipping data.
 // Pages may split a turn at item boundaries. Oversized individual items retain
 // a preview and an address for their complete content.
-func historyPage(threadID string, turns []Turn, endTurn, endItem int) ([]Turn, string) {
+func historyPage(threadID string, turns []Turn, endTurn, endItem int, view string) ([]Turn, string) {
 	result := []Turn{}
 	size := 0
-	for ti := endTurn; ti >= 0 && len(result) < historyPageTurns; ti-- {
+	turnLimit := historyPageTurns
+	if view == "conversation" {
+		turnLimit = conversationHistoryTurns
+	}
+	for ti := endTurn; ti >= 0 && len(result) < turnLimit; ti-- {
 		turn := turns[ti]
+		folded := false
+		if view == "conversation" && turn.Status != TurnStatusInProgress {
+			for _, item := range turn.Items {
+				if item.Type == ThreadItemAgentMessage && item.Terminal && (item.Text != "" || len(item.Images) > 0 || len(item.MarkdownImages) > 0) {
+					folded = true
+					break
+				}
+			}
+		}
 		limit := len(turn.Items)
 		if ti == endTurn {
 			limit = endItem
 		}
 		turn.Items = []ThreadItem{}
 		for ii := limit - 1; ii >= 0; ii-- {
-			item := historyItem(threadID, turns[ti].ID, turns[ti].Items[ii])
+			source := turns[ti].Items[ii]
+			item := historyItem(threadID, turns[ti].ID, source)
+			if view == "conversation" && turn.Status != TurnStatusInProgress &&
+				(source.Type == ThreadItemToolCall || (folded && source.Type == ThreadItemAgentMessage && !source.Terminal)) {
+				item = deferredHistoryItem(threadID, turn.ID, source, item, folded)
+			}
 			raw, _ := json.Marshal(item)
 			if size > 0 && size+len(raw) > historyPageBytes {
+				// Prefer complete exchanges. Split only when this turn alone fills a page.
+				if view == "conversation" && len(result) > 0 {
+					return result, historyCursor(result)
+				}
 				if len(turn.Items) > 0 {
 					result = append([]Turn{turn}, result...)
 				}
@@ -48,7 +71,7 @@ func historyPage(threadID string, turns []Turn, endTurn, endItem int) ([]Turn, s
 			turn.Items = append([]ThreadItem{item}, turn.Items...)
 		}
 		result = append([]Turn{turn}, result...)
-		if ti > 0 && len(result) >= historyPageTurns {
+		if ti > 0 && len(result) >= turnLimit {
 			return result, historyCursor(result)
 		}
 	}
@@ -63,22 +86,22 @@ func historyCursor(turns []Turn) string {
 	return "item:" + base64.RawURLEncoding.EncodeToString(raw)
 }
 
-func pageThreadSnapshot(thread Thread) Thread {
+func pageThreadSnapshot(thread Thread, view string) Thread {
 	end := len(thread.Turns) - 1
 	if end >= 0 {
-		thread.Turns, thread.HistoryCursor = historyPage(thread.ID, thread.Turns, end, len(thread.Turns[end].Items))
+		thread.Turns, thread.HistoryCursor = historyPage(thread.ID, thread.Turns, end, len(thread.Turns[end].Items), view)
 	}
 	thread.HistoryPaged = true
 	return thread
 }
 
-func (th *threadState) resumeSnapshotLocked(paged bool) Thread {
+func (th *threadState) resumeSnapshotLocked(paged bool, view string) Thread {
 	if !paged {
 		return th.snapshotLocked()
 	}
 	thread := th.snapshotTurnsLocked(nil)
 	thread.Turns = th.Turns
-	return pageThreadSnapshot(thread)
+	return pageThreadSnapshot(thread, view)
 }
 
 // RemoteThreadSnapshot bounds an unpaged snapshot for a remote controller.
@@ -87,7 +110,7 @@ func RemoteThreadSnapshot(thread Thread) Thread {
 	if thread.HistoryPaged || len(thread.Turns) == 0 {
 		return thread
 	}
-	return pageThreadSnapshot(thread)
+	return pageThreadSnapshot(thread, "")
 }
 
 // RemoteThreadItem projects an item for a bandwidth-limited controller. Oversized
@@ -150,10 +173,7 @@ func historyItem(threadID, turnID string, item ThreadItem) ThreadItem {
 	if len(raw) <= 64*1024 {
 		return item
 	}
-	full, _ := json.Marshal(source)
-	digest := sha256.Sum256(full)
-	ref, _ := json.Marshal([]string{threadID, turnID, item.ID, fmt.Sprintf("%x", digest)})
-	item.RemoteContentRef = "content:" + base64.RawURLEncoding.EncodeToString(ref)
+	item.RemoteContentRef = historyContentRef(threadID, turnID, source)
 	item.Text = historyTextPreview(item.Text)
 	item.InputText = ""
 	item.Reason = historyTextPreview(item.Reason)
@@ -184,6 +204,45 @@ func historyItem(threadID, turnID string, item ThreadItem) ThreadItem {
 	// Thousands of attachments must not make a single item unbounded either.
 	if len(item.Images) > 4 {
 		item.Images = item.Images[:4]
+	}
+	return item
+}
+
+func historyContentRef(threadID, turnID string, source ThreadItem) string {
+	full, _ := json.Marshal(source)
+	digest := sha256.Sum256(full)
+	ref, _ := json.Marshal([]string{threadID, turnID, source.ID, fmt.Sprintf("%x", digest)})
+	return "content:" + base64.RawURLEncoding.EncodeToString(ref)
+}
+
+// Keep identities, status, and attachment positions intact. Only the hidden body
+// is deferred; published images must remain visible without opening the process.
+func deferredHistoryItem(threadID, turnID string, source, item ThreadItem, process bool) ThreadItem {
+	item.RemoteContentRef = historyContentRef(threadID, turnID, source)
+	item.RemoteDeferred = true
+	item.RemoteProcess = process
+	item.Text = ""
+	item.InputText = ""
+	item.Arguments = ""
+	item.Result = ""
+	item.Reason = ""
+	item.Summary = ""
+	item.ContentParts = nil
+	item.Error = boundedHistoryText(item.Error, 256)
+	if item.Display != nil {
+		item.Display = boundedHistoryToolDisplay(item.Display)
+	}
+	if item.ResultDetail != nil {
+		item.ResultDetail.StructuredContent = nil
+		item.ResultDetail.Meta = nil
+		for i := range item.ResultDetail.Content {
+			part := &item.ResultDetail.Content[i]
+			part.Text = ""
+			part.Resource = nil
+			if part.Type != "image" {
+				part.Data = ""
+			}
+		}
 	}
 	return item
 }
@@ -251,8 +310,9 @@ func (s *Server) historyThread(id string) (*threadState, error) {
 
 func (s *Server) handleThreadHistoryRead(req Request) error {
 	var params struct {
-		ThreadID string `json:"thread_id"`
-		Cursor   string `json:"cursor"`
+		ThreadID    string `json:"thread_id"`
+		Cursor      string `json:"cursor"`
+		HistoryView string `json:"history_view,omitempty"`
 	}
 	if err := decodeParams(req.Params, &params); err != nil {
 		return s.writeResponse(req.ID, nil, err)
@@ -301,7 +361,7 @@ func (s *Server) handleThreadHistoryRead(req Request) error {
 			itemEnd = len(th.Turns[end].Items)
 		}
 	}
-	turns, cursor := historyPage(th.ID, th.Turns, end, itemEnd)
+	turns, cursor := historyPage(th.ID, th.Turns, end, itemEnd, params.HistoryView)
 	th.mu.Unlock()
 	return s.writeResponse(req.ID, struct {
 		ThreadID      string `json:"thread_id"`

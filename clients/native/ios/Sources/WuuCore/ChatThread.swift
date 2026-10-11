@@ -5,6 +5,7 @@ public struct ChatMessage: Identifiable, Sendable, Equatable {
     public let role: String
     public var text: String
     public var contentRef: String
+    public var deferred = false
     public var attachments: [JSONValue]
     public var tool: ToolActivity?
     public var sourceSessionID: String
@@ -19,8 +20,8 @@ public struct ChatMessage: Identifiable, Sendable, Equatable {
             (attachment["artifact"]["placement"].string ?? "").isEmpty
     }
     public var hasInlineAttachments: Bool { attachments.contains { !isInspectionImage($0) } }
-    public init(id: String, role: String, text: String, contentRef: String = "", attachments: [JSONValue] = [], tool: ToolActivity? = nil, sourceSessionID: String = "", sourceSessionName: String = "", turnID: String = "", itemID: String = "", isProcess: Bool = false, turnActive: Bool = false) {
-        self.id = id; self.role = role; self.text = text; self.contentRef = contentRef; self.attachments = attachments
+    public init(id: String, role: String, text: String, contentRef: String = "", deferred: Bool = false, attachments: [JSONValue] = [], tool: ToolActivity? = nil, sourceSessionID: String = "", sourceSessionName: String = "", turnID: String = "", itemID: String = "", isProcess: Bool = false, turnActive: Bool = false) {
+        self.id = id; self.role = role; self.text = text; self.contentRef = contentRef; self.deferred = deferred; self.attachments = attachments
         self.tool = tool
         self.sourceSessionID = sourceSessionID; self.sourceSessionName = sourceSessionName
         self.turnID = turnID; self.itemID = itemID; self.isProcess = isProcess; self.turnActive = turnActive
@@ -120,7 +121,7 @@ public struct ChatThread: Identifiable, Sendable {
                    ["wuu_process_notification", "wuu_agent_notification"].contains(item["name"].string ?? "") { return nil }
                 return ChatMessage(id: (turn["id"].string ?? "") + ":" + (item["id"].string ?? ""),
                     role: type == "user_message" ? "user" : type == "error" ? "error" : type == "tool_call" ? "tool" : "assistant",
-                    text: item["text"].string ?? item["error"].string ?? "", contentRef: item["remote_content_ref"].string ?? "",
+                    text: item["text"].string ?? item["error"].string ?? "", contentRef: item["remote_content_ref"].string ?? "", deferred: item["remote_deferred"].bool,
                     attachments: item["images"].array + item["files"].array + item["markdown_images"].array +
                         item["result_detail"]["content"].array.enumerated().compactMap { index, part -> JSONValue? in
                             guard part["type"].string == "image" else { return nil }
@@ -132,7 +133,7 @@ public struct ChatThread: Identifiable, Sendable {
                     sourceSessionID: sessionMessage ? item["related_session_id"].string ?? "" : "",
                     sourceSessionName: item["name"].string ?? "",
                     turnID: turn["id"].string ?? "", itemID: item["id"].string ?? "",
-                    isProcess: hasAnswer && (type == "tool_call" || (type == "agent_message" && !item["terminal"].bool)),
+                    isProcess: item["remote_process"].bool || (hasAnswer && (type == "tool_call" || (type == "agent_message" && !item["terminal"].bool))),
                     turnActive: active)
             }
             let cancelled = turn["status"].string == "interrupted" && turn["error"]["category"].string == "cancelled"
@@ -206,7 +207,9 @@ public struct ChatThread: Identifiable, Sendable {
             guard case .object(var turn) = turns[t] else { continue }
             var items = turn["items"]?.array ?? []
             guard let i = items.firstIndex(where: { $0["remote_content_ref"].string == ref && $0["id"] == item["id"] }) else { continue }
-            items[i] = item; turn["items"] = .array(items); turns[t] = .object(turn)
+            guard case .object(var expanded) = item else { continue }
+            expanded["remote_process"] = items[i]["remote_process"]
+            items[i] = .object(expanded); turn["items"] = .array(items); turns[t] = .object(turn)
             rebuildProjection(changed: turns[t])
         }
     }

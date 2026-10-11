@@ -52,14 +52,15 @@ struct RootView: View {
     @State private var drafts = ComposerDrafts()
     private var isFixture: Bool {
         #if DEBUG
-        NativeUIFixture.enabled
+        NativeUIFixture.enabled || NativeHistoryFixture.enabled
         #else
         false
         #endif
     }
     @ViewBuilder private var fixture: some View {
         #if DEBUG
-        NativeUIFixtureView(model: model)
+        if NativeHistoryFixture.enabled { NativeHistoryFixtureView(model: model) }
+        else { NativeUIFixtureView(model: model) }
         #endif
     }
     var body: some View {

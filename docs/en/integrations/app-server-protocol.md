@@ -105,6 +105,19 @@ snapshot. Forks retain the source conversation and copy its selection.
 notification then carry bounded recent history and a cursor for `thread/history/read`.
 The `mobile_activity` remote profile bounds unpaged thread snapshots as well.
 
+Paged `thread/resume`, `thread/fork`, and `thread/history/read` accept
+`history_view: "conversation"`. This opt-in view prioritizes visible conversation
+content: up to 60 turns within the existing 256 KiB item budget, preferring complete
+turns unless a single turn exceeds that budget. The default view remains at 20 turns.
+Completed tools and commentary folded behind a terminal answer carry summaries,
+attachment references, and `remote_content_ref` instead of their full bodies.
+`remote_deferred` identifies these on-demand bodies; `remote_process` preserves
+process grouping across page boundaries. Read them with `thread/content/read` when
+the corresponding inspector is opened. User messages, final answers, published
+images, and active turns retain the existing projection. The initialize result advertises `features.conversation_history`. Clients must
+omit `history_view` when that capability is absent, retaining the default page
+and the older host's strict parameter validation.
+
 For published image snapshots, `thread/attachment/read` accepts `kind: "artifact"`
 with `thread_id`, `turn_id`, `item_id`, content `index`, and the stored `sha256`.
 The host resolves the URI from that message and validates the artifact's workspace,

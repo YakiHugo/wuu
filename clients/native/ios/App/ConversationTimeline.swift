@@ -58,7 +58,7 @@ struct ConversationTimeline: View {
                             if nearBottom != next.atBottom { nearBottom = next.atBottom }
                             if following != update.following { following = update.following }
                             if update.scrollToBottom { proxy.scrollTo("bottom", anchor: .bottom) }
-                            if next.interacting && next.offset < 160 && !historyFailed { loadHistory() }
+                            if next.interacting && next.offset < next.viewport * 2 && !historyFailed { loadHistory() }
                         }
                     }
                 }.coordinateSpace(name: "conversationViewport")
@@ -106,6 +106,18 @@ struct ConversationTimeline: View {
                         }
                             .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.updating)
                     }
+                    #if DEBUG
+                    .task(id: model.live?.id) {
+                        guard NativeHistoryFixture.automated, model.live != nil else { return }
+                        do {
+                            try await NativeHistoryFixture.demonstrate(model: model, scroll: scrollState,
+                                scrollTo: { id in withAnimation(.easeInOut(duration: 0.8)) { proxy.scrollTo(id, anchor: .top) } },
+                                inspect: { row, toolsOnly in
+                                    inspectedProcess = row.map { ActivityInspection(id: $0.id, messages: $0.messages, toolsOnly: toolsOnly) }
+                                }, loadOlder: loadHistory)
+                        } catch is CancellationError {} catch { NativeHistoryFixture.record("error", .string(error.localizedDescription)) }
+                    }
+                    #endif
             }
         }.sheet(item: $model.attachmentPreview) { attachment in AttachmentPreview(attachment: attachment) }
             // Owned here, not by the row, so a turn finishing or regrouping cannot close it.
@@ -121,6 +133,8 @@ struct ConversationTimeline: View {
                                         set: { model.showingHistoryEdit = $0 })) {
                 if let edit = model.historyEdit { HistoryMessageEditView(model: model, edit: edit) }
             }
+            // Warm older visible content after the first snapshot; later reads follow scrolling.
+            .onChange(of: model.live?.id, initial: true) { _, _ in loadHistory() }
             .onDisappear { historyRequest?.cancel() }
     }
     private func timelineRow(_ row: ConversationRow, size: CGSize) -> some View {

@@ -93,6 +93,7 @@ struct MessageForkRequest: Identifiable {
     var recovery: String? { account?.recovery ?? resetRecovery }
     private var configEpoch = UUID()
     private var remote: RemoteConnection?
+    private var conversationHistory = false
     private var history: ConversationHistory?
     private var events: Task<Void, Never>?
     private var refresh: Task<Void, Never>?
@@ -112,6 +113,7 @@ struct MessageForkRequest: Identifiable {
     var conversationRows: [ConversationRow] { live?.rows ?? ConversationRow.grouped(messages) }
     init() {
         #if DEBUG
+        if NativeHistoryFixture.enabled { return }
         if NativeUIFixture.enabled {
             live = NativeUIFixture.thread(); activeID = live?.id; connected = true
             return
@@ -141,6 +143,9 @@ struct MessageForkRequest: Identifiable {
         push.bind(account)
     }
     func rememberLocation() {
+        #if DEBUG
+        if NativeHistoryFixture.enabled { return }
+        #endif
         guard let host else { return }
         do {
             if let selectedPair {
@@ -343,7 +348,7 @@ struct MessageForkRequest: Identifiable {
     }
     func foreground() {
         #if DEBUG
-        if NativeUIFixture.enabled { return }
+        if NativeUIFixture.enabled || NativeHistoryFixture.enabled { return }
         #endif
         isForeground = true
         if account == nil && selectedPair == nil {
@@ -506,8 +511,9 @@ struct MessageForkRequest: Identifiable {
                 }
             }
             try await connection.connect()
-            _ = try await connection.call("initialize")
+            let initialized = try await connection.call("initialize")
             guard epoch == stamp else { await connection.disconnect(); return }
+            conversationHistory = initialized["features"]["conversation_history"].bool
             connected = true
             connectionStatus = ""
         } catch {
@@ -563,7 +569,7 @@ struct MessageForkRequest: Identifiable {
         if connected, let remote {
             refreshing = true; connectionStatus = ""
             do {
-                _ = try await remote.call("thread/resume", params: ["session_id": .string(id), "response_only": true, "history_page": true], snapshotTag: selection.uuidString)
+                _ = try await remote.call("thread/resume", params: historyParams(["session_id": .string(id), "response_only": true, "history_page": true]), snapshotTag: selection.uuidString)
             } catch {
                 // Keep rejecting deltas until an authoritative snapshot succeeds.
                 if epoch == stamp, opening == selection, self.remote === remote {
@@ -592,25 +598,70 @@ struct MessageForkRequest: Identifiable {
         _ = try await remote.call("config/model/update", params: settings.updateParams(threadID: threadID))
         guard epoch == stamp, opening == selection, self.remote === remote else { throw CancellationError() }
     }
+    private func historyParams(_ values: [String: JSONValue]) -> JSONValue {
+        var params = values
+        if conversationHistory { params["history_view"] = "conversation" }
+        return .object(params)
+    }
     func loadOlder(beforePrepend: () -> Void) async throws {
         guard connected, !refreshing, let remote, let live, !live.historyCursor.isEmpty, !loadingHistory else { return }
         let stamp = epoch, selection = opening
         loadingHistory = true
         defer { if epoch == stamp, opening == selection { loadingHistory = false } }
-        let page = try await remote.call("thread/history/read", params: ["thread_id": .string(live.id), "cursor": .string(live.historyCursor)])
-        guard epoch == stamp, opening == selection, self.remote === remote else { return }
+        // A transport page may only extend the folded group at the boundary.
+        // Publish once older readable content arrives, preserving concurrent live updates.
+        let visible: (ChatMessage) -> Bool = { (!$0.isProcess && $0.tool == nil) || $0.hasInlineAttachments }
+        let known = Set(live.messages.filter(visible).map(\.id))
+        var pending: [JSONValue] = []
+        var staged = live
+        repeat {
+            try Task.checkCancellation()
+            let cursor = staged.historyCursor
+            let page = try await remote.call("thread/history/read", params: historyParams(["thread_id": .string(live.id), "cursor": .string(cursor)]))
+            try Task.checkCancellation()
+            guard epoch == stamp, opening == selection, self.remote === remote, !refreshing else { return }
+            staged.prependHistory(page)
+            guard staged.historyCursor != cursor else { throw NativeError.invalid("历史分页未推进，请重新加载会话") }
+            pending.append(page)
+            if staged.messages.contains(where: { visible($0) && !known.contains($0.id) }) { break }
+        } while !staged.historyCursor.isEmpty
+        guard self.live?.historyCursor == live.historyCursor else { return }
         beforePrepend()
-        self.live?.prependHistory(page)
+        for page in pending { self.live?.prependHistory(page) }
+        #if DEBUG
+        if NativeHistoryFixture.enabled {
+            NativeHistoryFixture.record("older-published", ["pages": .number(Double(pending.count)),
+                "turns": .number(Double(self.live?.turns.count ?? 0)),
+                "visible_messages": .number(Double(staged.messages.filter(visible).count - known.count))])
+        }
+        #endif
     }
     func expand(_ message: ChatMessage) async throws {
-        guard connected, let remote, let live, !message.contentRef.isEmpty, !loadingContent.contains(message.id) else { return }
+        guard connected, !refreshing, let remote, let live, !message.contentRef.isEmpty, !loadingContent.contains(message.id) else { return }
         let stamp = epoch, selection = opening
         loadingContent.insert(message.id)
         defer { if epoch == stamp, opening == selection { loadingContent.remove(message.id) } }
         let item = try await remote.readContent(message.contentRef, threadID: live.id)
         guard epoch == stamp, opening == selection, self.remote === remote else { return }
         self.live?.expandContent(message.contentRef, item: item)
+        #if DEBUG
+        if NativeHistoryFixture.enabled { NativeHistoryFixture.record("detail-loaded", ["message": .string(message.id), "bytes": .number(Double(try JSONEncoder().encode(item).count))]) }
+        #endif
     }
+    #if DEBUG
+    func measureHistoryFixture() async throws {
+        guard let remote, let activeID else { throw NativeError.invalid("验收连接尚未完成") }
+        let legacy = try await remote.call("thread/resume", params: ["session_id": .string(activeID), "response_only": true, "history_page": true])
+        let focused = try await remote.call("thread/resume", params: ["session_id": .string(activeID), "response_only": true, "history_page": true, "history_view": "conversation"])
+        try JSONEncoder().encode(legacy).write(to: NativeHistoryFixture.directory.appendingPathComponent("history-legacy.json"))
+        try JSONEncoder().encode(focused).write(to: NativeHistoryFixture.directory.appendingPathComponent("history-conversation.json"))
+        NativeHistoryFixture.record("page-comparison", [
+            "legacy_turns": .number(Double(legacy["thread"]["turns"].array.count)),
+            "legacy_bytes": .number(Double(try JSONEncoder().encode(legacy).count)),
+            "conversation_turns": .number(Double(focused["thread"]["turns"].array.count)),
+            "conversation_bytes": .number(Double(try JSONEncoder().encode(focused).count))])
+    }
+    #endif
     func startThread(workdir: String? = nil) async throws {
         guard let remote, connected else { throw NativeError.invalid("请先连接电脑") }
         let directory = (workdir ?? workspace).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -673,10 +724,10 @@ struct MessageForkRequest: Identifiable {
         let stamp = epoch, selection = opening
         historyActionBusy = true
         defer { if epoch == stamp { historyActionBusy = false } }
-        let result = try await remote.call("thread/fork", params: ["thread_id": .string(live.id),
+        let result = try await remote.call("thread/fork", params: historyParams(["thread_id": .string(live.id),
             "turn_id": .string(message.turnID), "item_id": .string(message.itemID), "mode": .string(mode.rawValue),
             "history_page": true,
-            "target": ["seq": item["seq"], "source_id": item["source_id"], "type": item["type"]]])
+            "target": ["seq": item["seq"], "source_id": item["source_id"], "type": item["type"]]]))
         guard epoch == stamp, self.remote === remote else { throw CancellationError() }
         if pendingFork?.id == request.id { pendingFork = nil }
         perform { try await self.loadThreads() }

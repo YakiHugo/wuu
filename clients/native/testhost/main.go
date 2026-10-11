@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -54,7 +55,13 @@ func main() {
 	must(err)
 	defer os.RemoveAll(root)
 	must(os.Setenv("HOME", root))
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	lifetime := 90 * time.Second
+	longTurnDemo := len(os.Args) > 1 && os.Args[1] == "--history-demo-long-turn"
+	historyDemo := longTurnDemo || (len(os.Args) > 1 && os.Args[1] == "--history-demo")
+	if historyDemo {
+		lifetime = 15 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), lifetime)
 	defer cancel()
 	registry, err := relay.OpenRegistry("")
 	must(err)
@@ -98,6 +105,37 @@ func main() {
 		{Role: "assistant", Content: "inspected"},
 	})
 	must(err)
+	var historyDemoID string
+	if historyDemo {
+		var history []session.HistoryRecord
+		for i := 1; i <= 150; i++ {
+			callID := fmt.Sprintf("inspect-%d", i)
+			calls, err := json.Marshal([]providers.ToolCall{{ID: callID, Name: "read_file", Arguments: `{"path":"README.md"}`}})
+			must(err)
+			var detail strings.Builder
+			for line := 0; line < 180; line++ {
+				fmt.Fprintf(&detail, "%03d 文件检查记录 %x\n", line, sha256.Sum256([]byte(fmt.Sprintf("history-%d-line-%d", i, line))))
+			}
+			history = append(history,
+				session.HistoryRecord{Role: "user", Content: fmt.Sprintf("第 %d 轮：检查历史加载体验", i)},
+				session.HistoryRecord{Role: "assistant", Content: "我会先检查正文、过程详情和图片的加载顺序。", ToolCalls: calls},
+				session.HistoryRecord{Role: "tool", Name: "read_file", ToolCallID: callID, Content: detail.String()})
+			if longTurnDemo && i == 150 {
+				// Even deferred metadata spans several pages, reproducing a folded-only boundary.
+				for tool := 0; tool < 1500; tool++ {
+					id := fmt.Sprintf("long-turn-%d", tool)
+					calls, err := json.Marshal([]providers.ToolCall{{ID: id, Name: "read_file", Arguments: `{"path":"README.md"}`}})
+					must(err)
+					history = append(history, session.HistoryRecord{Role: "assistant", ToolCalls: calls},
+						session.HistoryRecord{Role: "tool", Name: "read_file", ToolCallID: id, Content: "检查完成"})
+				}
+			}
+			history = append(history, session.HistoryRecord{Role: "assistant", Content: fmt.Sprintf("### 检查结果 %d\n\n正文优先显示，向上翻看可以连续阅读更早的对话。\n\n详细执行过程保留在上方入口中，需要时再打开。", i)})
+		}
+		demo, err := session.CreateInitialized(rt.SessionDir, session.Session{ID: session.NewID(), CWD: root, Title: "历史加载验收"}, history)
+		must(err)
+		historyDemoID = demo.ID
+	}
 	h, err := host.New(host.Options{Runtime: rt, Store: store,
 		RelayURL: "ws" + strings.TrimPrefix(server.URL, "http") + "/v1/connect",
 		Pairing: &host.PairingConfig{Once: true, OnURI: func(string) {
@@ -163,10 +201,11 @@ func main() {
 		"server": server.URL, "token": "test-only", "username": "native-test",
 		"pub": b64(phone.Public()), "deviceSeed": b64(phone.Seed()), "seed": b64(phone.Seed()),
 		"host": b64(store.Identity().Public()), "workspace": root,
-		"paged_thread":    paged.ID,
-		"tool_thread":     toolHistory.ID,
-		"artifact_thread": artifactID,
-		"image":           base64.StdEncoding.EncodeToString(imageData.Bytes()), "pdf": base64.StdEncoding.EncodeToString(pdf.Bytes()),
+		"paged_thread":        paged.ID,
+		"history_demo_thread": historyDemoID,
+		"tool_thread":         toolHistory.ID,
+		"artifact_thread":     artifactID,
+		"image":               base64.StdEncoding.EncodeToString(imageData.Bytes()), "pdf": base64.StdEncoding.EncodeToString(pdf.Bytes()),
 	}))
 	commands := make(chan string)
 	go func() {

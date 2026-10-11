@@ -113,7 +113,7 @@ func TestHistoryBoundsSingleLongTurnAndRetainsCompleteContent(t *testing.T) {
 	display := &providers.ToolCallDisplay{Label: "Working notes", LabelTranslations: map[string]string{"zh": "工作笔记"}}
 	turn.Items = append(turn.Items, ThreadItem{ID: "large", Type: ThreadItemToolCall, Display: display, Result: strings.Repeat("y", 2*1024*1024)})
 	th.Turns = []Turn{turn}
-	first := th.resumeSnapshotLocked(true)
+	first := th.resumeSnapshotLocked(true, "")
 	raw, _ := json.Marshal(first)
 	if len(raw) > 270_000 || first.HistoryCursor == "" {
 		t.Fatalf("unbounded page: %d", len(raw))
@@ -206,7 +206,7 @@ func BenchmarkHistoryPage(b *testing.B) {
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = th.resumeSnapshotLocked(true)
+		_ = th.resumeSnapshotLocked(true, "")
 	}
 }
 
@@ -218,7 +218,7 @@ func TestHistoryRetainsStructuredImageReferencesAndReadsOriginalContentIndex(t *
 	data := strings.Repeat("a", 20_000)
 	th.Turns = []Turn{{ID: "turn", Items: []ThreadItem{{ID: "tool", Type: ThreadItemToolCall, ResultDetail: &toolresult.Result{Content: []toolresult.ContentPart{{Type: "text", Text: "caption"}, {Type: "image", MIMEType: "image/png", Data: data}}}}}}}
 	srv.threads[th.ID] = th
-	projected := th.resumeSnapshotLocked(true).Turns[0].Items[0]
+	projected := th.resumeSnapshotLocked(true, "").Turns[0].Items[0]
 	if projected.RemoteContentRef != "" {
 		t.Fatal("image triggered full-content deferral")
 	}

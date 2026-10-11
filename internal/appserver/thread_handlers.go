@@ -388,7 +388,7 @@ func (s *Server) handleThreadResume(req Request) error {
 	if th := s.thread(id); th != nil {
 		th.mu.Lock()
 		s.restorePluginToolLabels(th.Turns)
-		thread := th.resumeSnapshotLocked(params.HistoryPage)
+		thread := th.resumeSnapshotLocked(params.HistoryPage, params.HistoryView)
 		th.mu.Unlock()
 		thread, err = s.threadWithChildAgents(thread)
 		if err != nil {
@@ -409,7 +409,7 @@ func (s *Server) handleThreadResume(req Request) error {
 			return s.writeResponse(req.ID, nil, session.ErrSessionNotFound)
 		}
 		if params.HistoryPage {
-			thread = pageThreadSnapshot(thread)
+			thread = pageThreadSnapshot(thread, params.HistoryView)
 		}
 		return s.writeThreadResumeResult(req, thread, params.ResponseOnly || params.HistoryPage)
 	}
@@ -419,7 +419,7 @@ func (s *Server) handleThreadResume(req Request) error {
 	}
 
 	th.mu.Lock()
-	thread := th.resumeSnapshotLocked(params.HistoryPage)
+	thread := th.resumeSnapshotLocked(params.HistoryPage, params.HistoryView)
 	th.mu.Unlock()
 	thread, err = s.threadWithChildAgents(thread)
 	if err != nil {
@@ -801,7 +801,7 @@ func (s *Server) handleThreadFork(req Request) error {
 	s.mu.Unlock()
 
 	th.mu.Lock()
-	thread := th.resumeSnapshotLocked(params.HistoryPage)
+	thread := th.resumeSnapshotLocked(params.HistoryPage, params.HistoryView)
 	th.mu.Unlock()
 	thread = s.threadWithWorktreeStatus(thread)
 	// The creation event uses the same page as the response; a duplicate full

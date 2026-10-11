@@ -184,6 +184,8 @@ export type InitializeResult = {
 };
 
 export type FeatureFlags = {
+  // Paged history can defer folded bodies with history_view="conversation".
+  conversation_history?: boolean;
   // Build-time Project Agent capability. Absence means disabled.
   project_agent?: boolean;
   // Advertises that this client can host the embedded browser backend
@@ -2392,6 +2394,8 @@ export type ThreadItem = {
   markdown_images?: InputImage[];
   /** Complete content is fetched separately when a history item exceeds the page budget. */
   remote_content_ref?: string;
+  remote_deferred?: boolean;
+  remote_process?: boolean;
   id: string;
   // seq is the message's stable per-thread address (session_messages.seq).
   // Absent for synthetic or unpersisted items.

@@ -46,6 +46,12 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Changed
 
+- Prioritize visible iOS history with an opt-in conversation page of up to 60 turns.
+  Load folded process bodies when their inspectors open, preserve published images,
+  and prefetch older history before the reader reaches the loaded boundary.
+  Continue across folded-only pages until older visible content arrives, applying
+  the pages together instead of stopping at an increased operation count.
+
 - Show the source of received session messages as a compact, theme-aware card
   that opens the related conversation in a split pane. Keep message text,
   copying, and long-message expansion separate from the navigation control.

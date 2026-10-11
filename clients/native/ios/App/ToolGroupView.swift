@@ -93,7 +93,9 @@ struct ToolGroupView: View {
 struct ToolGroupDetails: View {
     let model: AppModel
     let messages: [ChatMessage]
-    private var toolMessages: [ChatMessage] { messages.filter { $0.tool != nil } }
+    private var toolMessages: [ChatMessage] {
+        messages.map { original in model.messages.first { $0.id == original.id } ?? original }.filter { $0.tool != nil }
+    }
     private var tools: [ToolActivity] { toolMessages.compactMap(\.tool) }
     let summary: String?
     let active: Bool
@@ -124,6 +126,15 @@ struct ToolGroupDetails: View {
                                 }
                                 .accessibilityElement(children: .combine)
                                 .accessibilityValue(tool.statusLabel)
+                                DeferredHistoryContent(model: model, message: message)
+                                if !message.deferred && (!tool.arguments.isEmpty || !tool.result.isEmpty) {
+                                    DisclosureGroup("输入与结果") {
+                                        VStack(alignment: .leading, spacing: 12) {
+                                            if !tool.arguments.isEmpty { Text(tool.arguments).textSelection(.enabled) }
+                                            if !tool.result.isEmpty { Text(tool.result).textSelection(.enabled) }
+                                        }.font(.system(.footnote, design: .monospaced))
+                                    }
+                                }
                                 if message.attachments.contains(where: message.isInspectionImage) {
                                     MessageAttachments(model: model, messages: [message], inspectionOnly: true, preview: $preview)
                                         .buttonStyle(.plain)

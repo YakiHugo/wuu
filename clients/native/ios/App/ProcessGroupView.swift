@@ -55,7 +55,8 @@ struct ProcessGroupDetails: View {
     /// Consecutive tool calls form one run; each piece of commentary stands alone.
     private var segments: [[ChatMessage]] {
         var result: [[ChatMessage]] = []
-        for message in messages {
+        for original in messages {
+            let message = model.messages.first { $0.id == original.id } ?? original
             if message.tool != nil, result.last?.last?.tool != nil { result[result.count - 1].append(message) }
             else { result.append([message]) }
         }
@@ -69,6 +70,8 @@ struct ProcessGroupDetails: View {
                         if segment[0].tool != nil {
                             ToolGroupView(model: model, messages: segment, settings: settings,
                                           active: active && segment.last?.id == messages.last?.id)
+                        } else if segment[0].deferred {
+                            DeferredHistoryContent(model: model, message: segment[0])
                         } else if !segment[0].text.isEmpty {
                             MessageText(text: segment[0].text, markdown: segment[0].role == "assistant")
                                 .foregroundStyle(segment[0].role == "error" ? Color.red : Color.primary)

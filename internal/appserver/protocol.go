@@ -313,6 +313,8 @@ type InitializeResult struct {
 }
 
 type FeatureFlags struct {
+	// ConversationHistory supports history_view="conversation" on paged reads.
+	ConversationHistory bool `json:"conversation_history,omitempty"`
 	// ProjectAgent is a build-time capability; clients must treat absence as off.
 	ProjectAgent bool `json:"project_agent"`
 	// Browser advertises that this client can host the embedded browser
@@ -1580,6 +1582,8 @@ type ThreadResumeParams struct {
 	ResponseOnly bool `json:"response_only,omitempty"`
 	// HistoryPage returns a bounded recent page; older turns use thread/history/read.
 	HistoryPage bool `json:"history_page,omitempty"`
+	// HistoryView "conversation" prioritizes visible messages and defers folded details.
+	HistoryView string `json:"history_view,omitempty"`
 }
 
 type ThreadResumeResult struct {
@@ -1596,6 +1600,8 @@ type ThreadForkParams struct {
 	Mode     string            `json:"mode,omitempty"`
 	// HistoryPage bounds the returned history; older items use thread/history/read.
 	HistoryPage bool `json:"history_page,omitempty"`
+	// HistoryView "conversation" prioritizes visible messages and defers folded details.
+	HistoryView string `json:"history_view,omitempty"`
 }
 
 type ThreadForkTarget struct {
@@ -2506,7 +2512,11 @@ type ThreadItem struct {
 	steered          bool
 	MarkdownImages   []ThreadItemImage `json:"markdown_images,omitempty"`
 	RemoteContentRef string            `json:"remote_content_ref,omitempty"`
-	ID               string            `json:"id"`
+	// RemoteDeferred marks folded history content available through RemoteContentRef.
+	RemoteDeferred bool `json:"remote_deferred,omitempty"`
+	// RemoteProcess preserves folding when a page splits the turn before its answer.
+	RemoteProcess bool   `json:"remote_process,omitempty"`
+	ID            string `json:"id"`
 	// Seq is the message's stable per-thread address (session_messages.seq),
 	// present on persisted chat messages.
 	// 0/absent for synthetic or not-yet-persisted items.

@@ -37,6 +37,13 @@ remain visible in the conversation. Published image previews and originals load
 through the encrypted connection when needed; opening an image checks its stored
 content digest.
 
+On compatible hosts, iOS loads more visible conversation history per page while
+leaving folded process bodies on the computer until their details are opened.
+It preloads older history after opening a conversation and requests more before
+scrolling reaches the loaded boundary. If a transport page only adds folded items,
+iOS keeps reading until older visible content arrives or history ends, then updates
+the conversation together. Active replies continue streaming.
+
 Long-press your message bubble or attachments to copy, edit, select text, or
 share. Replies show copy and fork buttons after their turn finishes. Forking lets
 you choose the current folder or a new Git worktree based on the current commit;
