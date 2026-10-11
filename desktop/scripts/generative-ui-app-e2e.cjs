@@ -78,6 +78,7 @@ syncBuiltinESMExports();
 let emittedTool = false;
 let emittedAction = false;
 let followupResponse;
+let actionSource;
 let providerError;
 let liveStream;
 let canceledStream;
@@ -149,7 +150,28 @@ const server = http.createServer((req, res) => {
         assert.ok((input.messages || []).some(message => message.role === 'tool' && JSON.stringify(message.content).includes('Design: 12 tasks')), 'The real native tool result returned to the model loop');
         res.write(delta({ role: 'assistant', content: 'The interactive overview is ready.' }));
       } else if (route === 'GENUI_RESPONSE') {
-        assert.ok(user.includes('Submitted artifact context') && user.includes('Engineering follow-up'), 'The continuation includes explicit values and host attribution');
+        assert.ok(user.includes('Engineering follow-up'), 'The continuation includes the explicit action text');
+        const providerText = JSON.parse(user);
+        assert.equal(typeof providerText, 'string');
+        let contextText = providerText;
+        let delivery = 'inline';
+        if (!contextText.includes('Submitted artifact context (JSON):')) {
+          // The normal input-parts pipeline materializes pasted context as a
+          // file. Verify the actual file offered to the model, not just IPC.
+          assert.ok(providerText.includes('Attached text file "Interactive response"'));
+          const contextPath = providerText.split('\n').find(line => line.startsWith(home + path.sep) && line.includes(`${path.sep}input-attachments${path.sep}`));
+          assert.ok(contextPath, 'The provider can address the submitted context attachment');
+          const resolved = fs.realpathSync(contextPath);
+          assert.ok(resolved.startsWith(fs.realpathSync(home) + path.sep), 'Only the exact attachment within this isolated App home may be read');
+          contextText = fs.readFileSync(resolved, 'utf8');
+          delivery = 'attached-file';
+        }
+        assert.ok(contextText.includes('Submitted artifact context (JSON):') && contextText.includes('Engineering follow-up'), 'The continuation includes explicit values and host attribution');
+        const context = JSON.parse(contextText.split('Submitted artifact context (JSON):')[1]);
+        assert.equal(context.threadId, rpc.filter(entry => entry.channel === 'wuu:turn-start').at(-1).args[0]);
+        for (const [key, value] of Object.entries(actionSource)) assert.equal(context[key], value, `Submitted source ${key} matches the original persisted UI`);
+        assert.deepEqual(context.values.values, { owner: 'Engineering follow-up' }, 'Unrelated widget values do not leak into the submission');
+        requests.at(-1).submittedContext = { delivery, context };
         followupResponse = () => res.end(delta({ role: 'assistant', content: 'Follow-up accepted for Engineering.' }) + delta({}, 'stop') + 'data: [DONE]\n\n');
         return;
       } else if (route === 'GENUI_ACTION') {
@@ -449,6 +471,13 @@ async function run() {
   const sendAction = '[data-genui-node="send"] button';
   await wait(selector => document.querySelector(selector) && !document.querySelector(selector).matches(':disabled'), sendAction);
   const actionOrigin = rpc.filter(entry => entry.channel === 'wuu:turn-start').at(-1).args[0];
+  const actionHistory = await evaluate(id => window.wuu.resumeThread(id), actionOrigin);
+  const sourceTurn = actionHistory.thread.turns.at(-1);
+  const sourceItem = sourceTurn.items.find(item => item.result_detail?.content?.some(part => part.type === 'resource' && part.name === actionSpec.title));
+  const sourcePart = sourceItem?.result_detail.content.find(part => part.type === 'resource' && part.name === actionSpec.title);
+  assert.equal(sourceTurn.status, 'completed');
+  assert.ok(sourceItem && sourcePart?.artifact?.ref, 'The action binds an actual completed native history resource');
+  actionSource = { threadId: actionOrigin, turnId: sourceTurn.id, itemId: sourceItem.id, artifactId: sourcePart.artifact.ref, title: actionSpec.title };
   const beforeAction = rpc.filter(entry => entry.channel === 'wuu:turn-start').length;
   const stopActionRecording = recordFrames('continuation-frames');
   await trustedType('input[data-genui-node="ownerInput"]', 'Engineering follow-up');

@@ -232,7 +232,7 @@ function withDeadline(promise, label, timeout = 20000) {
   let timer;
   return Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error(`Timed out after ${timeout} ms: ${label}`)),timeout);})]).finally(()=>clearTimeout(timer));
 }
-async function evaluate(win, script) { return withDeadline(win.webContents.executeJavaScript(script, true),`Renderer evaluation: ${script.slice(0,160)}`); }
+async function evaluate(win, script, label) { return withDeadline(win.webContents.executeJavaScript(script, true),label ?? `Renderer evaluation: ${script.slice(0,160)}`); }
 async function capturePage(win) { return withDeadline(win.webContents.capturePage(),'Compositor viewport capture'); }
 async function waitFor(win, expression) {
   const deadline = Date.now() + 12000;
@@ -320,12 +320,30 @@ const rendererRun = app.whenReady().then(async () => {
   await waitFor(win, `document.querySelector('[data-genui-block="draft"] input[type="text"]')?.value === 'Design' && !document.querySelector('.plugin-genui-form-preview')`);
   results.checks.push('full renderer reload restores state; reset restores defaults and dismisses preview');
 
-  const settlePaint = () => evaluate(win, `(async () => {
-    await document.fonts.ready;
-    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    await Promise.all(document.getAnimations().filter(animation => animation.playState === 'running' && Number.isFinite(animation.effect.getComputedTiming().endTime)).map(animation => animation.finished.catch(() => {})));
-    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-  })()`);
+  const settlePaint = async () => {
+    await evaluate(win, `window.paintStages=['fonts'];document.fonts.ready.then(()=>window.paintStages.push('fonts ready'))`, 'Paint: wait for fonts');
+    await evaluate(win, `new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>{window.paintStages.push('initial frames');resolve();})))`, 'Paint: initial compositor frames');
+    const paintState = await evaluate(win, `(() => {
+      const animations=document.getAnimations();
+      const records=animations.map(animation=>{
+        const timing=animation.effect?.getComputedTiming();
+        const target=animation.effect?.target;
+        const box=target?.getBoundingClientRect?.();
+        const visible=Boolean(box&&box.width&&box.height&&box.bottom>0&&box.top<innerHeight&&box.right>0&&box.left<innerWidth);
+        const eligible=visible&&animation.timeline===document.timeline&&animation.playbackRate>0&&animation.playState==='running'&&Number.isFinite(timing?.endTime);
+        return {id:animation.id,name:animation.animationName,property:animation.transitionProperty,target:target?.outerHTML?.slice(0,500),timeline:animation.timeline?.constructor?.name,documentTimeline:animation.timeline===document.timeline,currentTime:String(animation.currentTime),startTime:String(animation.startTime),endTime:String(timing?.endTime),playbackRate:animation.playbackRate,playState:animation.playState,pending:animation.pending,visible,eligible};
+      });
+      window.paintAnimations=animations.filter((_,index)=>records[index].eligible);
+      window.paintStages.push({stage:'animation selection',records});
+      return {fonts:document.fonts.status,visibility:document.visibilityState,records};
+    })()`, 'Paint: inspect visible animation timelines');
+    fs.writeFileSync(path.join(output,'paint-state.json'),JSON.stringify(paintState,null,2));
+    // A scroll/view timeline and an off-screen animation need not ever finish
+    // at this scroll position. Only visible, finite document-time motion can
+    // block this viewport capture; two frames still settle scroll-linked paint.
+    await evaluate(win, `Promise.all(window.paintAnimations.map(animation=>animation.finished.catch(()=>{}))).then(()=>window.paintStages.push('animations settled'))`, 'Paint: visible document-time animations');
+    await evaluate(win, `new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>{window.paintStages.push('final frames');resolve();})))`, 'Paint: final compositor frames');
+  };
   for (const theme of ['light', 'dark']) for (const size of [14, 20]) for (const width of [1100, 480]) {
     console.log(`Visual matrix: ${theme}, ${size}px, ${width}px`);
     win.setContentSize(width, 1200);
@@ -694,7 +712,7 @@ withDeadline(rendererRun,'Complete renderer E2E suite',10*60*1000).catch(async e
   fs.writeFileSync(path.join(output, 'failure.txt'), `${error.stack}\nLast operation: ${failedOperation}`);
   if (activeWindow && !activeWindow.isDestroyed()) {
     try { fs.writeFileSync(path.join(output, 'failure.png'), (await capturePage(activeWindow)).toPNG()); } catch (captureError) { fs.writeFileSync(path.join(output,'failure-capture.txt'),captureError.stack); }
-    const state = await evaluate(activeWindow, `({text:document.body.innerText, focused:document.hasFocus(), activeElement:document.activeElement?.outerHTML,nativeEvents:window.nativeEvents,inputs:[...document.querySelectorAll(".plugin-genui-program input")].map(input=>({node:input.dataset.genuiNode,value:input.value,valid:input.validity.valid,message:input.validationMessage}))})`).catch(() => null);
+    const state = await evaluate(activeWindow, `({text:document.body.innerText, paintStages:window.paintStages, fonts:document.fonts.status, visibility:document.visibilityState, focused:document.hasFocus(), activeElement:document.activeElement?.outerHTML,nativeEvents:window.nativeEvents,inputs:[...document.querySelectorAll(".plugin-genui-program input")].map(input=>({node:input.dataset.genuiNode,value:input.value,valid:input.validity.valid,message:input.validationMessage}))})`).catch(() => null);
     fs.writeFileSync(path.join(output, 'failure-state.json'), JSON.stringify(state, null, 2));
   }
   app.exit(1);
