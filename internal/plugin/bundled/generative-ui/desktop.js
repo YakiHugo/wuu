@@ -215,7 +215,7 @@ function validateProgram(spec) {
         case "heading": check(["text", "level"], ["text"]); expr("text"); if (node.level !== undefined) requireValue([1, 2, 3].includes(node.level), "Invalid heading level"); break;
         case "divider": check([]); break;
         case "if": check(["when", "then", "else"], ["when", "then"]); expr("when"); nodes(node.then, context, depth + 1); if (node.else !== undefined) nodes(node.else, context, depth + 1); break;
-        case "each": check(["items", "children"]); expr("items"); nodes(node.children, { ...context, item: true }, depth + 1); break;
+        case "each": check(["items", "key", "children"], ["items", "children"]); expr("items"); if (node.key !== undefined) expression(node.key, { ...context, item: true }); nodes(node.children, { ...context, item: true }, depth + 1); break;
         case "form":
           check(["label", "children", "onSubmit"]); requireValue(!context.form, "Forms cannot be nested"); expr("label"); actions(node.onSubmit, context); nodes(node.children, { ...context, form: true }, depth + 1); break;
         case "disclosure": check(["title", "children", "open"], ["title", "children"]); expr("title"); if (node.open !== undefined) requireValue(typeof node.open === "boolean", "Invalid disclosure state"); nodes(node.children, context, depth + 1); break;
@@ -271,7 +271,15 @@ function validateBinding(node, value) {
   else if (node.type === "slider" || node.inputType === "number") {
     number(value);
     if (node.type === "slider") requireValue(value >= node.min && value <= node.max, "Slider value is outside its range");
-  } else string(value, 4000, false);
+  } else {
+    string(value, 4000, false);
+    if (node.inputType === "date" && value !== "") {
+      requireValue(/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(value), "Date must use YYYY-MM-DD");
+      const [year, month, day] = value.split("-").map(Number);
+      const days = [31, year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+      requireValue(year >= 1 && month >= 1 && month <= 12 && day >= 1 && day <= days[month - 1], "Date must be a valid calendar date");
+    }
+  }
 }
 function programDefaults(spec) { return Object.fromEntries(spec.state.map(state => [state.id, state.value])); }
 function validateProgramValues(spec, values) {
@@ -293,6 +301,28 @@ function restoreProgramValues(spec, raw) {
   const saved = JSON.parse(raw); object(saved, ["version", "values"]);
   requireValue(saved.version === 2, "Unsupported saved state");
   return validateProgramValues(spec, saved.values);
+}
+function canonicalJSON(value, budget) {
+  consume(budget);
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(item => canonicalJSON(item, budget)).join(",")}]`;
+  return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalJSON(value[key], budget)}`).join(",")}}`;
+}
+function collectionIdentities(node, items, values, scope, budget) {
+  const occurrences = new Map();
+  return items.map(item => {
+    let identity;
+    if (node.key !== undefined) {
+      const key = evaluateExpression(node.key, values, { ...scope, item }, budget);
+      if (typeof key === "string") string(key, 80);
+      else number(key);
+      identity = JSON.stringify(["key", typeof key, key]);
+      requireValue(!occurrences.has(identity), "Collection keys must be unique");
+    } else identity = JSON.stringify(["value", canonicalJSON(item, budget)]);
+    const ordinal = occurrences.get(identity) ?? 0;
+    occurrences.set(identity, ordinal + 1);
+    return JSON.stringify([identity, ordinal]);
+  });
 }
 function consume(budget) { requireValue(--budget.operations >= 0, "Local computation limit reached"); }
 function valueText(value) {
@@ -542,6 +572,7 @@ export async function activate(api) {
     const [ready, setReady] = useState(false);
     const [notice, setNotice] = useState("");
     const [pending, setPending] = useState(false);
+    const [resetVersion, setResetVersion] = useState(0);
     const current = useRef(defaults);
     const persistence = useRef({ mounted: true });
     const pendingRef = useRef(false);
@@ -580,11 +611,12 @@ export async function activate(api) {
       const scope = { item, event: boundValue };
       const budget = { operations: PROGRAM_LIMITS.operations };
       const effects = [];
+      let reset = false;
       try {
         if (node.state) next[node.state] = boundValue;
         for (const action of actions) {
           if (action.type === "set") next[action.state] = evaluateExpression(action.value, next, scope, budget);
-          else if (action.type === "reset") next = programDefaults(spec);
+          else if (action.type === "reset") { next = programDefaults(spec); reset = true; }
           else {
             const text = valueText(evaluateExpression(action.text, next, scope, budget));
             if (action.type === "sendMessage") requireValue(canSend && text.trim(), metadata.interaction?.disabledReason || "Conversation continuation is unavailable here.");
@@ -595,6 +627,7 @@ export async function activate(api) {
         renderProgram(spec, next, { disabled: true, run: () => {} }, budget);
       } catch (error) { setNotice(error.message); return false; }
       current.current = next; setValues(next); setNotice("");
+      if (reset) setResetVersion(value => value + 1);
       const storage = persistence.current;
       if (storage.key) void saveValues(hostRef.current, storage.key, next, 2).catch(() => {
         if (storage.mounted) setNotice("This view could not be saved. Your changes are still available here.");
@@ -616,7 +649,7 @@ export async function activate(api) {
       return true;
     }
     let tree, error;
-    try { tree = renderProgram(spec, preview ? defaults : values, { disabled, canSend, run, instanceId: instanceId.current }); }
+    try { tree = renderProgram(spec, preview ? defaults : values, { disabled, canSend, run, instanceId: instanceId.current, resetVersion }); }
     catch (caught) { error = caught.message; }
     return h("section", { className: "plugin-genui plugin-genui-program", "data-wuu-component": "generated-ui", "data-genui-preview": String(Boolean(preview)), "aria-label": spec.title, "aria-busy": !stopped && Boolean(preview || !ready || pending) },
       h("header", { className: "plugin-genui-header" }, h("h2", null, spec.title), h("span", { className: "plugin-genui-muted" }, stopped ? "Incomplete preview" : preview ? "Building preview…" : "Interactive")),
@@ -660,7 +693,8 @@ export async function activate(api) {
           case "if": return h("div", { ...props, className: "plugin-genui-branch" }, nodes(evaluate(node.when) ? node.then : node.else ?? [], scope, key));
           case "each": {
             const items = evaluate(node.items); list(items, 0, PROGRAM_LIMITS.iterations);
-            return h("div", { ...props, className: "plugin-genui-repeat" }, items.map((item, index) => h("div", { key: index, className: "plugin-genui-repeat-item" }, nodes(node.children, { ...scope, item }, `${key}/${index}`))));
+            const identities = collectionIdentities(node, items, values, scope, budget);
+            return h("div", { ...props, className: "plugin-genui-repeat" }, items.map((item, index) => h("div", { key: identities[index], className: "plugin-genui-repeat-item" }, nodes(node.children, { ...scope, item }, `${key}/${encodeURIComponent(identities[index])}`))));
           }
           case "form": {
             const sends = node.onSubmit.some(action => action.type === "sendMessage");
@@ -680,7 +714,7 @@ export async function activate(api) {
           }
           case "input": case "textarea": {
             const numberInput = node.inputType === "number";
-            if (numberInput) return h(ProgramNumberInput, { ...props, label: text(node.label), ...controlProps, placeholder: node.placeholder, value: values[node.state], change });
+            if (numberInput) return h(ProgramNumberInput, { ...props, label: text(node.label), ...controlProps, placeholder: node.placeholder, value: values[node.state], change, resetVersion: runtime.resetVersion });
             return h(node.type === "textarea" ? ui.TextArea : ui.TextInput, { ...props, label: text(node.label), ...controlProps, type: node.inputType ?? "text", placeholder: node.placeholder, maxLength: 4000, value: values[node.state], ...(numberInput ? { min: -1e12, max: 1e12, step: "any" } : {}), onChange: event => {
               const next = numberInput ? event.target.valueAsNumber : event.target.value;
               if (!numberInput || Number.isFinite(next)) change(next, event);
@@ -713,10 +747,10 @@ export async function activate(api) {
     }
     return h("fieldset", { className: "plugin-genui-program-body", disabled: runtime.disabled }, nodes(spec.body));
   }
-  function ProgramNumberInput({ label, value, disabled, placeholder, change, "aria-invalid": modelInvalid, ref: modelRef, ...props }) {
+  function ProgramNumberInput({ label, value, disabled, placeholder, change, resetVersion, "aria-invalid": modelInvalid, ref: modelRef, ...props }) {
     const [draft, setDraft] = useState(String(value));
     const [invalid, setInvalid] = useState(false);
-    useEffect(() => { setDraft(String(value)); setInvalid(false); }, [value]);
+    useEffect(() => { setDraft(String(value)); setInvalid(false); }, [value, resetVersion]);
     return h(ui.TextInput, { ...props, label, type: "number", step: "any", min: -1e12, max: 1e12, disabled, placeholder, value: draft, "aria-invalid": invalid || modelInvalid || undefined, ref: element => { modelRef?.(element); if (element && invalid) element.setCustomValidity("Enter a valid number before continuing."); },
       onChange: event => {
         setDraft(event.target.value);
@@ -725,7 +759,7 @@ export async function activate(api) {
         setInvalid(!valid);
         if (valid && change(next, event) === false) setInvalid(true);
       },
-      onBlur: () => { if (invalid) { setDraft(String(value)); setInvalid(false); } },
+      onKeyDown: event => { if (event.key === "Escape" && invalid) { event.preventDefault(); event.stopPropagation(); setDraft(String(value)); setInvalid(false); } },
     });
   }
   function ProgramTable({ node, disabled }) {
@@ -978,7 +1012,7 @@ function formatAxis(value) {
 }
 
 const styles = `
-.plugin-genui { --genui-border:var(--wuu-color-border-subtle, color-mix(in srgb, currentColor 16%, transparent)); display:grid; gap:20px; min-width:0; padding:20px; border:1px solid var(--genui-border); border-radius:var(--wuu-radius-panel, 16px); color:var(--wuu-color-text, currentColor); font-size:var(--wuu-font-size-ui, 14px); line-height:1.5; }
+.plugin-genui { --genui-border:var(--wuu-color-border-subtle, color-mix(in srgb, currentColor 16%, transparent)); display:grid; gap:20px; min-width:0; padding:20px; border:1px solid var(--genui-border); border-radius:var(--wuu-radius-panel, 16px); color:var(--wuu-color-text, currentColor); font-size:var(--wuu-font-size-ui, var(--font-ui, 14px)); line-height:1.5; }
 .plugin-genui-header { display:flex; flex-wrap:wrap; gap:8px 16px; align-items:baseline; justify-content:space-between; }
 .plugin-genui-header h2 { font:inherit; font-weight:600; margin:0; overflow-wrap:anywhere; }
 .plugin-genui-muted { color:var(--wuu-color-text-muted, currentColor); margin:0; }
@@ -1000,7 +1034,7 @@ const styles = `
 .plugin-genui-x-categories { grid-column:2; display:grid; min-width:0; text-align:center; }
 .plugin-genui-x-categories span { min-width:0; padding:0 4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .plugin-genui-x-range { grid-column:2; text-align:center; overflow-wrap:anywhere; }
-.plugin-genui-grid { stroke:var(--genui-border); stroke-dasharray:3 4; }
+line.plugin-genui-grid { stroke:var(--genui-border); stroke-dasharray:3 4; }
 .plugin-genui-axis { stroke:var(--wuu-color-text-muted, currentColor); }
 .plugin-genui-line { fill:none; stroke:var(--wuu-color-accent, currentColor); stroke-width:2.5; }
 .plugin-genui-mark { fill:var(--wuu-color-accent, currentColor); }
@@ -1012,11 +1046,11 @@ const styles = `
 .plugin-genui details[open] > summary { margin-bottom:12px; }
 .plugin-genui :focus-visible { outline:2px solid var(--wuu-color-accent, currentColor); outline-offset:3px; }
 @media (max-width:600px) { .plugin-genui { padding:12px; } .plugin-genui th, .plugin-genui td { padding:8px; } }
-.plugin-genui-surface { container-type:inline-size; min-width:0; }
+.plugin-genui-surface { container-type:inline-size; min-width:0; font-size:var(--wuu-font-size-ui,var(--font-ui,14px)); }
 .plugin-genui-program { --genui-series-0:var(--wuu-color-accent,currentColor); --genui-series-1:var(--wuu-color-info,#0068da); --genui-series-2:var(--wuu-color-success,#137a3d); --genui-series-3:var(--wuu-color-warning,#8a5b10); --genui-series-4:var(--wuu-color-danger,#b42318); --genui-series-5:color-mix(in srgb,var(--genui-series-1) 65%,var(--genui-series-4)); --genui-series-6:color-mix(in srgb,var(--genui-series-2) 65%,var(--genui-series-1)); --genui-series-7:color-mix(in srgb,var(--genui-series-3) 65%,var(--genui-series-4)); }
 .plugin-genui-program :is(button,input,textarea,select) { font:inherit; }
 .plugin-genui-program :is(.plugin-ui-field,.plugin-ui-section,.plugin-ui-card) { min-width:0; }
-.plugin-genui-program :is(.plugin-ui-field-label,.plugin-ui-section-header h2) { font-size:inherit; }
+.plugin-genui-program :is(.plugin-ui-field-label,.plugin-ui-section-header h2) { font-size:inherit; overflow-wrap:anywhere; }
 .plugin-genui-program .plugin-ui-button { white-space:normal; overflow-wrap:anywhere; height:auto; min-height:2.3em; }
 .plugin-genui-program :is(.plugin-ui-input,.plugin-ui-textarea) { width:100%; min-width:0; box-sizing:border-box; }
 .plugin-genui-program-body,.plugin-genui-data-fieldset { min-width:0; border:0; padding:0; margin:0; }
@@ -1050,14 +1084,14 @@ const styles = `
 .plugin-genui-progress { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:0.4em 1em; align-items:center; }
 .plugin-genui-progress > span:first-child { grid-column:1/-1; overflow-wrap:anywhere; }
 .plugin-genui-progress progress { width:100%; min-width:0; height:0.65em; border:0; accent-color:var(--wuu-color-accent); }
-.plugin-genui-progress progress::-webkit-progress-bar { border-radius:1em; background:var(--wuu-color-surface-muted); }
-.plugin-genui-progress progress::-webkit-progress-value { border-radius:1em; background:var(--wuu-color-accent); }
+.plugin-genui-progress progress::-webkit-progress-bar { border-radius:1em; background:var(--wuu-color-surface-muted,var(--surface-2,color-mix(in srgb,currentColor 14%,transparent))); }
+.plugin-genui-progress progress::-webkit-progress-value { border-radius:1em; background:var(--wuu-color-accent,var(--ink-strong,currentColor)); }
 .plugin-genui-slider { gap:0.4em; }
 .plugin-genui-slider input { width:100%; min-width:0; margin:0; min-height:2em; accent-color:var(--wuu-color-accent); }
 .plugin-genui-slider-label,.plugin-genui-slider-bounds { display:flex; justify-content:space-between; gap:1em; overflow-wrap:anywhere; }
 .plugin-genui-slider output { font-variant-numeric:tabular-nums; }
 .plugin-genui-options { padding:0; margin:0; border:0; min-width:0; }
-.plugin-genui-options legend { padding:0; margin-bottom:0.55em; }
+.plugin-genui-options legend { padding:0; margin-bottom:0.55em; overflow-wrap:anywhere; }
 .plugin-genui-options-list { display:flex; flex-wrap:wrap; gap:0.5em; }
 .plugin-genui-options-list label { display:flex; align-items:center; gap:0.45em; min-height:2.4em; padding:0.2em 0.65em; border:1px solid var(--genui-border); border-radius:var(--wuu-radius-control,8px); cursor:pointer; overflow-wrap:anywhere; }
 .plugin-genui-options-list input { flex:none; accent-color:var(--wuu-color-accent); }
@@ -1080,8 +1114,8 @@ const styles = `
 .plugin-genui-legend-swatch { display:inline-block; flex:none; width:0.8em; height:0.8em; border-radius:0.2em; }
 .plugin-genui-scatter-range { display:flex; justify-content:space-between; }
 .plugin-genui-program [data-genui-node] { scroll-margin-block:1em; }
-@container (max-width:560px) { .plugin-genui-layout.plugin-genui-grid { grid-template-columns:repeat(min(var(--genui-columns),2),minmax(0,1fr)); } .plugin-genui-program { padding:1em; } }
-@container (max-width:380px) { .plugin-genui-layout.plugin-genui-grid { grid-template-columns:minmax(0,1fr); } .plugin-genui-row { flex-direction:column; } .plugin-genui-row > * { flex-basis:auto; } }
+@container (max-width:50em) { .plugin-genui-layout.plugin-genui-grid:has(> .plugin-genui-chart-section) { grid-template-columns:minmax(0,1fr); } }
+@container (max-width:30em) { .plugin-genui-layout.plugin-genui-grid { grid-template-columns:minmax(0,1fr); } .plugin-genui-program { padding:1em; } .plugin-genui-row { flex-direction:column; } .plugin-genui-row > * { flex-basis:auto; } }
 @media (prefers-reduced-motion:reduce) { .plugin-genui *, .plugin-genui *::before, .plugin-genui *::after { scroll-behavior:auto; animation:none; transition:none; } }
 @media (forced-colors:active) { .plugin-genui-options-list label[data-selected="true"], .plugin-genui-badge { border-color:Highlight; } .plugin-genui-chart :is(circle,rect,path,polyline) { forced-color-adjust:none; } }
 

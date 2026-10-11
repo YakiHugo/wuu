@@ -31,9 +31,7 @@ transient; final results use namespaced plugin storage on this device, scoped to
 conversation, tool-result part, and exact spec. Reopening the same result restores
 its saved state. Version 2 persists declared program state (including bound input
 values), while table filters, sort order, chart legend visibility, and disclosure
-expansion remain local to the mounted view. Repeated nodes currently use positional
-identity; rearranging items does not guarantee preservation of component-local state.
-A storage failure or oversized draft leaves the current view
+expansion remain local to the mounted view. A storage failure or oversized draft leaves the current view
 usable and reports the persistence failure. State does not sync between devices.
 Treat saved input as local conversation data; do not enter passwords or secrets.
 
@@ -46,7 +44,11 @@ schema is [`plugins/generative-ui/schema.json`](../../../plugins/generative-ui/s
 
 Version 2 is a bounded data program. Expressions read declared state and support
 arithmetic, comparisons, formatting, conditions, array construction, mapping,
-filtering, and aggregation. Repetition exposes the current item within its scope.
+filtering, and aggregation. Repetition exposes the current item within its scope. An optional `each.key`
+expression supplies a stable identity across reordering: a nonblank string of
+at most 80 characters or a finite number within the normal bounds. Duplicate
+sibling keys fail validation at runtime. Without an explicit key, full item
+values determine identity, so editing an item may reset its local view state.
 Actions can set declared state, reset, copy text, or explicitly send a message.
 Unknown nodes, properties, state references, and out-of-scope expressions fail
 validation. It does not execute generated JavaScript or accept arbitrary HTML,

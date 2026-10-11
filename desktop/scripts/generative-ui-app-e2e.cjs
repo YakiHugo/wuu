@@ -473,6 +473,8 @@ async function run() {
   await settle();
   assert.equal(rpc.filter(entry => entry.channel === 'wuu:turn-start').length, beforeForm, 'Invalid native forms cannot start a turn');
   await trustedType('input[data-genui-node="formOwner"]', 'Engineering follow-up');
+  await wait(() => document.querySelector('input[data-genui-node="formOwner"]').validity.valid
+    && document.querySelector('input[data-genui-node="formOwner"]').value === 'Engineering follow-up');
   await evaluate(target => document.querySelector(target).requestSubmit(), form);
   await settle();
   assert.equal(rpc.filter(entry => entry.channel === 'wuu:turn-start').length, beforeForm, 'requestSubmit without a native gesture cannot start a turn');
@@ -487,8 +489,9 @@ async function run() {
     if (method === 'click') await trustedClick(formButton);
     else {
       await evaluate(() => document.querySelector('input[data-genui-node="formOwner"]').focus());
-      main.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Return' });
-      main.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Return' });
+      main.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' });
+      main.webContents.sendInputEvent({ type: 'char', keyCode: '\r' });
+      main.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
     }
     await until(() => followupResponse, `native form ${method} reaches inference`);
     assert.equal(rpc.filter(entry => entry.channel === 'wuu:turn-start').length, before + 1);

@@ -315,6 +315,8 @@ func validPrograms() []json.RawMessage {
 	unicodeArguments, _ := json.Marshal(map[string]any{"spec": map[string]any{"version": 2, "title": "Unicode budget", "fallback": "Harmless text remains within the state budget.", "state": unicodeState, "body": []any{map[string]any{"id": "text", "type": "text", "text": "Within budget"}}}})
 	return []json.RawMessage{
 		unicodeArguments,
+		json.RawMessage(`{"spec":{"version":2,"title":"Calendar boundaries","fallback":"Optional empty dates and valid calendar boundaries.","state":[{"id":"empty","value":""},{"id":"leap","value":"2000-02-29"},{"id":"first","value":"0001-01-01"},{"id":"last","value":"9999-12-31"}],"body":[{"id":"emptyInput","type":"input","inputType":"date","state":"empty","label":"Optional date"},{"id":"leapInput","type":"input","inputType":"date","state":"leap","label":"Leap date"},{"id":"firstInput","type":"input","inputType":"date","state":"first","label":"Earliest date"},{"id":"lastInput","type":"input","inputType":"date","state":"last","label":"Latest date"}]}}`),
+		json.RawMessage(`{"spec":{"version":2,"title":"Keyed repeated items","fallback":"A and B retain their own view identities.","state":[{"id":"items","value":[{"id":"a","label":"A"},{"id":"b","label":"B"}]}],"body":[{"id":"itemsList","type":"each","items":{"op":"state","key":"items"},"key":{"op":"item","path":["id"]},"children":[{"id":"itemLabel","type":"text","text":{"op":"item","path":["label"]}}]}]}}`),
 		json.RawMessage(`{"spec":{"version":2,"title":"Numeric mixed series","fallback":"Scatter and line points share a numeric x-axis.","state":[],"body":[{"id":"chart","type":"chart","chartType":"scatter","series":[{"id":"observed","label":"Observed","points":{"op":"literal","value":[{"label":"Observation","value":2,"x":1}]}},{"id":"trend","label":"Trend","chartType":"line","points":{"op":"literal","value":[{"label":"Trend start","value":1},{"label":"Trend end","value":3}]}}]}]}}`),
 		json.RawMessage(`{"spec":{"version":2,"title":"Follow-up form","fallback":"Describe the requested follow-up.","state":[{"id":"note","value":""},{"id":"allow","value":true}],"body":[{"id":"request","type":"form","label":"Send follow-up","children":[{"id":"noteInput","type":"textarea","state":"note","label":"Note","required":true,"disabled":{"op":"not","args":[{"op":"state","key":"allow"}]},"invalid":false}],"onSubmit":[{"type":"sendMessage","text":{"op":"state","key":"note"}}]}]}}`),
 		json.RawMessage(`{"spec":{"version":2,"title":"Growth simulation","fallback":"A local six-step compound-growth projection.","state":[{"id":"rate","value":1.1}],"body":[{"id":"curve","type":"chart","chartType":"line","points":{"op":"map","args":[{"op":"range","args":[1,7]},{"op":"object","args":["label",{"op":"concat","args":["Year ",{"op":"item"}]},"value",{"op":"multiply","args":[100,{"op":"pow","args":[{"op":"state","key":"rate"},{"op":"item"}]}]}]}]}},{"id":"rows","type":"table","columns":[{"key":"year","label":"Year"},{"key":"value","label":"Multiplier"}],"rows":{"op":"map","args":[{"op":"range","args":[1,7]},{"op":"array","args":[{"op":"item"},{"op":"pow","args":[{"op":"state","key":"rate"},{"op":"item"}]}]}]}}]}}`),
@@ -422,6 +424,23 @@ func invalidPrograms() []programFailure {
 			body(s, map[string]any{"id": "chart", "type": "chart", "chartType": "line", "series": series})
 		})
 	}
+	for _, value := range []string{"tomorrow", "2026-02-29", "1900-02-29", "2024-02-30", "2026-04-31", "0000-01-01", "10000-01-01", "2026-13-01", "2026-00-10", "2026-10-00", "2026-1-01", "2026-01-01T00:00:00Z"} {
+		mutate("invalid-date-"+value, func(s map[string]any) {
+			s["state"] = []any{map[string]any{"id": "date", "value": value}}
+			body(s, map[string]any{"id": "dateInput", "type": "input", "inputType": "date", "state": "date", "label": "Date"})
+		})
+	}
+	mutate("each-key-cannot-read-event", func(s map[string]any) {
+		body(s, map[string]any{"id": "each", "type": "each", "items": map[string]any{"op": "literal", "value": []any{1}}, "key": map[string]any{"op": "event"}, "children": []any{}})
+	})
+	mutate("each-key-expression-budget", func(s map[string]any) {
+		var value any = 1
+		for range 17 {
+			value = map[string]any{"op": "abs", "args": []any{value}}
+		}
+		body(s, map[string]any{"id": "each", "type": "each", "items": map[string]any{"op": "literal", "value": []any{1}}, "key": value, "children": []any{}})
+	})
+	mutate("key-outside-each", func(s map[string]any) { node := text("No key"); node["key"] = "unexpected"; body(s, node) })
 	mutate("expression-depth", func(s map[string]any) {
 		var value any = true
 		for range 17 {

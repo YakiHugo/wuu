@@ -1482,9 +1482,11 @@
           "id",
           "type",
           "items",
-          "children"
+          "children",
+          "key"
         ]
-      }
+      },
+      "description": "Optional key is an expression in the current item scope. Its result must be a nonblank string of at most 80 characters or a finite number within the normal numeric bounds; keys must be unique among siblings. Runtime validation enforces computed keys."
     },
     "node_input": {
       "properties": {
@@ -1511,7 +1513,8 @@
           "disabled",
           "invalid"
         ]
-      }
+      },
+      "description": "Date inputs bind an empty string or a valid Gregorian date in exact YYYY-MM-DD format, with years 0001–9999. Required fields are checked on explicit form submission."
     },
     "node_textarea": {
       "properties": {
@@ -2116,6 +2119,9 @@
           "type": "boolean"
         },
         "invalid": {
+          "$ref": "#/$defs/expression"
+        },
+        "key": {
           "$ref": "#/$defs/expression"
         }
       },

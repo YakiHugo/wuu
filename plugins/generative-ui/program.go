@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"time"
 	"unicode/utf8"
 )
 
@@ -252,6 +253,11 @@ func (v *programValidator) validateNodes(nodes []any, path string, depth int, sc
 		}
 		if kind == "each" {
 			childScope.item = true
+			if key, exists := node["key"]; exists {
+				if err := v.validateExpression(key, nodePath+".key", 1, childScope); err != nil {
+					return err
+				}
+			}
 		}
 		for _, key := range []string{"children", "then", "else"} {
 			if children, exists := node[key]; exists {
@@ -302,7 +308,14 @@ func validateBinding(node map[string]any, value any, path string) error {
 		if node["inputType"] == "number" {
 			_, valid = value.(float64)
 		} else {
-			_, valid = value.(string)
+			text, isString := value.(string)
+			valid = isString
+			if valid && node["inputType"] == "date" && text != "" {
+				date, err := time.Parse("2006-01-02", text)
+				if len(text) != 10 || err != nil || date.Year() < 1 || date.Year() > 9999 {
+					return fmt.Errorf("%s date state must be empty or a valid YYYY-MM-DD date in years 0001–9999", path)
+				}
+			}
 		}
 	case "textarea":
 		_, valid = value.(string)

@@ -59,10 +59,12 @@ jobs:
           npm ci --prefix desktop
           node desktop/node_modules/electron/install.js
       - name: Build native UI tool
+        id: native-tool
         run: |
           mkdir -p desktop/build/bin
           go build -o "$WUU_GENERATIVE_UI_PLUGIN_HELPER" ./cmd/wuu-generative-ui-plugin
       - name: Build production core and desktop
+        id: application-build
         run: |
           # Match build:core's product version; an unstamped Go pseudo-version
           # may be v0.0.0 and correctly fail plugin minimum-version checks.
@@ -77,6 +79,7 @@ jobs:
           set -o pipefail
           xvfb-run --auto-servernum desktop/node_modules/.bin/electron --no-sandbox desktop/scripts/generative-ui-e2e.cjs 2>&1 | tee "$WUU_GENUI_OUTPUT/run.log"
       - name: Verify complete App and production storage
+        if: ${{ !cancelled() && steps.native-tool.outcome == 'success' && steps.application-build.outcome == 'success' }}
         shell: bash
         run: |
           mkdir -p "$WUU_GENUI_APP_OUTPUT"

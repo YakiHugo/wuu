@@ -59,6 +59,7 @@ const program = {
     ] },
     { id: 'scenarioForm', type: 'form', label: 'Apply note', children: [
       { id: 'requiredNote', type: 'input', label: 'Required scenario note', state: 'note', required: true, invalid: operation('eq', state('note'), 'invalid') },
+      { id: 'formCapacity', type: 'input', inputType: 'number', label: 'Form capacity', state: 'capacity' },
     ], onSubmit: [{ type: 'set', state: 'capacity', value: 100 }] },
     { id: 'chartGridV2', type: 'grid', columns: 2, gap: 'large', children: [
       { id: 'areaV2', type: 'chart', title: 'Capacity projection', chartType: 'area', points: operation('map', operation('range', 1, 6), operation('object', 'label', operation('concat', 'Week ', { op: 'item' }), 'value', operation('multiply', { op: 'item' }, state('capacity')))) },
@@ -134,6 +135,7 @@ import { collectTurnArtifacts, TurnInlineArtifactOutputs } from ${JSON.stringify
 import { ArtifactThreadContext } from ${JSON.stringify(path.join(root, 'desktop/src/renderer/ArtifactPreviewContext'))};
 import { desktopPluginHost, desktopWorkbenchController } from ${JSON.stringify(path.join(root, 'desktop/src/renderer/plugins/DesktopPluginRuntime'))};
 import { I18nProvider } from ${JSON.stringify(path.join(root, 'desktop/src/renderer/i18n'))};
+import { applyMessageFlowFontSize } from ${JSON.stringify(path.join(root, "desktop/src/renderer/MessageFlowFontSizeSection"))};
 import { activate, parseSpec, parseToolInput } from ${JSON.stringify(source)};
 import ${JSON.stringify(path.join(root, 'desktop/src/renderer/styles.css'))};
 const root = createRoot(document.getElementById('root'));
@@ -152,7 +154,10 @@ function render() {
  const turn = { id:'fixture-turn', items: [{ id:itemId, type:'tool_call', status:streamingInput?.status ?? 'completed', arguments:streamingInput?.text, display:streamingInput ? {capability:'generative-ui', label:'Building view'} : undefined, result_detail:streamingInput?.final ? currentResult : streamingInput ? undefined : currentResult }] };
  root.render(<I18nProvider><ArtifactThreadContext.Provider value={threadId}>{mounted ? <TurnInlineArtifactOutputs artifacts={collectTurnArtifacts(turn)} /> : null}</ArtifactThreadContext.Provider></I18nProvider>);
 }
+window.nativeEvents=[];
+for(const type of ["submit","invalid","keydown","keypress","keyup"]) document.addEventListener(type,event=>{window.nativeEvents.push({type,trusted:event.isTrusted,target:event.target.getAttribute("data-genui-node"),key:event.key,value:event.target.value});if(window.nativeEvents.length>100)window.nativeEvents.shift();},true);
 window.probe = {
+ fontSize: applyMessageFlowFontSize,
  async enable() { await desktopPluginHost.activateGeneration({ pluginId:'generative-ui', generation:'e2e', register:activate }); render(); },
  disable() { desktopPluginHost.disable('generative-ui'); render(); },
  mount(value = true) { mounted=value; render(); },
@@ -276,7 +281,7 @@ app.whenReady().then(async () => {
   })()`);
   for (const theme of ['light', 'dark']) for (const size of [14, 20]) for (const width of [1100, 480]) {
     win.setContentSize(width, 1200);
-    await evaluate(win, `document.documentElement.dataset.theme=${JSON.stringify(theme)};document.documentElement.style.setProperty('--wuu-font-size-ui', '${size}px');document.documentElement.style.setProperty('--font-ui', '${size}px');window.scrollTo({top:0,behavior:'instant'})`);
+    await evaluate(win, `document.documentElement.dataset.theme=${JSON.stringify(theme)};window.probe.fontSize(${size});window.scrollTo({top:0,behavior:'instant'})`);
     await settlePaint();
     const geometry = await evaluate(win, `(() => { const r=document.querySelector('.plugin-genui').getBoundingClientRect(); return {width:innerWidth, right:r.right, left:r.left, scroll:document.documentElement.scrollWidth, lineStroke:getComputedStyle(document.querySelector('.plugin-genui-line')).stroke, labelSize:parseFloat(getComputedStyle(document.querySelector('.plugin-genui-y-labels')).fontSize), axisOffsets:[...document.querySelectorAll('.plugin-genui-y-labels span')].map((node,index)=>{const label=node.getBoundingClientRect(),plot=document.querySelector('.plugin-genui-chart').getBoundingClientRect();return Math.abs((label.top+label.bottom)/2-(plot.top+plot.height*index/2));})}; })()`);
     assert.ok(geometry.left >= 0 && geometry.right <= width + 1 && geometry.scroll <= width + 1, JSON.stringify(geometry));
@@ -312,7 +317,7 @@ app.whenReady().then(async () => {
     await waitFor(win, `document.querySelectorAll('.plugin-genui-x-categories span').length === ${count}`);
     for (const [theme, size, width] of [['light', 14, 1100], ['dark', 20, 480]]) {
       win.setContentSize(width, 1200);
-      await evaluate(win, `document.documentElement.dataset.theme=${JSON.stringify(theme)};document.documentElement.style.setProperty('--wuu-font-size-ui', '${size}px');document.documentElement.style.setProperty('--font-ui', '${size}px');document.querySelector('[data-genui-block="progress"]').scrollIntoView({block:'center',behavior:'instant'})`);
+      await evaluate(win, `document.documentElement.dataset.theme=${JSON.stringify(theme)};window.probe.fontSize(${size});document.querySelector('[data-genui-block="progress"]').scrollIntoView({block:'center',behavior:'instant'})`);
       await settlePaint();
       const labels = await evaluate(win, `(() => { const marks=[...document.querySelectorAll('.plugin-genui-chart ${chartType === 'bar' ? 'rect' : 'circle'}')];return [...document.querySelectorAll('.plugin-genui-x-categories span')].map((node,index)=>{const label=node.getBoundingClientRect(),mark=marks[index].getBoundingClientRect();const style=getComputedStyle(node);return {offset:Math.abs((label.left+label.right-mark.left-mark.right)/2),fontSize:parseFloat(style.fontSize),singleLine:label.height<=parseFloat(style.lineHeight)+1,fullName:node.title===node.textContent&&document.querySelector('[data-genui-block="progress"] details').textContent.includes(node.title)};}); })()`);
       results.categoryAxes.push({ chartType, count, theme, size, width, labels });
@@ -383,12 +388,27 @@ app.whenReady().then(async () => {
   await evaluate(win, 'window.probe.mount(true)');
   await waitFor(win, `document.querySelector('[data-genui-node="capacityInput"]')?.value === '85'`);
   results.checks.push('v2 numeric drafts, bound sliders, reactive metrics, map/filter/each, local tabs, atomic calculation failure and durable state');
+  await nativeInput('[data-genui-node="formCapacity"]', '999');
+  await waitFor(win, `document.querySelector('[data-genui-node="formCapacity"]').validity.customError`);
+  await click(win, '[data-genui-node="scenarioForm"] button[type="submit"]');
+  assert.equal(await evaluate(win, `document.querySelector('[data-genui-node="capacityInput"]').value`), '85', 'Invalid numeric draft cannot silently submit the previous model value on click');
+  assert.equal(await evaluate(win, `document.querySelector('[data-genui-node="formCapacity"]').value`), '999', 'Blur does not silently discard an invalid numeric draft');
+  await click(win, '[data-genui-node="formCapacity"]');
+  win.webContents.sendInputEvent({type:'keyDown',keyCode:'Enter'});
+  win.webContents.sendInputEvent({type:'char',keyCode:'\r'});
+  win.webContents.sendInputEvent({type:'keyUp',keyCode:'Enter'});
+  assert.equal(await evaluate(win, `document.querySelector('[data-genui-node="capacityInput"]').value`), '85', 'Invalid numeric draft also blocks keyboard submission');
+  win.webContents.sendInputEvent({type:'keyDown',keyCode:'Escape'});
+  win.webContents.sendInputEvent({type:'keyUp',keyCode:'Escape'});
+  await waitFor(win, `document.querySelector('[data-genui-node="formCapacity"]').value === '85' && document.querySelector('[data-genui-node="formCapacity"]').checkValidity()`);
   await nativeInput('[data-genui-node="requiredNote"]', 'invalid');
   await click(win, '[data-genui-node="scenarioForm"] button[type="submit"]');
   assert.equal(await evaluate(win, `document.querySelector('[data-genui-node="capacityInput"]').value`), '85', 'Declarative invalid state blocks native form submission');
   assert.equal(await evaluate(win, `document.querySelector('[data-genui-node="requiredNote"]').validity.customError`), true);
   await nativeInput('[data-genui-node="requiredNote"]', 'Approved local note');
+  await waitFor(win, `document.querySelector('[data-genui-node="requiredNote"]').value === 'Approved local note' && document.querySelector('[data-genui-node="requiredNote"]').checkValidity()`);
   win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' });
+  win.webContents.sendInputEvent({ type: 'char', keyCode: '\r' });
   win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
   await waitFor(win, `document.querySelector('[data-genui-node="capacityInput"]').value === '100'`);
   results.checks.push('native form invalid-field gating and keyboard Enter submission');
@@ -411,7 +431,7 @@ app.whenReady().then(async () => {
   results.checks.push('v2 area/bar/line/scatter/pie/donut, stacked/mixed series, legend toggles, keyboard chart inspection and computed table');
   for (const theme of ['light', 'dark']) for (const size of [14, 20]) for (const width of [1100, 480]) {
     win.setContentSize(width, 1200);
-    await evaluate(win, `document.documentElement.dataset.theme=${JSON.stringify(theme)};document.documentElement.style.setProperty('--wuu-font-size-ui','${size}px');document.documentElement.style.setProperty('--font-ui','${size}px');window.scrollTo({top:0,behavior:'instant'})`);
+    await evaluate(win, `document.documentElement.dataset.theme=${JSON.stringify(theme)};window.probe.fontSize(${size});window.scrollTo({top:0,behavior:'instant'})`);
     await settlePaint();
     const geometry = await evaluate(win, `({width:innerWidth,scroll:document.documentElement.scrollWidth,controls:[...document.querySelectorAll('.plugin-genui-program input,.plugin-genui-program textarea')].map(node=>({left:node.getBoundingClientRect().left,right:node.getBoundingClientRect().right,font:parseFloat(getComputedStyle(node).fontSize)}))})`);
     assert.ok(geometry.scroll <= width + 1, JSON.stringify(geometry));
@@ -481,7 +501,7 @@ app.whenReady().then(async () => {
   fs.writeFileSync(path.join(output, 'failure.txt'), error.stack);
   if (activeWindow && !activeWindow.isDestroyed()) {
     fs.writeFileSync(path.join(output, 'failure.png'), (await activeWindow.webContents.capturePage()).toPNG());
-    const state = await evaluate(activeWindow, `({text:document.body.innerText, focused:document.hasFocus(), activeElement:document.activeElement?.outerHTML})`).catch(() => null);
+    const state = await evaluate(activeWindow, `({text:document.body.innerText, focused:document.hasFocus(), activeElement:document.activeElement?.outerHTML,nativeEvents:window.nativeEvents,inputs:[...document.querySelectorAll(".plugin-genui-program input")].map(input=>({node:input.dataset.genuiNode,value:input.value,valid:input.validity.valid,message:input.validationMessage}))})`).catch(() => null);
     fs.writeFileSync(path.join(output, 'failure-state.json'), JSON.stringify(state, null, 2));
   }
   app.exit(1);
