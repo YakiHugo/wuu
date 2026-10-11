@@ -658,7 +658,7 @@ const rendererRun = app.whenReady().then(async () => {
   await waitFor(win,`document.querySelector('.plugin-genui-program')?.getAttribute('aria-busy')==='false'`);
   await click(win,'[data-genui-node="copyBoundary"] button');
   await waitFor(win,`document.body.textContent.includes('Copied') && document.querySelector('.plugin-genui-program')?.getAttribute('aria-busy')==='false'`);
-  assert.equal(clipboard.readText(),'Boundary copy','Unchanged copy action is independent of storage envelope overhead');
+  assert.equal(await clipboard.readText(),'Boundary copy','Unchanged copy action is independent of storage envelope overhead');
   await click(win,'[data-genui-node="boundaryDetails"] > summary');
   await waitFor(win,`document.body.textContent.includes('Combined view state exceeds 16 KiB') && !document.querySelector('[data-genui-node="boundaryDetails"]').open`);
   await click(win,'[data-genui-node="resetBoundary"] button');
