@@ -4,12 +4,13 @@ Synthetic sessions rendered by the existing Electron sidebar hover-card E2E scri
 This branch stores review attachments only and is not intended to merge into main.
 
 - Before: `d1ca64f27f7f` (main before this change).
-- After: `a4702ff5d` (`fix/sidebar-hover-card-time`).
+- After: `6fede1128` (`fix/sidebar-hover-card-time`).
 - Running comparison: light theme, 14px UI preference, 1200 × 820 CSS-pixel window.
-- Long-title comparison: dark theme, 20px UI preference, 900 × 820 CSS-pixel window.
+- Long-title comparison: light theme, 14px UI preference, 1200 × 820 CSS-pixel window.
+- Narrower large-font comparison: dark theme, 20px UI preference, 900 × 820 CSS-pixel window.
 - Both sides use the same fixture, locale, window size and display scale.
-- Images are unscaled crops of actual renderer screenshots, placed side by side
-  with Before/After labels. No card content has been redrawn or edited.
+- Images are unscaled crops of actual renderer screenshots, arranged with
+  Before/After labels. No card content has been redrawn or edited.
 
 ## Reproduction
 
@@ -28,3 +29,5 @@ ThreadSidebar/AppSidebarDrawer tests, and `make test-policy-check`.
 ![Running session before and after](running-before-after.png)
 
 ![Long title before and after](long-title-before-after.png)
+
+![Narrower large-font window before and after](dark-large-before-after.png)
