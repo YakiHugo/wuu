@@ -40,7 +40,7 @@ func Handler() pluginapi.Handler {
 			// Presentation must remain a top-level result in PTC mode, like
 			// present_artifact; nested programs do not forward UI resources.
 			DirectOnly:  true,
-			Description: "Render an experimental interactive UI in the conversation. Supply a version 1 declarative spec with a title, a useful plain-text fallback and 1–16 uniquely identified text, table, chart or form blocks. Tables support local search/sort; charts support local range selection; forms support local preview/copy/reset only. No HTML, scripts, styles, network requests, submission or host actions. Arguments must fit in 128 KiB.",
+			Description: "Render an experimental interactive UI in the conversation. Use version 2 for a composable program: declare keyed JSON state and a body of nested layouts, text, metrics, charts, tables, controlled inputs, conditionals and repeated nodes. Expressions compute values with bounded arithmetic, comparisons, map/filter, ranges and formatting. Events can update/reset state or copy text; an explicit button or native form submission can ask the user to continue the same conversation using sendMessage. No HTML, scripts, styles, arbitrary tool execution or network requests. Every spec needs a title and useful plain-text fallback. Declare state before body for incremental previews. Version 1 text/table/chart/form specs remain supported. Arguments must fit in 128 KiB; programs have at most 256 nodes, 12 node levels, 2048 expressions, 16 expression levels and 16 KiB of initial state.",
 			InputSchema: inputSchema,
 			Activity:    &pluginapi.ToolActivity{ReadOnly: true, ConcurrencySafe: true},
 			Display:     &pluginapi.ToolDisplay{Kind: "generative-ui", Label: "Render UI", Text: "Rendering interactive UI", Capability: "generative-ui"},
@@ -63,6 +63,9 @@ func executeTool(schema *jsonschema.Schema, call pluginapi.ToolCall) (pluginapi.
 	}
 	if len(call.Arguments) > maxInputBytes {
 		return invalidSpec(fmt.Errorf("arguments exceed %d bytes", maxInputBytes)), nil
+	}
+	if !boundedJSONNesting(call.Arguments, 96) {
+		return invalidSpec(fmt.Errorf("JSON nesting exceeds 96 levels")), nil
 	}
 	var input any
 	if err := json.Unmarshal(call.Arguments, &input); err != nil {
@@ -101,7 +104,7 @@ func executeTool(schema *jsonschema.Schema, call pluginapi.ToolCall) (pluginapi.
 		{
 			Type: "resource", MIMEType: uiMIMEType, Name: spec["title"].(string), Resource: resource,
 			Artifact: &pluginapi.ArtifactPresentation{
-				Placement: "inline", Ref: "ui-v1-" + hex.EncodeToString(scope[:]),
+				Placement: "inline", Ref: fmt.Sprintf("ui-v%.0f-%s", spec["version"].(float64), hex.EncodeToString(scope[:])),
 				SHA256: hex.EncodeToString(digest[:]), SizeBytes: int64(len(payload)),
 			},
 		},
@@ -113,7 +116,7 @@ func invalidSpec(err error) pluginapi.ToolResult {
 	if len(message) > maxErrorLength {
 		message = append(message[:maxErrorLength], '…')
 	}
-	result := pluginapi.TextResult("UI was not rendered: " + string(message) + ". Correct the version 1 spec and retry render_ui, or provide the answer as plain text.")
+	result := pluginapi.TextResult("UI was not rendered: " + string(message) + ". Correct the version 1 or 2 spec and retry render_ui, or provide the answer as plain text.")
 	result.IsError = true
 	return result
 }
@@ -121,6 +124,9 @@ func invalidSpec(err error) pluginapi.ToolResult {
 // validateSemantics runs only after schema validation. It checks relationships
 // across fields that cannot be expressed portably in tool JSON schemas.
 func validateSemantics(spec map[string]any) error {
+	if spec["version"] == float64(2) {
+		return validateProgram(spec)
+	}
 	if err := nonblank(spec, "spec", "title", "fallback"); err != nil {
 		return err
 	}
