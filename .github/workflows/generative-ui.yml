@@ -9,6 +9,14 @@ on:
       - "internal/plugin/**"
       - "internal/runtime/**"
       - "desktop/src/renderer/ArtifactOutputs*"
+      - "desktop/src/renderer/ArtifactInteractionContext.ts"
+      - "desktop/src/renderer/AssistantTurnShell.tsx"
+      - "desktop/src/renderer/StreamText*"
+      - "packages/plugin-sdk/**"
+      - "internal/providers/**"
+      - "internal/agent/stream_runner.go"
+      - "internal/agent/tool_runtime.go"
+      - "internal/appserver/model.go"
       - "desktop/src/renderer/plugins/**"
       - "desktop/src/shared/workbench.ts"
       - "desktop/scripts/generative-ui*.cjs"
@@ -31,6 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
+      WUU_GENUI_RECORD: "1"
       WUU_GENUI_APP_OUTPUT: ${{ github.workspace }}/desktop/out/e2e/generative-ui-app
       WUU_GENUI_OUTPUT: ${{ github.workspace }}/desktop/out/e2e/generative-ui
       WUU_GENERATIVE_UI_PLUGIN_HELPER: ${{ github.workspace }}/desktop/build/bin/wuu-generative-ui-plugin
@@ -86,5 +95,6 @@ jobs:
             desktop/out/e2e/generative-ui-app/*.json
             desktop/out/e2e/generative-ui-app/*.png
             desktop/out/e2e/generative-ui-app/*.log
+            desktop/out/e2e/generative-ui-app/recordings/**
           if-no-files-found: ignore
           retention-days: 14

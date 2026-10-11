@@ -315,6 +315,7 @@ func validPrograms() []json.RawMessage {
 	unicodeArguments, _ := json.Marshal(map[string]any{"spec": map[string]any{"version": 2, "title": "Unicode budget", "fallback": "Harmless text remains within the state budget.", "state": unicodeState, "body": []any{map[string]any{"id": "text", "type": "text", "text": "Within budget"}}}})
 	return []json.RawMessage{
 		unicodeArguments,
+		json.RawMessage(`{"spec":{"version":2,"title":"Numeric mixed series","fallback":"Scatter and line points share a numeric x-axis.","state":[],"body":[{"id":"chart","type":"chart","chartType":"scatter","series":[{"id":"observed","label":"Observed","points":{"op":"literal","value":[{"label":"Observation","value":2,"x":1}]}},{"id":"trend","label":"Trend","chartType":"line","points":{"op":"literal","value":[{"label":"Trend start","value":1},{"label":"Trend end","value":3}]}}]}]}}`),
 		json.RawMessage(`{"spec":{"version":2,"title":"Follow-up form","fallback":"Describe the requested follow-up.","state":[{"id":"note","value":""},{"id":"allow","value":true}],"body":[{"id":"request","type":"form","label":"Send follow-up","children":[{"id":"noteInput","type":"textarea","state":"note","label":"Note","required":true,"disabled":{"op":"not","args":[{"op":"state","key":"allow"}]},"invalid":false}],"onSubmit":[{"type":"sendMessage","text":{"op":"state","key":"note"}}]}]}}`),
 		json.RawMessage(`{"spec":{"version":2,"title":"Growth simulation","fallback":"A local six-step compound-growth projection.","state":[{"id":"rate","value":1.1}],"body":[{"id":"curve","type":"chart","chartType":"line","points":{"op":"map","args":[{"op":"range","args":[1,7]},{"op":"object","args":["label",{"op":"concat","args":["Year ",{"op":"item"}]},"value",{"op":"multiply","args":[100,{"op":"pow","args":[{"op":"state","key":"rate"},{"op":"item"}]}]}]}]}},{"id":"rows","type":"table","columns":[{"key":"year","label":"Year"},{"key":"value","label":"Multiplier"}],"rows":{"op":"map","args":[{"op":"range","args":[1,7]},{"op":"array","args":[{"op":"item"},{"op":"pow","args":[{"op":"state","key":"rate"},{"op":"item"}]}]}]}}]}}`),
 		json.RawMessage(`{"spec":{"version":2,"title":"Local estimator","fallback":"An editable estimate with a conversation follow-up.","state":[{"id":"quantity","value":2},{"id":"enabled","value":true},{"id":"choice","value":"monthly"},{"id":"note","value":""},{"id":"items","value":[{"name":"Design","cost":12},{"name":"Build","cost":24}]}],"body":[{"id":"layout","type":"stack","children":[{"id":"header","type":"heading","text":"Estimate"},{"id":"controls","type":"flow","children":[{"id":"quantityInput","type":"input","state":"quantity","inputType":"number","label":"Quantity","onChange":[{"type":"set","state":"quantity","value":{"op":"event"}}]},{"id":"enabledInput","type":"checkbox","state":"enabled","label":"Include estimate"},{"id":"frequency","type":"segmented","state":"choice","label":"Frequency","options":[{"label":"Monthly","value":"monthly"},{"label":"Yearly","value":"yearly"}]}]},{"id":"conditional","type":"if","when":{"op":"state","key":"enabled"},"then":[{"id":"total","type":"metric","label":"Total","value":{"op":"multiply","args":[{"op":"state","key":"quantity"},{"op":"sum","args":[{"op":"map","args":[{"op":"state","key":"items"},{"op":"item","path":["cost"]}]}]}]}}],"else":[]},{"id":"itemsList","type":"each","items":{"op":"filter","args":[{"op":"state","key":"items"},{"op":"gt","args":[{"op":"item","path":["cost"]},10]}]},"children":[{"id":"itemLabel","type":"text","text":{"op":"item","path":["name"]}}]},{"id":"noteInput","type":"textarea","state":"note","label":"Notes"},{"id":"followUp","type":"button","label":"Continue with this estimate","onClick":[{"type":"sendMessage","text":{"op":"concat","args":["Discuss an estimate for ",{"op":"state","key":"quantity"}," items."]}}]}]}]}}`),
@@ -401,6 +402,26 @@ func invalidPrograms() []programFailure {
 	mutate("submit-has-no-change-value", func(s map[string]any) {
 		body(s, map[string]any{"id": "form", "type": "form", "label": "Submit", "children": []any{}, "onSubmit": []any{map[string]any{"type": "set", "state": "count", "value": map[string]any{"op": "event"}}}})
 	})
+	for _, fixture := range []struct {
+		name   string
+		labels []string
+	}{
+		{"category-series-shifted-labels", []string{"Feb", "Mar"}},
+		{"category-series-reordered-labels", []string{"Feb", "Jan"}},
+		{"category-series-different-length", []string{"Jan"}},
+	} {
+		mutate(fixture.name, func(s map[string]any) {
+			series := []any{}
+			for index, labels := range [][]string{{"Jan", "Feb"}, fixture.labels} {
+				points := []any{}
+				for _, label := range labels {
+					points = append(points, map[string]any{"label": label, "value": 1})
+				}
+				series = append(series, map[string]any{"id": fmt.Sprintf("series%d", index), "label": fmt.Sprintf("Series %d", index), "points": map[string]any{"op": "literal", "value": points}})
+			}
+			body(s, map[string]any{"id": "chart", "type": "chart", "chartType": "line", "series": series})
+		})
+	}
 	mutate("expression-depth", func(s map[string]any) {
 		var value any = true
 		for range 17 {

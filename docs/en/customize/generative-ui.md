@@ -1,7 +1,6 @@
 # Generative UI (experimental)
 
-Generative UI lets a model return interactive tables, charts, and small local
-forms inside a conversation. The bundled plugin is **disabled by default**.
+Generative UI lets a model return interactive layouts, charts, calculators, and forms inside a conversation. The bundled plugin is **disabled by default**.
 Open **Skills & Plugins**, select **Generative UI (Experimental)**, and enable
 it to make its `render_ui` tool available. Disabling the plugin removes the tool
 and renderer; existing results retain their text summary.
@@ -13,20 +12,68 @@ use it; merely enabling the plugin does not add tools to an unrelated engine.
 
 ## Interactions
 
-- Tables: filter locally and sort by a column, including numeric sorting.
-- Bar and line charts: inspect values and select all, the last 10, or the last
-  25 points. Expand **Chart data** for an accessible table of exact values.
-- Forms: edit text, numbers, selections, and checkboxes; preview, copy, or reset
-  the values. These are local drafts. No button sends a model message, submits
-  a form, calls another tool, or opens a website.
+- Compose rows, grids, cards, disclosures, and conditional or repeated content.
+- Edit text, numbers, dates, selections, checkboxes, and sliders. Expressions can
+  recalculate displayed values locally without making another model request.
+- Filter and sort tables; inspect bar, line, area, scatter, pie, and donut charts.
+  Series legends and accessible data tables expose the underlying values.
+- Forms use native submission and field validation, including required and invalid
+  inputs. Submission requires explicit interaction.
+- Copy or reset values locally. A version 2 button or form can explicitly send a follow-up
+  to the result's conversation, with its source and current values as context.
+  Sending requires a real user interaction and uses the normal conversation path.
+  It does not clear an existing composer draft or its attachments. Previews and
+  unavailable or running conversations cannot submit a follow-up.
 
-Local view state is saved in namespaced plugin storage on this device, scoped
-to the conversation, tool-result part, and exact spec. Reopening the same result
-restores filters, sorting, chart range, and form drafts. The saved state budget
-is 16 KiB per result. A storage failure or oversized draft shows a warning while
-keeping the current view usable. State does not sync between devices. Treat
-form drafts as locally stored conversation data; do not enter passwords or
-other secrets into them.
+While tool arguments stream, the renderer previews complete, validated nodes.
+Incomplete or invalid updates keep the last usable preview. Preview state is
+transient; final results use namespaced plugin storage on this device, scoped to
+conversation, tool-result part, and exact spec. Reopening the same result restores
+its saved state. Version 2 persists declared program state (including bound input
+values), while table filters, sort order, chart legend visibility, and disclosure
+expansion remain local to the mounted view. Repeated nodes currently use positional
+identity; rearranging items does not guarantee preservation of component-local state.
+A storage failure or oversized draft leaves the current view
+usable and reports the persistence failure. State does not sync between devices.
+Treat saved input as local conversation data; do not enter passwords or secrets.
+
+## Version 2 protocol
+
+`render_ui` accepts `{ "spec": { "version": 2, "title": "…", "fallback": "…",
+"state": [], "body": [] } }`. State entries contain an `id` and JSON `value`;
+body nodes have unique IDs and explicit, type-specific properties. The canonical
+schema is [`plugins/generative-ui/schema.json`](../../../plugins/generative-ui/schema.json).
+
+Version 2 is a bounded data program. Expressions read declared state and support
+arithmetic, comparisons, formatting, conditions, array construction, mapping,
+filtering, and aggregation. Repetition exposes the current item within its scope.
+Actions can set declared state, reset, copy text, or explicitly send a message.
+Unknown nodes, properties, state references, and out-of-scope expressions fail
+validation. It does not execute generated JavaScript or accept arbitrary HTML,
+CSS, URLs, network access, or React props.
+
+The native tool and desktop both validate programs. Limits include 128 KiB per
+spec, 32 state slots with a 16 KiB initial state budget, 256 declared nodes with
+12 nesting levels, and 2,048 expression nodes with 16 nesting levels. Runtime
+execution is also bounded; oversized computed views fail instead of continuing
+unbounded work. Version 1 historical results remain supported.
+
+A small calculator uses the same controls and expression format as a larger form:
+
+```json
+{
+  "spec": {
+    "version": 2,
+    "title": "Estimate",
+    "fallback": "Choose a quantity to calculate the total at 12 per item.",
+    "state": [{ "id": "quantity", "value": 2 }],
+    "body": [
+      { "id": "quantityInput", "type": "input", "inputType": "number", "state": "quantity", "label": "Quantity" },
+      { "id": "total", "type": "metric", "label": "Total", "value": { "op": "multiply", "args": [{ "op": "state", "key": "quantity" }, 12] } }
+    ]
+  }
+}
+```
 
 ## Version 1 protocol
 
@@ -83,12 +130,11 @@ calling is enabled. Call it at the top level; it cannot run inside `run_code`.
 
 ## Boundaries and recovery
 
-Version 1 publishes complete specs after a tool call completes. It does not
-stream partial specs or patches. It has no model-authored JavaScript, HTML,
-CSS, URLs, network requests, or executable expressions. Wuu-owned React
-components render a fixed vocabulary using the active theme. The plugin itself
-is trusted extension code, like other Wuu plugins; these data restrictions do
-not sandbox unrelated installed plugins.
+Final specs are published as tool resources. Streaming previews are opt-in for
+the active MIME renderer and remain read-only until the final result is accepted.
+Wuu-owned React components render the validated vocabulary using the active theme.
+The plugin itself is trusted extension code, like other Wuu plugins; data-program
+restrictions do not sandbox unrelated installed plugins.
 
 Invalid tool arguments return a readable error so the model can retry or answer
 in text. Unsupported historical specs, disabled/missing plugins, and renderer
@@ -116,7 +162,8 @@ For the complete application path, run
 real App/main/preload/core with a loopback synthetic HTTP provider in a temporary
 home. It checks default-off tool discovery, catalog enablement, a real native
 tool result in the conversation, production plugin storage writes and reload,
-and disable/re-enable fallback. It records actual IPC, provider requests,
+disable/re-enable fallback, interleaved tool-argument previews, cancellation, and
+explicit follow-up submission while preserving composer drafts. It records actual IPC, provider requests,
 native storage, screenshots and build hashes under
 `desktop/out/e2e/generative-ui-app` (`WUU_GENUI_APP_OUTPUT` overrides this).
 No external model or user credential is used. This is source-build application

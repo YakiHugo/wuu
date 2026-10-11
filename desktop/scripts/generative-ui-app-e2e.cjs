@@ -41,10 +41,26 @@ const spec = {
     { id: 'draft', type: 'form', title: 'Local follow-up', fields: [{ id: 'owner', label: 'Owner', kind: 'text', initial: 'Design' }] },
   ],
 };
+const actionSpec = {
+  version: 2, title: 'Follow-up', fallback: 'Send owner',
+  state: [{ id: 'owner', value: 'Design' }],
+  body: [
+    { id: 'ownerInput', type: 'input', label: 'Owner', state: 'owner' },
+    { id: 'send', type: 'button', label: 'Send owner', onClick: [
+      { type: 'sendMessage', text: { op: 'concat', args: ['GENUI_RESPONSE ', { op: 'state', key: 'owner' }] } },
+    ] },
+    { id: 'ownerForm', type: 'form', label: 'Send owner form', children: [
+      { id: 'formOwner', type: 'input', label: 'Required owner', state: 'owner', required: true },
+    ], onSubmit: [
+      { type: 'sendMessage', text: { op: 'concat', args: ['GENUI_RESPONSE ', { op: 'state', key: 'owner' }] } },
+    ] },
+  ],
+};
 const requests = [];
 const rpc = [];
 const checks = [];
 const screenshots = [];
+const recordings = [];
 const errors = [];
 const processes = [];
 const spawn = childProcess.spawn;
@@ -60,7 +76,12 @@ childProcess.spawn = (...args) => {
 };
 syncBuiltinESMExports();
 let emittedTool = false;
+let emittedAction = false;
+let followupResponse;
 let providerError;
+let liveStream;
+let canceledStream;
+const streamEvidence = [];
 // Observe real handlers and their results; do not replace the preload or IPC.
 const handle = ipcMain.handle.bind(ipcMain);
 ipcMain.handle = (channel, handler) => handle(channel, async (...args) => {
@@ -81,7 +102,7 @@ const server = http.createServer((req, res) => {
       const input = JSON.parse(body);
       // Runtime reminder messages can follow the actual user input. Route by
       // the last marked user request rather than the last role=user entry.
-      const user = JSON.stringify((input.messages || []).findLast(message => message.role === 'user' && /GENUI_(DEFAULT_OFF|ENABLED|DISABLED_AGAIN)/.test(JSON.stringify(message.content)))?.content || '');
+      const user = JSON.stringify((input.messages || []).findLast(message => message.role === 'user' && /GENUI_(DEFAULT_OFF|ENABLED|DISABLED_AGAIN|CANCEL|ACTION|RESPONSE)/.test(JSON.stringify(message.content)))?.content || '');
       const toolNames = (input.tools || []).map(tool => tool.function?.name || tool.name);
       const uiTools = toolNames.filter(name => /^plugin_generative_ui_render_ui_[a-f0-9]+$/.test(name));
       requests.push({ path: req.url, body: input, toolNames, latestUser: user });
@@ -97,12 +118,54 @@ const server = http.createServer((req, res) => {
         assert.equal(uiTools.length, 1, 'User enablement exposes exactly one render_ui tool');
         if (!emittedTool) {
           emittedTool = true;
-          res.write(delta({ role: 'assistant', tool_calls: [{ index: 0, id: 'genui-app-call', type: 'function', function: { name: uiTools[0], arguments: JSON.stringify({ spec }) } }] }));
-          res.end(delta({}, 'tool_calls') + 'data: [DONE]\n\n');
+          const independent = { version: 2, title: 'Independent streamed widget', fallback: 'A separate UI stream.', state: [], body: [{ id: 'independent', type: 'text', text: 'Independent stream content' }] };
+          const argumentsByIndex = [spec, independent].map(value => JSON.stringify({ spec: value }));
+          const firstBoundary = argumentsByIndex[0].indexOf(JSON.stringify(spec.blocks[0])) + JSON.stringify(spec.blocks[0]).length;
+          const secondBoundary = argumentsByIndex[0].indexOf(JSON.stringify(spec.blocks[1])) + JSON.stringify(spec.blocks[1]).length;
+          const independentBoundary = argumentsByIndex[1].length - 3;
+          const append = (index, arguments) => res.write(delta({ tool_calls: [{ index, function: { arguments } }] }));
+          // Both calls start before either receives arguments. This catches
+          // providers or host layers that append deltas to the latest call.
+          res.write(delta({ role: 'assistant', tool_calls: argumentsByIndex.map((_, index) => ({ index, id: `genui-app-call-${index}`, type: 'function', function: { name: uiTools[0], arguments: '' } })) }));
+          liveStream = {
+            first() {
+              append(0, argumentsByIndex[0].slice(0, firstBoundary));
+              append(1, argumentsByIndex[1].slice(0, independentBoundary));
+            },
+            second() { append(0, argumentsByIndex[0].slice(firstBoundary, secondBoundary)); },
+            finish() {
+              append(1, argumentsByIndex[1].slice(independentBoundary));
+              append(0, argumentsByIndex[0].slice(secondBoundary));
+              res.end(delta({}, 'tool_calls') + 'data: [DONE]\n\n');
+              this.finished = true;
+            },
+            finished: false,
+          };
           return;
         }
         assert.ok((input.messages || []).some(message => message.role === 'tool' && JSON.stringify(message.content).includes('Design: 12 tasks')), 'The real native tool result returned to the model loop');
         res.write(delta({ role: 'assistant', content: 'The interactive overview is ready.' }));
+      } else if (user.includes('GENUI_RESPONSE')) {
+        assert.ok(user.includes('Submitted artifact context') && user.includes('Engineering follow-up'), 'The continuation includes explicit values and host attribution');
+        followupResponse = () => res.end(delta({ role: 'assistant', content: 'Follow-up accepted for Engineering.' }) + delta({}, 'stop') + 'data: [DONE]\n\n');
+        return;
+      } else if (user.includes('GENUI_ACTION')) {
+        assert.equal(uiTools.length, 1);
+        if (!emittedAction) {
+          emittedAction = true;
+          res.write(delta({ role: 'assistant', tool_calls: [{ index: 0, id: 'genui-action-call', type: 'function', function: { name: uiTools[0], arguments: JSON.stringify({ spec: actionSpec }) } }] }));
+          res.end(delta({}, 'tool_calls') + 'data: [DONE]\n\n');
+          return;
+        }
+        res.write(delta({ role: 'assistant', content: 'The follow-up form is ready.' }));
+      } else if (user.includes('GENUI_CANCEL')) {
+        assert.equal(uiTools.length, 1);
+        const canceled = { version: 1, title: 'Canceled stream', fallback: 'Incomplete preview only.', blocks: [{ id: 'canceled', type: 'text', text: 'This generation can be stopped.' }] };
+        const partial = JSON.stringify({ spec: canceled }).slice(0, -3);
+        res.write(delta({ role: 'assistant', tool_calls: [{ index: 0, id: 'genui-canceled-call', type: 'function', function: { name: uiTools[0], arguments: partial } }] }));
+        canceledStream = { closed: false };
+        res.once('close', () => { canceledStream.closed = true; });
+        return;
       } else if (user.includes('GENUI_DISABLED_AGAIN')) {
         assert.equal(uiTools.length, 0, 'Disabled tool is removed from subsequent actual provider requests');
         assert.ok(!JSON.stringify(input.tools).includes('plugin_generative_ui_render_ui_'), 'Disabled plugin must also be removed from nested discovery');
@@ -133,6 +196,29 @@ const click = selector => evaluate(target => {
   if (!node) throw new Error(`Missing ${target}`);
   node.click();
 }, selector);
+async function trustedClick(selector) {
+  const point = await evaluate(target => {
+    const node = document.querySelector(target);
+    if (!node) throw new Error(`Missing ${target}`);
+    node.scrollIntoView({ block: 'center', behavior: 'instant' });
+    const rect = node.getBoundingClientRect();
+    return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
+  }, selector);
+  main.webContents.sendInputEvent({ type: 'mouseDown', ...point, button: 'left', clickCount: 1 });
+  main.webContents.sendInputEvent({ type: 'mouseUp', ...point, button: 'left', clickCount: 1 });
+}
+async function trustedType(selector, value) {
+  await evaluate(target => {
+    const node = document.querySelector(target);
+    if (!node) throw new Error(`Missing ${target}`);
+    node.focus(); node.select();
+  }, selector);
+  if (value) await main.webContents.insertText(value);
+  else {
+    main.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Backspace' });
+    main.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Backspace' });
+  }
+}
 const type = (selector, value) => evaluate(({ selector, value }) => {
   const node = document.querySelector(selector);
   if (!node) throw new Error(`Missing ${selector}`);
@@ -154,13 +240,34 @@ async function capture(name, selector) {
   screenshots.push(name);
 }
 function pass(name, evidence) { checks.push({ name, passed: true, ...evidence }); console.log(`PASS ${name}`); }
-async function submit(text, answer) {
+function recordFrames(name) {
+  if (process.env.WUU_GENUI_RECORD !== '1') return () => {};
+  const directory = path.join(output, 'recordings', name);
+  fs.mkdirSync(directory, { recursive: true });
+  const recording = { name, directory: `recordings/${name}`, source: 'Electron live compositor frames', frames: [] };
+  recordings.push(recording);
+  const started = performance.now();
+  let previous = -Infinity;
+  main.webContents.beginFrameSubscription(false, image => {
+    const elapsed = performance.now() - started;
+    if (elapsed - previous < 100) return;
+    previous = elapsed;
+    const filename = `${String(recording.frames.length).padStart(5, '0')}.png`;
+    fs.writeFileSync(path.join(directory, filename), image.toPNG());
+    recording.frames.push({ filename, elapsedMs: elapsed });
+  });
+  return () => main.webContents.endFrameSubscription();
+}
+async function beginTurn(text) {
   await wait(() => document.querySelector('.composer textarea') && !document.querySelector('.composer-stop-button'));
   await type('.composer textarea', text);
   await wait(() => { const button = document.querySelector('.composer-send-button'); return button && !button.disabled && button.getAttribute('aria-busy') !== 'true'; });
   const before = rpc.length;
   await click('.composer-send-button');
   await until(() => rpc.slice(before).some(entry => entry.channel === 'wuu:turn-start'), 'real turn-start IPC after composer submission');
+}
+async function submit(text, answer) {
+  await beginTurn(text);
   await wait(text => [...document.querySelectorAll('.session-flow')].some(node => node.textContent.includes(text)), answer);
   await wait(() => !document.querySelector('.composer-stop-button'));
 }
@@ -223,9 +330,34 @@ async function run() {
   assert.ok(rpc.some(entry => entry.channel === 'wuu:extension-package-update' && entry.completed && entry.args[0]?.action === 'enable'));
   await capture('02-user-enabled.png', '[data-plugin="generative-ui"]');
   await conversation();
-  await submit('GENUI_ENABLED', 'The interactive overview is ready.');
+  const stopStreamRecording = recordFrames('streaming-frames');
+  await beginTurn('GENUI_ENABLED');
+  await until(() => liveStream, 'held-open interleaved provider stream');
+  liveStream.first();
+  await wait(() => document.querySelector('[data-genui-block="teams"]') && document.querySelector('[data-genui-node="independent"]'));
+  assert.equal(liveStream.finished, false, 'Both widgets are rendered while the provider response is still open');
+  assert.ok(await evaluate(() => {
+    const table = document.querySelector('[data-genui-block="teams"]');
+    const other = document.querySelector('[data-genui-node="independent"]');
+    window.__genuiStreamRoot = table.closest('[data-wuu-component="generated-ui"]');
+    return table.textContent.includes('Engineering') && other.textContent.includes('Independent stream content')
+      && !document.querySelector('[data-genui-block="progress"]')
+      && [...document.querySelectorAll('[data-wuu-component="generated-ui"] input, [data-wuu-component="generated-ui"] button, [data-wuu-component="generated-ui"] select')].every(node => node.matches(':disabled'));
+  }), 'Complete atomic prefixes have isolated contents and disabled controls');
+  streamEvidence.push({ stage: 'first-prefix', providerFinished: liveStream.finished, at: new Date().toISOString() });
+  await capture('02a-streaming-first-prefix.png', '[data-genui-block="teams"]');
+  liveStream.second();
+  await wait(() => document.querySelector('[data-genui-block="progress"]'));
+  assert.equal(liveStream.finished, false);
+  assert.ok(await evaluate(() => document.querySelector('[data-genui-block="teams"]').closest('[data-wuu-component="generated-ui"]') === window.__genuiStreamRoot), 'Appending a validated unit preserves widget identity');
+  assert.equal(rpc.filter(entry => entry.channel === 'wuu:plugin-storage-set').length, 0, 'Input previews never persist speculative control state');
+  streamEvidence.push({ stage: 'second-prefix', providerFinished: liveStream.finished, at: new Date().toISOString() });
+  await capture('02b-streaming-second-prefix.png', '[data-genui-block="progress"]');
+  liveStream.finish();
+  await wait(() => [...document.querySelectorAll('.session-flow')].some(node => node.textContent.includes('The interactive overview is ready.')));
+  await wait(() => !document.querySelector('.composer-stop-button'));
   await wait(() => document.querySelector('[data-wuu-component="generated-ui"]')?.getAttribute('aria-busy') === 'false');
-  assert.equal(await evaluate(() => document.querySelectorAll('[data-wuu-component="generated-ui"]').length), 1);
+  assert.equal(await evaluate(() => document.querySelectorAll('[data-wuu-component="generated-ui"]').length), 2);
   assert.ok(await evaluate(() => document.querySelector('.session-flow [data-wuu-component="generated-ui"]')));
   assert.ok(await evaluate(() => {
     const bars = [...document.querySelectorAll('.plugin-genui-chart rect')];
@@ -236,7 +368,9 @@ async function run() {
       });
   }), 'Production category labels align with their bar centers');
   pass('real model tool call reaches Go helper, persisted message flow, MIME registry and production renderer');
+  pass('two interleaved model argument streams render atomic prefixes before tool completion', { streamEvidence });
   await capture('03-app-interactive.png', '.plugin-genui-header');
+  stopStreamRecording();
   await type('[data-genui-block="teams"] input', 'Engineering');
   await type('[data-genui-block="draft"] input', 'Persisted via production storage');
   await click('[data-genui-block="draft"] button[type="submit"]');
@@ -256,6 +390,17 @@ async function run() {
   assert.ok(rpc.slice(beforeReload).some(entry => entry.channel === 'wuu:thread-resume' && entry.completed && JSON.stringify(entry.result).includes('application/vnd.wuu.ui+json')), 'Historical resource came from the real app-server thread resume');
   await capture('05-app-reloaded.png', '[data-genui-block="draft"]');
   pass('full renderer reload restores native history and production plugin storage');
+  await beginTurn('GENUI_CANCEL');
+  await wait(() => document.querySelector('[data-genui-block="canceled"]'));
+  const writesBeforeCancel = rpc.filter(entry => entry.channel === 'wuu:plugin-storage-set').length;
+  await capture('05a-before-stream-cancel.png', '[data-genui-block="canceled"]');
+  await click('.composer-stop-button');
+  await wait(() => !document.querySelector('.composer-stop-button'));
+  await until(() => canceledStream?.closed, 'provider response closed after stop');
+  assert.ok(await evaluate(() => !document.querySelector('[data-genui-block="canceled"]')
+    || [...document.querySelector('[data-genui-block="canceled"]').querySelectorAll('input,button,select')].every(node => node.matches(':disabled'))));
+  assert.equal(rpc.filter(entry => entry.channel === 'wuu:plugin-storage-set').length, writesBeforeCancel);
+  pass('stopping an incomplete UI closes inference without persisting or enabling speculative output');
   await catalog(); await click(pluginSwitch);
   await wait(selector => document.querySelector(selector)?.getAttribute('aria-checked') === 'false' && !document.querySelector(selector).disabled, pluginSwitch);
   await conversation();
@@ -273,15 +418,96 @@ async function run() {
   assert.equal(requests.length, calls, 'Re-enabling history does not send a model request');
   await capture('07-app-reenabled-history.png', '[data-genui-block="draft"]');
   pass('re-enabled historical renderer retains local edits without model activity');
+  await submit('GENUI_ACTION', 'The follow-up form is ready.');
+  const sendAction = '[data-genui-node="send"] button';
+  await wait(selector => document.querySelector(selector) && !document.querySelector(selector).matches(':disabled'), sendAction);
+  const actionOrigin = rpc.filter(entry => entry.channel === 'wuu:turn-start').at(-1).args[0];
+  const beforeAction = rpc.filter(entry => entry.channel === 'wuu:turn-start').length;
+  const stopActionRecording = recordFrames('continuation-frames');
+  await trustedType('input[data-genui-node="ownerInput"]', 'Engineering follow-up');
+  await type('.composer textarea', 'Unsent composer draft');
+  await evaluate(() => {
+    const picker = document.querySelector('.composer-file-input[type="file"]:not([capture])');
+    if (!picker) throw new Error('Missing composer attachment picker');
+    const transfer = new DataTransfer();
+    transfer.items.add(new File(['Keep this attachment in my draft.'], 'draft-only.txt', { type: 'text/plain' }));
+    picker.files = transfer.files;
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await wait(() => document.querySelector('.composer').textContent.includes('draft-only.txt'));
+  // A script or restored effect cannot forge a real button gesture.
+  await click(sendAction);
+  await settle();
+  assert.equal(rpc.filter(entry => entry.channel === 'wuu:turn-start').length, beforeAction);
+  await trustedClick(sendAction);
+  await until(() => followupResponse, 'explicit artifact action reaches the ordinary provider pipeline');
+  await trustedClick(sendAction);
+  const afterAction = rpc.filter(entry => entry.channel === 'wuu:turn-start');
+  assert.equal(afterAction.length, beforeAction + 1, 'Repeated click while pending must not start or queue a second turn');
+  assert.equal(afterAction.at(-1).args[0], actionOrigin, 'The host binds the originating thread');
+  assert.ok(JSON.stringify(afterAction.at(-1).args).includes('Engineering follow-up'));
+  assert.ok(!JSON.stringify(afterAction.at(-1).args).includes('draft-only.txt'), 'Content actions do not consume draft attachments');
+  assert.ok(await evaluate(selector => document.querySelector(selector).matches(':disabled'), sendAction));
+  assert.equal(await evaluate(() => document.querySelector('.composer textarea').value), 'Unsent composer draft');
+  assert.ok(await evaluate(() => document.querySelector('.composer').textContent.includes('draft-only.txt')));
+  await capture('08-app-action-running.png', '[data-genui-node="send"]');
+  followupResponse();
+  await wait(() => [...document.querySelectorAll('.session-flow')].some(node => node.textContent.includes('Follow-up accepted for Engineering.')));
+  await wait(() => !document.querySelector('.composer-stop-button'));
+  assert.equal(await evaluate(() => document.querySelector('input[data-genui-node="ownerInput"]').value), 'Engineering follow-up');
+  stopActionRecording();
+  pass('explicit trusted UI action starts one origin-bound normal turn with values and retains local form, composer draft and attachment');
+  const beforeActionReload = rpc.filter(entry => entry.channel === 'wuu:turn-start').length;
+  const actionReloaded = new Promise(resolve => main.webContents.once('did-finish-load', resolve));
+  main.reload(); await actionReloaded;
+  await wait(() => document.querySelector('input[data-genui-node="ownerInput"]')?.value === 'Engineering follow-up');
+  assert.equal(rpc.filter(entry => entry.channel === 'wuu:turn-start').length, beforeActionReload, 'Restoring action history must not replay submission');
+  await capture('09-app-action-history.png', '[data-genui-node="send"]');
+  pass('restored interactive action values do not replay agent requests');
+  const form = '[data-genui-node="ownerForm"]';
+  const formButton = `${form} button[type="submit"]`;
+  const beforeForm = rpc.filter(entry => entry.channel === 'wuu:turn-start').length;
+  await trustedType('input[data-genui-node="formOwner"]', '');
+  await wait(() => document.querySelector('input[data-genui-node="formOwner"]').value === '');
+  await trustedClick(formButton);
+  await settle();
+  assert.equal(rpc.filter(entry => entry.channel === 'wuu:turn-start').length, beforeForm, 'Invalid native forms cannot start a turn');
+  await trustedType('input[data-genui-node="formOwner"]', 'Engineering follow-up');
+  await evaluate(target => document.querySelector(target).requestSubmit(), form);
+  await settle();
+  assert.equal(rpc.filter(entry => entry.channel === 'wuu:turn-start').length, beforeForm, 'requestSubmit without a native gesture cannot start a turn');
+  await wait(selector => !document.querySelector(selector).matches(':disabled'), formButton);
+  await evaluate(target => document.querySelector(target).addEventListener('click', event => event.preventDefault(), { once: true }), formButton);
+  await trustedClick(formButton);
+  await settle();
+  assert.equal(rpc.filter(entry => entry.channel === 'wuu:turn-start').length, beforeForm, 'Canceling the submit-button default action cannot send');
+  for (const method of ['click', 'enter']) {
+    followupResponse = undefined;
+    const before = rpc.filter(entry => entry.channel === 'wuu:turn-start').length;
+    if (method === 'click') await trustedClick(formButton);
+    else {
+      await evaluate(() => document.querySelector('input[data-genui-node="formOwner"]').focus());
+      main.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Return' });
+      main.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Return' });
+    }
+    await until(() => followupResponse, `native form ${method} reaches inference`);
+    assert.equal(rpc.filter(entry => entry.channel === 'wuu:turn-start').length, before + 1);
+    assert.equal(rpc.filter(entry => entry.channel === 'wuu:turn-start').at(-1).args[0], actionOrigin);
+    followupResponse();
+    await wait(() => !document.querySelector('.composer-stop-button'));
+    await wait(selector => !document.querySelector(selector).matches(':disabled'), formButton);
+  }
+  await capture('10-app-native-form.png', form);
+  pass('native form click and Enter send once while invalid, canceled and programmatic submissions remain inert');
   const evidence = { recordedAt: new Date().toISOString(), scope: 'Real App, main, preload, app-server, Go helper, native history and plugin storage; loopback synthetic HTTP provider only.',
     hashes: { harness: hash(__filename), core: hash(process.env.WUU_DESKTOP_CORE), helper: hash(process.env.WUU_GENERATIVE_UI_PLUGIN_HELPER), main: hash(path.join(desktop, 'out/main/index.js')), preload: hash(path.join(desktop, 'out/preload/index.cjs')) },
-    checks, screenshots, processes, storage: stateDocuments(), requests, rpc, errors };
+    checks, screenshots, recordings, processes, storage: stateDocuments(), requests, rpc, errors };
   fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify(evidence, null, 2));
   console.log(`Full App generative UI E2E passed: ${output}`);
 }
 run().then(() => { clearTimeout(timeout); server.close(); app.quit(); }).catch(async error => {
   clearTimeout(timeout);
-  fs.writeFileSync(path.join(output, 'failure.json'), JSON.stringify({ error: String(error.stack || error), fixture, checks, requests, rpc, errors, processes, binaries: { core: { path: process.env.WUU_DESKTOP_CORE, hash: hash(process.env.WUU_DESKTOP_CORE) }, helper: { path: process.env.WUU_GENERATIVE_UI_PLUGIN_HELPER, hash: hash(process.env.WUU_GENERATIVE_UI_PLUGIN_HELPER), mode: fs.statSync(process.env.WUU_GENERATIVE_UI_PLUGIN_HELPER).mode } } }, null, 2));
+  fs.writeFileSync(path.join(output, 'failure.json'), JSON.stringify({ error: String(error.stack || error), fixture, checks, requests, rpc, errors, processes, recordings, binaries: { core: { path: process.env.WUU_DESKTOP_CORE, hash: hash(process.env.WUU_DESKTOP_CORE) }, helper: { path: process.env.WUU_GENERATIVE_UI_PLUGIN_HELPER, hash: hash(process.env.WUU_GENERATIVE_UI_PLUGIN_HELPER), mode: fs.statSync(process.env.WUU_GENERATIVE_UI_PLUGIN_HELPER).mode } } }, null, 2));
   if (main) fs.writeFileSync(path.join(output, 'failure.png'), (await main.webContents.capturePage()).toPNG());
   console.error(error); server.close(); app.exit(1);
 });

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 	"unicode/utf8"
 )
 
@@ -407,8 +408,18 @@ func (v *programValidator) validateChart(node map[string]any, path string, scope
 	if chartType == "pie" || chartType == "donut" {
 		return fmt.Errorf("%s pie and donut charts require points, not series", path)
 	}
+	seriesList := node["series"].([]any)
+	hasScatter := false
+	for _, raw := range seriesList {
+		kind, _ := raw.(map[string]any)["chartType"].(string)
+		if kind == "" {
+			kind = chartType
+		}
+		hasScatter = hasScatter || kind == "scatter"
+	}
 	ids := make(map[string]bool)
-	for index, raw := range node["series"].([]any) {
+	var categoryLabels []string
+	for index, raw := range seriesList {
 		series := raw.(map[string]any)
 		seriesPath := fmt.Sprintf("%s.series[%d]", path, index)
 		id := series["id"].(string)
@@ -432,6 +443,20 @@ func (v *programValidator) validateChart(node map[string]any, path string, scope
 		if points, literal := literalValue(series["points"]); literal {
 			if err := validateProgramPoints(points, seriesPath+".points", kind); err != nil {
 				return err
+			}
+			// Category series share one x-axis. Index alignment is only
+			// meaningful when each series has the same ordered labels.
+			// Scatter mixtures use a numeric x-axis instead.
+			if !hasScatter {
+				labels := make([]string, len(points.([]any)))
+				for index, raw := range points.([]any) {
+					labels[index] = raw.(map[string]any)["label"].(string)
+				}
+				if categoryLabels == nil {
+					categoryLabels = labels
+				} else if !slices.Equal(categoryLabels, labels) {
+					return fmt.Errorf("%s category series must use the same ordered labels", seriesPath)
+				}
 			}
 		}
 	}

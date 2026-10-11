@@ -25,6 +25,55 @@ const spec = {
     { id: 'draft', type: 'form', title: 'Prepare a follow-up', fields: [{ id: 'owner', label: 'Owner', kind: 'text', initial: 'Design' }, { id: 'priority', label: 'Priority', kind: 'select', options: ['Normal', 'High'] }, { id: 'estimate', label: 'Estimate', kind: 'number' }, { id: 'ready', label: 'Ready for review', kind: 'checkbox' }] },
   ],
 };
+const state = key => ({ op: 'state', key });
+const literal = value => ({ op: 'literal', value });
+const operation = (op, ...args) => ({ op, args });
+const samplePoints = [{ label: 'Design', value: 18 }, { label: 'Engineering', value: 32 }, { label: 'Review', value: 12 }];
+const program = {
+  version: 2, title: 'Delivery scenario planner', fallback: 'An interactive local scenario with editable capacity, computed totals, local tabs, and six chart types.',
+  state: [{ id: 'capacity', value: 40 }, { id: 'tab', value: 'overview' }, { id: 'includeReview', value: true }, { id: 'note', value: 'Local scenario' }],
+  body: [
+    { id: 'introV2', type: 'caption', text: 'Adjust the scenario. Calculations and view changes stay in this conversation until you explicitly send a message.' },
+    { id: 'controlsV2', type: 'grid', columns: 2, children: [
+      { id: 'capacityInput', type: 'input', inputType: 'number', label: 'Weekly capacity', state: 'capacity' },
+      { id: 'capacitySlider', type: 'slider', label: 'Capacity adjustment', state: 'capacity', min: 0, max: 200 },
+      { id: 'reviewToggle', type: 'checkbox', label: 'Include review', state: 'includeReview' },
+      { id: 'noteInput', type: 'textarea', label: 'Scenario notes', state: 'note' },
+    ] },
+    { id: 'tabsV2', type: 'segmented', label: 'View', state: 'tab', options: [{ label: 'Overview', value: 'overview' }, { label: 'Details', value: 'details' }] },
+    { id: 'overviewOnly', type: 'if', when: operation('eq', state('tab'), 'overview'), then: [
+      { id: 'statsV2', type: 'grid', columns: 3, children: [
+        { id: 'capacityMetric', type: 'metric', label: 'Monthly capacity', value: operation('multiply', state('capacity'), 4), detail: '4 weeks per scenario' },
+        { id: 'reviewMetric', type: 'metric', label: 'Review allocation', value: operation('if', state('includeReview'), operation('multiply', state('capacity'), 0.2), 0) },
+        { id: 'progressV2', type: 'progress', label: 'Capacity target', value: state('capacity'), max: 200 },
+      ] },
+    ], else: [
+      { id: 'detailsList', type: 'each', items: operation('filter', literal([{ name: 'Design', value: 18 }, { name: 'Engineering', value: 32 }]), operation('gt', { op: 'item', path: ['value'] }, 20)), children: [
+        { id: 'detailText', type: 'text', text: operation('concat', { op: 'item', path: ['name'] }, ': ', { op: 'item', path: ['value'] }) },
+      ] },
+    ] },
+    { id: 'buttonsV2', type: 'flow', children: [
+      { id: 'increaseV2', type: 'button', label: 'Add 10', onClick: [{ type: 'set', state: 'capacity', value: operation('add', state('capacity'), 10) }] },
+      { id: 'invalidV2', type: 'button', label: 'Check invalid calculation', onClick: [{ type: 'set', state: 'capacity', value: operation('divide', state('capacity'), 0) }] },
+      { id: 'resetV2', type: 'button', label: 'Reset scenario', onClick: [{ type: 'reset' }] },
+    ] },
+    { id: 'scenarioForm', type: 'form', label: 'Apply note', children: [
+      { id: 'requiredNote', type: 'input', label: 'Required scenario note', state: 'note', required: true, invalid: operation('eq', state('note'), 'invalid') },
+    ], onSubmit: [{ type: 'set', state: 'capacity', value: 100 }] },
+    { id: 'chartGridV2', type: 'grid', columns: 2, gap: 'large', children: [
+      { id: 'areaV2', type: 'chart', title: 'Capacity projection', chartType: 'area', points: operation('map', operation('range', 1, 6), operation('object', 'label', operation('concat', 'Week ', { op: 'item' }), 'value', operation('multiply', { op: 'item' }, state('capacity')))) },
+      { id: 'mixedV2', type: 'chart', title: 'Completed and planned', chartType: 'bar', series: [{ id: 'actual', label: 'Completed', points: literal(samplePoints) }, { id: 'plan', label: 'Planned', chartType: 'line', points: literal(samplePoints.map(point => ({ ...point, value: point.value + 8 }))) }] },
+      { id: 'scatterV2', type: 'chart', title: 'Effort vs impact', chartType: 'scatter', points: literal([{ label: 'A', x: 2, value: 7 }, { label: 'B', x: 5, value: 3 }, { label: 'C', x: 9, value: 10 }]) },
+      { id: 'stackedV2', type: 'chart', title: 'Work allocation', chartType: 'bar', stacked: true, series: [{ id: 'first', label: 'Current', points: literal(samplePoints) }, { id: 'second', label: 'Next', points: literal(samplePoints.map(point => ({ ...point, value: point.value / 2 }))) }] },
+      { id: 'pieV2', type: 'chart', title: 'Team share', chartType: 'pie', points: literal(samplePoints) },
+      { id: 'donutV2', type: 'chart', title: 'Capacity share', chartType: 'donut', points: literal(samplePoints) },
+    ] },
+    { id: 'detailsV2', type: 'disclosure', title: 'Scenario data', children: [
+      { id: 'tableV2', type: 'table', columns: [{ key: 'week', label: 'Week' }, { key: 'tasks', label: 'Tasks' }], rows: operation('map', operation('range', 1, 5), operation('array', { op: 'item' }, operation('multiply', { op: 'item' }, state('capacity')))) },
+    ] },
+  ],
+};
+
 function toolCall(value, index = 1) {
   const requests = [
     { id: 'init', method: 'initialize', params: { protocol_version: 1, capability_protocol_version: 3, plugin_id: 'generative-ui' } },
@@ -85,12 +134,13 @@ import { collectTurnArtifacts, TurnInlineArtifactOutputs } from ${JSON.stringify
 import { ArtifactThreadContext } from ${JSON.stringify(path.join(root, 'desktop/src/renderer/ArtifactPreviewContext'))};
 import { desktopPluginHost, desktopWorkbenchController } from ${JSON.stringify(path.join(root, 'desktop/src/renderer/plugins/DesktopPluginRuntime'))};
 import { I18nProvider } from ${JSON.stringify(path.join(root, 'desktop/src/renderer/i18n'))};
-import { activate, parseSpec } from ${JSON.stringify(source)};
+import { activate, parseSpec, parseToolInput } from ${JSON.stringify(source)};
 import ${JSON.stringify(path.join(root, 'desktop/src/renderer/styles.css'))};
 const root = createRoot(document.getElementById('root'));
 let threadId = 'synthetic-thread';
 let itemId = 'tool-call';
 let currentResult = ${JSON.stringify(result)};
+let streamingInput = null;
 let failStorage = false;
 let mounted = true;
 let pending = 0;
@@ -99,7 +149,7 @@ desktopWorkbenchController.updateServices({
  setStorage: async (_p, _g, key, value) => { pending++; try { if (failStorage) throw Error('Fixture storage unavailable'); localStorage.setItem(key, value); } finally { pending--; } },
 });
 function render() {
- const turn = { items: [{ id:itemId, type:'tool_call', status:'completed', result_detail:currentResult }] };
+ const turn = { id:'fixture-turn', items: [{ id:itemId, type:'tool_call', status:streamingInput?.status ?? 'completed', arguments:streamingInput?.text, display:streamingInput ? {capability:'generative-ui', label:'Building view'} : undefined, result_detail:streamingInput?.final ? currentResult : streamingInput ? undefined : currentResult }] };
  root.render(<I18nProvider><ArtifactThreadContext.Provider value={threadId}>{mounted ? <TurnInlineArtifactOutputs artifacts={collectTurnArtifacts(turn)} /> : null}</ArtifactThreadContext.Provider></I18nProvider>);
 }
 window.probe = {
@@ -108,9 +158,12 @@ window.probe = {
  mount(value = true) { mounted=value; render(); },
  thread(value) { threadId=value; render(); },
  item(value) { itemId=value; render(); },
- result(value) { currentResult=value; render(); },
+ result(value) { streamingInput=null; currentResult=value; render(); },
+ preview(text,status="in_progress",final=false) { streamingInput={text,status,final};render(); },
+ finish(value) { currentResult=value;streamingInput={...streamingInput,status:"completed",final:true};render(); },
  failStorage(value) { failStorage=value; },
  parse(raw) { try { parseSpec(raw); return true; } catch { return false; } },
+ parsePrefix(raw) { try { return parseToolInput(raw); } catch { return null; } },
  get pending() { return pending; },
 };
 render();
@@ -290,6 +343,136 @@ app.whenReady().then(async () => {
   await evaluate(win, `window.probe.result(${JSON.stringify(bad)})`);
   await waitFor(win, `document.body.textContent.includes('Interactive preview unavailable') && document.body.textContent.includes('Design: 12 tasks')`);
   results.checks.push('invalid historical payload preserves text fallback');
+  await evaluate(win, 'window.probe.failStorage(false)');
+  const programResult = toolCall(program, 'reactive-program').result?.result;
+  assert.ok(programResult && !programResult.is_error, 'Native helper accepts rich version 2 program');
+  await evaluate(win, `window.probe.result(${JSON.stringify(programResult)})`);
+  await waitFor(win, `document.querySelector('.plugin-genui-program')?.getAttribute('aria-busy') === 'false'`);
+  assert.equal(await evaluate(win, `document.querySelector('[data-genui-node="capacityMetric"] strong')?.textContent`), '160');
+  const nativeInput = async (selector, value) => {
+    await click(win, selector);
+    await evaluate(win, `document.querySelector(${JSON.stringify(selector)}).select()`);
+    await win.webContents.insertText(value);
+  };
+  await nativeInput('[data-genui-node="capacityInput"]', '50');
+  await waitFor(win, `document.querySelector('[data-genui-node="capacityMetric"] strong')?.textContent === '200'`);
+  assert.equal(await evaluate(win, `document.querySelector('[data-genui-node="capacitySlider"] input').value`), '50');
+  await click(win, '[data-genui-node="capacityInput"]');
+  await evaluate(win, `document.querySelector('[data-genui-node="capacityInput"]').select()`);
+  win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Backspace' });
+  win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Backspace' });
+  await waitFor(win, `document.querySelector('[data-genui-node="capacityInput"]').value === ''`);
+  assert.equal(await evaluate(win, `document.querySelector('[data-genui-node="capacityMetric"] strong').textContent`), '200', 'An empty numeric draft does not corrupt committed calculations');
+  await win.webContents.insertText('75');
+  await waitFor(win, `document.querySelector('[data-genui-node="capacityMetric"] strong').textContent === '300'`);
+  await click(win, '[data-genui-node="increaseV2"] button');
+  await waitFor(win, `document.querySelector('[data-genui-node="capacityInput"]').value === '85'`);
+  await click(win, '[data-genui-node="invalidV2"] button');
+  await waitFor(win, `document.body.textContent.includes('Cannot divide by zero')`);
+  assert.equal(await evaluate(win, `document.querySelector('[data-genui-node="capacityMetric"] strong').textContent`), '340', 'Failed computation keeps last committed state and tree');
+  await click(win, '[data-genui-node="reviewToggle"]');
+  await waitFor(win, `document.querySelector('[data-genui-node="reviewMetric"] strong').textContent === '0'`);
+  await click(win, '[data-genui-node="tabsV2"] label:nth-child(2)');
+  await waitFor(win, `document.querySelector('[data-genui-node="detailsList"]').textContent === 'Engineering: 32'`);
+  assert.equal(await evaluate(win, `!!document.querySelector('[data-genui-node="capacityMetric"]')`), false);
+  await click(win, '[data-genui-node="tabsV2"] label:nth-child(1)');
+  await waitFor(win, `!!document.querySelector('[data-genui-node="capacityMetric"]')`);
+  await waitFor(win, 'window.probe.pending === 0');
+  await evaluate(win, 'window.probe.mount(false)');
+  await waitFor(win, `!document.querySelector('.plugin-genui-program')`);
+  await evaluate(win, 'window.probe.mount(true)');
+  await waitFor(win, `document.querySelector('[data-genui-node="capacityInput"]')?.value === '85'`);
+  results.checks.push('v2 numeric drafts, bound sliders, reactive metrics, map/filter/each, local tabs, atomic calculation failure and durable state');
+  await nativeInput('[data-genui-node="requiredNote"]', 'invalid');
+  await click(win, '[data-genui-node="scenarioForm"] button[type="submit"]');
+  assert.equal(await evaluate(win, `document.querySelector('[data-genui-node="capacityInput"]').value`), '85', 'Declarative invalid state blocks native form submission');
+  assert.equal(await evaluate(win, `document.querySelector('[data-genui-node="requiredNote"]').validity.customError`), true);
+  await nativeInput('[data-genui-node="requiredNote"]', 'Approved local note');
+  win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' });
+  win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
+  await waitFor(win, `document.querySelector('[data-genui-node="capacityInput"]').value === '100'`);
+  results.checks.push('native form invalid-field gating and keyboard Enter submission');
+
+
+  await click(win, '[data-genui-node="mixedV2"] .plugin-genui-legend button:nth-child(1)');
+  await waitFor(win, `document.querySelectorAll('[data-genui-node="mixedV2"] svg rect').length === 0`);
+  assert.equal(await evaluate(win, `document.querySelector('[data-genui-node="mixedV2"] .plugin-genui-legend button').getAttribute('aria-pressed')`), 'false');
+  await click(win, '[data-genui-node="mixedV2"] .plugin-genui-legend button:nth-child(1)');
+  await click(win, '[data-genui-node="areaV2"] svg');
+  win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'ArrowRight' });
+  win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'ArrowRight' });
+  await waitFor(win, `document.querySelector('[data-genui-node="areaV2"] .plugin-genui-chart-caption').textContent.includes('Week')`);
+  assert.equal(await evaluate(win, `document.querySelectorAll('[data-genui-node="scatterV2"] svg circle').length`), 3);
+  assert.equal(await evaluate(win, `document.querySelectorAll('[data-genui-node="stackedV2"] svg rect').length`), 6);
+  assert.equal(await evaluate(win, `document.querySelectorAll('[data-genui-node="pieV2"] svg path').length`), 3);
+  assert.equal(await evaluate(win, `document.querySelectorAll('[data-genui-node="donutV2"] svg path').length`), 3);
+  await click(win, '[data-genui-node="detailsV2"] > summary');
+  await waitFor(win, `document.querySelector('[data-genui-node="tableV2"] tbody td:nth-child(2)').textContent === '100'`);
+  results.checks.push('v2 area/bar/line/scatter/pie/donut, stacked/mixed series, legend toggles, keyboard chart inspection and computed table');
+  for (const theme of ['light', 'dark']) for (const size of [14, 20]) for (const width of [1100, 480]) {
+    win.setContentSize(width, 1200);
+    await evaluate(win, `document.documentElement.dataset.theme=${JSON.stringify(theme)};document.documentElement.style.setProperty('--wuu-font-size-ui','${size}px');document.documentElement.style.setProperty('--font-ui','${size}px');window.scrollTo({top:0,behavior:'instant'})`);
+    await settlePaint();
+    const geometry = await evaluate(win, `({width:innerWidth,scroll:document.documentElement.scrollWidth,controls:[...document.querySelectorAll('.plugin-genui-program input,.plugin-genui-program textarea')].map(node=>({left:node.getBoundingClientRect().left,right:node.getBoundingClientRect().right,font:parseFloat(getComputedStyle(node).fontSize)}))})`);
+    assert.ok(geometry.scroll <= width + 1, JSON.stringify(geometry));
+    assert.ok(geometry.controls.every(control => control.left >= 0 && control.right <= width + 1 && control.font >= size), JSON.stringify(geometry));
+    fs.writeFileSync(path.join(output, `v2-${theme}-${size}-${width}.png`), (await win.webContents.capturePage()).toPNG());
+    await evaluate(win, `document.querySelector('[data-genui-node="chartGridV2"]').scrollIntoView({block:'start',behavior:'instant'})`);
+    await settlePaint();
+    fs.writeFileSync(path.join(output, `v2-charts-${theme}-${size}-${width}.png`), (await win.webContents.capturePage()).toPNG());
+  }
+  results.checks.push('v2 light/dark, default/large type, wide/narrow controls and chart screenshots without page overflow');
+  await waitFor(win, 'window.probe.pending === 0');
+  await evaluate(win, `window.probe.mount(false)`);
+  await waitFor(win, `!document.querySelector('.plugin-genui-program')`);
+  await evaluate(win, `(() => {const key=Object.keys(localStorage).find(key=>{try{return JSON.parse(localStorage.getItem(key)).version===2&&Object.hasOwn(JSON.parse(localStorage.getItem(key)).values,'capacity')}catch{return false}});if(!key)throw Error('Missing persisted program state');localStorage.setItem(key,'{broken');window.probe.mount(true);})()`);
+  await waitFor(win, `document.body.textContent.includes('Saved view state is unavailable') && document.querySelector('.plugin-genui-program')?.getAttribute('aria-busy') === 'false'`);
+  await nativeInput('[data-genui-node="capacityInput"]', '60');
+  await waitFor(win, `window.probe.pending === 0 && document.querySelector('[data-genui-node="capacityMetric"] strong').textContent === '240'`);
+  await evaluate(win, `window.probe.mount(false)`);
+  await waitFor(win, `!document.querySelector('.plugin-genui-program')`);
+  await evaluate(win, `window.probe.mount(true)`);
+  await waitFor(win, `document.querySelector('[data-genui-node="capacityInput"]')?.value === '60'`);
+  results.checks.push('corrupt stored program state recovers and the next valid edit repairs durable storage');
+
+
+  const streamed = { version: 2, title: 'Streamed scenario', fallback: 'A safe partial scenario.', state: [], body: [{ id: 'streamedText', type: 'text', text: 'Braces in text: "]}, with an escaped quote " and a slash \\.' }, { id: 'streamedSecond', type: 'text', text: 'Second complete node' }] };
+  const argumentsText = JSON.stringify({ spec: streamed });
+  const boundary = argumentsText.indexOf(JSON.stringify(streamed.body[0])) + JSON.stringify(streamed.body[0]).length;
+  await evaluate(win, `window.probe.preview(${JSON.stringify(argumentsText.slice(0, boundary))})`);
+  await waitFor(win, `document.querySelector('[data-genui-preview="true"]')?.textContent.includes('Braces in text')`);
+  await evaluate(win, `window.originalPreview=document.querySelector('[data-wuu-component="generated-ui"]')`);
+  assert.equal(await evaluate(win, `!!document.querySelector('[data-genui-node="streamedSecond"]')`), false);
+  await evaluate(win, `window.probe.preview(${JSON.stringify(argumentsText.slice(0, -3))})`);
+  await waitFor(win, `!!document.querySelector('[data-genui-node="streamedSecond"]')`);
+  assert.equal(await evaluate(win, `window.originalPreview===document.querySelector('[data-wuu-component="generated-ui"]')`), true, 'Appending complete nodes preserves preview surface identity');
+  const failedCalculation = argumentsText.slice(0, boundary) + ',{"id":"badCalculation","type":"text","text":{"op":"divide","args":[1,0]}}';
+  await evaluate(win, `window.probe.preview(${JSON.stringify(failedCalculation)})`);
+  assert.equal(await evaluate(win, `document.querySelector('[data-genui-node="streamedSecond"]').textContent`), 'Second complete node', 'A schema-valid runtime error cannot replace the last valid preview');
+  const malformed = argumentsText.slice(0, boundary) + ',{"id":"bad","type":"iframe"}';
+  await evaluate(win, `window.probe.preview(${JSON.stringify(malformed)})`);
+  assert.equal(await evaluate(win, `document.querySelector('[data-genui-node="streamedSecond"]').textContent`), 'Second complete node', 'Malformed next node cannot replace the last valid preview');
+  await evaluate(win, `window.probe.preview(${JSON.stringify(malformed)},'failed')`);
+  await waitFor(win, `document.querySelector('[data-genui-preview="true"]').getAttribute('aria-busy') === 'false' && document.body.textContent.includes('Generation stopped')`);
+  await evaluate(win, `window.probe.finish(${JSON.stringify(bad)})`);
+  await waitFor(win, `document.body.textContent.includes('The final view could not be validated') && !!document.querySelector('[data-genui-node="streamedSecond"]')`);
+  await evaluate(win, `window.probe.mount(false)`);
+  await waitFor(win, `!document.querySelector('[data-wuu-component="generated-ui"]')`);
+  await evaluate(win, `window.probe.result(${JSON.stringify(bad)});window.probe.mount(true)`);
+  await waitFor(win, `document.body.textContent.includes('Interactive preview unavailable')`);
+  results.checks.push('escaped-string-safe complete-node streaming, stable preview identity, malformed successor rollback, stop clears busy, invalid final preserves live preview only');
+
+  const manyRows = Array.from({length:200},()=>Array(8).fill(0));
+  const renderBudget = {version:2,title:'Render budget',fallback:'The oversized view remains text-only.',state:[{id:'rows',value:manyRows}],body:[{id:'repeat',type:'each',items:operation('range',0,100),children:Array.from({length:9},(_,index)=>({id:`table${index}`,type:'table',columns:Array.from({length:8},(_,column)=>({key:`c${column}`,label:`Column ${column}`})),rows:state('rows')}))}]};
+  const aliasBudget = {version:2,title:'Computation budget',fallback:'The oversized computation remains text-only.',state:[{id:'data',value:Array.from({length:40},()=>Array(200).fill(0))}],body:[{id:'result',type:'text',text:operation('length',operation('map',operation('range',0,95),operation('map',operation('range',0,95),state('data'))))}]};
+  for (const [name,value,message] of [['expanded-data-budget',renderBudget,'Rendered data limit reached'],['aliased-computation-budget',aliasBudget,'Local computation limit reached']]) {
+    const bounded = toolCall(value,name).result?.result;
+    assert.ok(bounded&&!bounded.is_error,'Native schema accepts the bounded program syntax');
+    await evaluate(win, `window.probe.result(${JSON.stringify(bounded)})`);
+    await waitFor(win, `document.body.textContent.includes(${JSON.stringify(message)})`);
+    assert.equal(await evaluate(win, `document.querySelectorAll('.plugin-genui-program td').length`),0,'Preflight rejects oversized output before data DOM is constructed');
+  }
+  results.checks.push('expanded table-cell and aliased collection-result budgets reject oversized runtime output before DOM construction');
   fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify(results, null, 2));
   win.destroy();
   app.quit();
