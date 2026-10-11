@@ -329,9 +329,16 @@ const rendererRun = app.whenReady().then(async () => {
         const timing=animation.effect?.getComputedTiming();
         const target=animation.effect?.target;
         const box=target?.getBoundingClientRect?.();
-        const visible=Boolean(box&&box.width&&box.height&&box.bottom>0&&box.top<innerHeight&&box.right>0&&box.left<innerWidth);
+        let hiddenByDetails=false;
+        for(let parent=target?.parentElement;parent;parent=parent.parentElement) {
+          if(parent.tagName==='DETAILS'&&!parent.open&&!parent.querySelector(':scope > summary')?.contains(target)) hiddenByDetails=true;
+        }
+        // Closed native details can retain nonzero child geometry while their
+        // color transitions are suspended. Those children are not painted.
+        const rendered=!hiddenByDetails&&target?.checkVisibility?.()!==false;
+        const visible=Boolean(rendered&&box&&box.width&&box.height&&box.bottom>0&&box.top<innerHeight&&box.right>0&&box.left<innerWidth);
         const eligible=visible&&animation.timeline===document.timeline&&animation.playbackRate>0&&animation.playState==='running'&&Number.isFinite(timing?.endTime);
-        return {id:animation.id,name:animation.animationName,property:animation.transitionProperty,target:target?.outerHTML?.slice(0,500),timeline:animation.timeline?.constructor?.name,documentTimeline:animation.timeline===document.timeline,currentTime:String(animation.currentTime),startTime:String(animation.startTime),endTime:String(timing?.endTime),playbackRate:animation.playbackRate,playState:animation.playState,pending:animation.pending,visible,eligible};
+        return {id:animation.id,name:animation.animationName,property:animation.transitionProperty,target:target?.outerHTML?.slice(0,500),timeline:animation.timeline?.constructor?.name,documentTimeline:animation.timeline===document.timeline,currentTime:String(animation.currentTime),startTime:String(animation.startTime),endTime:String(timing?.endTime),playbackRate:animation.playbackRate,playState:animation.playState,pending:animation.pending,hiddenByDetails,rendered,visible,eligible};
       });
       window.paintAnimations=animations.filter((_,index)=>records[index].eligible);
       window.paintStages.push({stage:'animation selection',records});
