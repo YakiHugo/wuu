@@ -96,6 +96,9 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Keep iOS conversation content in place while reconnecting, merge overlapping
+  history pages, and wait for a fresh snapshot before applying live updates.
+  Simplify the attachment menu and show accurate disabled composer states.
 - Keep browser tab listing and cleanup within the owning conversation, including
   popups. Reject cross-conversation tab access, and stop stale input after user
   takeover, request cancellation, navigation, or tab teardown.

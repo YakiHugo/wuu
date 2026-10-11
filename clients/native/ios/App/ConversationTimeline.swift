@@ -3,6 +3,7 @@ import WuuCore
 
 struct ConversationTimeline: View {
     @Bindable var model: AppModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var nearBottom = true
     @State private var following = true
     @State private var scrollState = TimelineScrollState()
@@ -13,7 +14,7 @@ struct ConversationTimeline: View {
                     LazyVStack(alignment: .leading, spacing: 18) {
                         if model.live?.historyCursor.isEmpty == false {
                             Button(model.loadingHistory ? "正在读取…" : "加载更早的消息") { model.perform { try await model.loadOlder() } }
-                                .disabled(!model.connected || model.loadingHistory)
+                                .disabled(!model.connected || model.refreshing || model.loadingHistory)
                         }
                         ForEach(model.conversationRows) { row in
                             if row.isToolGroup {
@@ -55,6 +56,26 @@ struct ConversationTimeline: View {
                                 Label("最新消息", systemImage: "arrow.down").font(.caption).padding(10).background(.regularMaterial, in: Capsule())
                             }.padding(12)
                         }
+                    }
+                    // Floats over retained content so the reading position never moves.
+                    .overlay(alignment: .top) {
+                        // Animate only the indicator; the snapshot's row changes apply without motion.
+                        ZStack {
+                            if model.updating {
+                                Label { Text("正在更新…") } icon: { ProgressView().controlSize(.small) }
+                                    .font(.caption).foregroundStyle(.secondary)
+                                    .padding(10).background(.regularMaterial, in: Capsule())
+                                    .padding(12).transition(.opacity).allowsHitTesting(false)
+                            } else if model.refreshing && model.connected, let id = model.activeID {
+                                Button {
+                                    model.perform { try await model.open(id, preservingContent: true) }
+                                } label: {
+                                    Label("重新加载会话", systemImage: "arrow.clockwise")
+                                        .font(.caption).padding(10).background(.regularMaterial, in: Capsule())
+                                }.padding(12)
+                            }
+                        }
+                            .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.updating)
                     }
             }
         }.sheet(item: $model.attachmentPreview) { attachment in AttachmentPreview(attachment: attachment) }

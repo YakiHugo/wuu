@@ -18,7 +18,13 @@ import WuuCore
                 }
                 .onChange(of: phase) { _, value in
                     if value == .active { model.foreground() }
-                    else if value == .background { Task { await model.background() } }
+                    else if value == .background {
+                        Task {
+                            // A foreground transition may run before this task gets the main actor.
+                            guard phase == .background else { return }
+                            await model.background()
+                        }
+                    }
                 }
         }
     }
@@ -240,9 +246,18 @@ struct ConversationView: View {
         let title = model.live?.title ?? model.saved?.title ?? ""
         return title.isEmpty ? "新会话" : title
     }
+    // A disabled composer names its actual cause; a quiet resume needs no instruction.
+    private var composerPlaceholder: String {
+        if model.live?.archived == true { return "会话已归档" }
+        if model.live?.readOnly == true { return "会话只读" }
+        if !model.connected && !model.updating { return "连接电脑后发送" }
+        if model.refreshing && !model.updating { return "会话更新失败" }
+        return model.live?.running == true ? "添加后续消息" : "发送消息"
+    }
     private var conversation: some View {
         VStack(spacing: 0) {
-            if !model.connected {
+            // A resuming conversation keeps its layout; the banner reports failures.
+            if !model.connected && !model.updating {
                 ConnectionStatusView(connecting: model.connecting, offlineMessage: "电脑未连接 · 历史记录只读", detail: model.connectionStatus) {
                     Task { await model.connect() }
                 }
@@ -262,8 +277,8 @@ struct ConversationView: View {
                 QuestionView(model: model, request: request).id(request["request_id"].string)
             }
             MobileComposer(text: draft, attachments: attachments, model: model,
-                enabled: model.connected && model.live != nil && model.live?.readOnly != true && model.live?.archived != true,
-                sending: model.sending, placeholder: model.live?.running == true ? "添加后续消息" : "发送消息", identifier: "harness-composer",
+                enabled: model.connected && !model.refreshing && model.live != nil && model.live?.readOnly != true && model.live?.archived != true,
+                sending: model.sending, placeholder: composerPlaceholder, identifier: "harness-composer",
                 stop: model.live?.running == true ? { model.perform { try await model.stop() } } : nil) {
                     let key = draftKey
                     let original = drafts[key] ?? ""
