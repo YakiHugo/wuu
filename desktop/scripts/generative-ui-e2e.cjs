@@ -393,16 +393,52 @@ app.whenReady().then(async () => {
   await evaluate(win, `window.probe.result(${JSON.stringify(programResult)})`);
   await waitFor(win, `document.querySelector('.plugin-genui-program')?.getAttribute('aria-busy') === 'false'`);
   assert.equal(await evaluate(win, `document.querySelector('[data-genui-node="capacityMetric"] strong')?.textContent`), '160');
+  // Capture the complete default view before behavioral checks, so a later
+  // interaction failure still leaves independent visual acceptance evidence.
+  await click(win, '[data-genui-node="detailsV2"] > summary');
+  await waitFor(win, `document.querySelector('[data-genui-node="detailsV2"]').open`);
+  for (const theme of ['light', 'dark']) for (const size of [14, 20]) for (const width of [1100, 480]) {
+    win.setContentSize(width, 1200);
+    await evaluate(win, `document.documentElement.dataset.theme=${JSON.stringify(theme)};window.probe.fontSize(${size});window.scrollTo({top:0,behavior:'instant'})`);
+    await settlePaint();
+    const geometry = await evaluate(win, `({width:innerWidth,scroll:document.documentElement.scrollWidth,controls:[...document.querySelectorAll('.plugin-genui-program input,.plugin-genui-program textarea')].map(node=>({left:node.getBoundingClientRect().left,right:node.getBoundingClientRect().right,font:parseFloat(getComputedStyle(node).fontSize)}))})`);
+    assert.ok(geometry.scroll <= width + 1, JSON.stringify(geometry));
+    assert.ok(geometry.controls.every(control => control.left >= 0 && control.right <= width + 1 && control.font >= size), JSON.stringify(geometry));
+    const nestedGeometry = await evaluate(win, `Array.from(document.querySelectorAll('[data-genui-node^="nestedCard"]')).map(card=>{const box=card.getBoundingClientRect();return {cardWidth:box.width,controls:Array.from(card.querySelectorAll('input')).map(input=>{const control=input.getBoundingClientRect();return {width:control.width,left:control.left-box.left,right:box.right-control.right};})};})`);
+    results.nestedLayouts ??= [];
+    results.nestedLayouts.push({theme,size,width,cards:nestedGeometry});
+    assert.ok(nestedGeometry.every(card=>card.controls.every(control=>control.left>=0&&control.right>=0)),'Nested grid controls stay inside their own card');
+    fs.writeFileSync(path.join(output, `v2-${theme}-${size}-${width}.png`), (await win.webContents.capturePage()).toPNG());
+    await evaluate(win, `document.querySelector('[data-genui-node="chartGridV2"]').scrollIntoView({block:'start',behavior:'instant'})`);
+    await settlePaint();
+    fs.writeFileSync(path.join(output, `v2-charts-${theme}-${size}-${width}.png`), (await win.webContents.capturePage()).toPNG());
+    for (const node of ['nestedControls','nestedGrid','areaV2','mixedV2','scatterV2','stackedV2','pieV2','donutV2','detailsV2']) {
+      await evaluate(win, `document.querySelector('[data-genui-node="${node}"]').scrollIntoView({block:'start',behavior:'instant'})`);
+      await settlePaint();
+      fs.writeFileSync(path.join(output, `v2-${node}-${theme}-${size}-${width}.png`), (await win.webContents.capturePage()).toPNG());
+    }
+
+  }
+  results.checks.push('v2 light/dark, default/large type, wide/narrow controls and chart screenshots without page overflow');
+  await click(win, '[data-genui-node="detailsV2"] > summary');
+  await waitFor(win, `!document.querySelector('[data-genui-node="detailsV2"]').open`);
+
   const nativeInput = async (selector, value) => {
     await click(win, selector);
-    await evaluate(win, `document.querySelector(${JSON.stringify(selector)}).select()`);
+    await waitFor(win, `document.activeElement === document.querySelector(${JSON.stringify(selector)})`);
+    win.webContents.sendInputEvent({type:'keyDown',keyCode:'A',modifiers:['control']});
+    win.webContents.sendInputEvent({type:'keyUp',keyCode:'A',modifiers:['control']});
+    win.webContents.sendInputEvent({type:'keyDown',keyCode:'Backspace'});
+    win.webContents.sendInputEvent({type:'keyUp',keyCode:'Backspace'});
+    await waitFor(win, `document.querySelector(${JSON.stringify(selector)}).value === ''`);
     await win.webContents.insertText(value);
   };
   await nativeInput('[data-genui-node="capacityInput"]', '50');
   await waitFor(win, `document.querySelector('[data-genui-node="capacityMetric"] strong')?.textContent === '200'`);
   assert.equal(await evaluate(win, `document.querySelector('[data-genui-node="capacitySlider"] input').value`), '50');
   await click(win, '[data-genui-node="capacityInput"]');
-  await evaluate(win, `document.querySelector('[data-genui-node="capacityInput"]').select()`);
+  win.webContents.sendInputEvent({type:'keyDown',keyCode:'A',modifiers:['control']});
+  win.webContents.sendInputEvent({type:'keyUp',keyCode:'A',modifiers:['control']});
   win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Backspace' });
   win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Backspace' });
   await waitFor(win, `document.querySelector('[data-genui-node="capacityInput"]').value === ''`);
@@ -469,29 +505,7 @@ app.whenReady().then(async () => {
   await click(win, '[data-genui-node="detailsV2"] > summary');
   await waitFor(win, `document.querySelector('[data-genui-node="tableV2"] tbody td:nth-child(2)').textContent === '100'`);
   results.checks.push('v2 area/bar/line/scatter/pie/donut, stacked/mixed series, legend toggles, keyboard chart inspection and computed table');
-  for (const theme of ['light', 'dark']) for (const size of [14, 20]) for (const width of [1100, 480]) {
-    win.setContentSize(width, 1200);
-    await evaluate(win, `document.documentElement.dataset.theme=${JSON.stringify(theme)};window.probe.fontSize(${size});window.scrollTo({top:0,behavior:'instant'})`);
-    await settlePaint();
-    const geometry = await evaluate(win, `({width:innerWidth,scroll:document.documentElement.scrollWidth,controls:[...document.querySelectorAll('.plugin-genui-program input,.plugin-genui-program textarea')].map(node=>({left:node.getBoundingClientRect().left,right:node.getBoundingClientRect().right,font:parseFloat(getComputedStyle(node).fontSize)}))})`);
-    assert.ok(geometry.scroll <= width + 1, JSON.stringify(geometry));
-    assert.ok(geometry.controls.every(control => control.left >= 0 && control.right <= width + 1 && control.font >= size), JSON.stringify(geometry));
-    const nestedGeometry = await evaluate(win, `Array.from(document.querySelectorAll('[data-genui-node^="nestedCard"]')).map(card=>{const box=card.getBoundingClientRect();return {cardWidth:box.width,controls:Array.from(card.querySelectorAll('input')).map(input=>{const control=input.getBoundingClientRect();return {width:control.width,left:control.left-box.left,right:box.right-control.right};})};})`);
-    results.nestedLayouts ??= [];
-    results.nestedLayouts.push({theme,size,width,cards:nestedGeometry});
-    assert.ok(nestedGeometry.every(card=>card.controls.every(control=>control.left>=0&&control.right>=0)),'Nested grid controls stay inside their own card');
-    fs.writeFileSync(path.join(output, `v2-${theme}-${size}-${width}.png`), (await win.webContents.capturePage()).toPNG());
-    await evaluate(win, `document.querySelector('[data-genui-node="chartGridV2"]').scrollIntoView({block:'start',behavior:'instant'})`);
-    await settlePaint();
-    fs.writeFileSync(path.join(output, `v2-charts-${theme}-${size}-${width}.png`), (await win.webContents.capturePage()).toPNG());
-    for (const node of ['nestedControls','nestedGrid','areaV2','mixedV2','scatterV2','stackedV2','pieV2','donutV2','detailsV2']) {
-      await evaluate(win, `document.querySelector('[data-genui-node="${node}"]').scrollIntoView({block:'start',behavior:'instant'})`);
-      await settlePaint();
-      fs.writeFileSync(path.join(output, `v2-${node}-${theme}-${size}-${width}.png`), (await win.webContents.capturePage()).toPNG());
-    }
 
-  }
-  results.checks.push('v2 light/dark, default/large type, wide/narrow controls and chart screenshots without page overflow');
   await click(win, '[data-genui-node="noteInput"]');
   win.webContents.sendInputEvent({type:'keyDown',keyCode:'Tab'});
   win.webContents.sendInputEvent({type:'keyUp',keyCode:'Tab'});
@@ -594,6 +608,31 @@ app.whenReady().then(async () => {
   await waitFor(win, `document.querySelector('[data-genui-node="capacityInput"]')?.value === '60'`);
   results.checks.push('corrupt stored program state recovers and the next valid edit repairs durable storage');
 
+
+  const boundaryProgram={version:2,title:'Declared state boundary',fallback:'Copy and reset remain available at the declared-state limit.',state:[{id:'s',value:[...Array(4).fill('x'.repeat(4000)),'x'.repeat(347)]}],body:[
+    {id:'copyBoundary',type:'button',label:'Copy boundary text',onClick:[{type:'copy',text:'Boundary copy'}]},
+    {id:'resetBoundary',type:'button',label:'Reset boundary',onClick:[{type:'reset'}]},
+    {id:'boundaryDetails',type:'disclosure',title:'Additional view state',children:[]},
+  ]};
+  assert.equal(Buffer.byteLength(JSON.stringify(boundaryProgram.state)),16384);
+  const boundaryResult=toolCall(boundaryProgram,'declared-state-boundary').result?.result;
+  assert.ok(boundaryResult&&!boundaryResult.is_error);
+  await evaluate(win,`window.probe.result(${JSON.stringify(boundaryResult)})`);
+  await waitFor(win,`document.querySelector('.plugin-genui-program')?.getAttribute('aria-busy')==='false'`);
+  await click(win,'[data-genui-node="copyBoundary"] button');
+  await waitFor(win,`document.body.textContent.includes('Copied') && document.querySelector('.plugin-genui-program')?.getAttribute('aria-busy')==='false'`);
+  assert.equal(clipboard.readText(),'Boundary copy','Unchanged copy action is independent of storage envelope overhead');
+  await click(win,'[data-genui-node="boundaryDetails"] > summary');
+  await waitFor(win,`document.body.textContent.includes('Combined view state exceeds 16 KiB') && !document.querySelector('[data-genui-node="boundaryDetails"]').open`);
+  await click(win,'[data-genui-node="resetBoundary"] button');
+  await waitFor(win,`window.probe.pending===0 && !document.body.textContent.includes('Combined view state exceeds 16 KiB')`);
+  assert.deepEqual(await evaluate(win,`JSON.parse(localStorage.getItem(window.probe.storageKey))`),{version:2,defaults:true});
+  await evaluate(win,'window.probe.mount(false)');
+  await waitFor(win,`!document.querySelector('.plugin-genui-program')`);
+  await evaluate(win,'window.probe.mount(true)');
+  await waitFor(win,`document.querySelector('.plugin-genui-program')?.getAttribute('aria-busy')==='false'`);
+  assert.equal(await evaluate(win,`document.body.textContent.includes('Saved view state is unavailable')`),false);
+  results.checks.push('exact declared-state byte boundary allows copy/reset while rejecting oversized component state; the compact defaults marker reloads');
 
   const streamed = { version: 2, title: 'Streamed scenario', fallback: 'A safe partial scenario.', state: [], body: [{ id: 'streamedText', type: 'text', text: 'Braces in text: "]}, with an escaped quote " and a slash \\.' }, { id: 'streamedSecond', type: 'text', text: 'Second complete node' }] };
   const argumentsText = JSON.stringify({ spec: streamed });

@@ -349,6 +349,12 @@ function validateComponentRecord(node, record) {
     }
   } else { object(record, ["type", "open"]); requireValue(typeof record.open === "boolean", "Invalid saved disclosure state"); }
 }
+function programSnapshotPayload(spec, snapshot) {
+  // The original program already contains defaults. A small explicit marker
+  // can restore them even when the declared-state limit leaves no envelope room.
+  return Object.keys(snapshot.components).length === 0 && JSON.stringify(snapshot.values) === JSON.stringify(programDefaults(spec))
+    ? { version: 2, defaults: true } : { version: 2, ...snapshot };
+}
 function validateProgramSnapshot(spec, snapshot, legacy = false) {
   object(snapshot, ["values", "components"]);
   validateProgramValues(spec, snapshot.values);
@@ -367,14 +373,21 @@ function validateProgramSnapshot(spec, snapshot, legacy = false) {
     requireValue(JSON.stringify(path) === address, "Noncanonical component address");
     validateComponentRecord(known.node, record);
   }
-  if (!legacy) requireValue(encoder.encode(JSON.stringify({ version: 2, ...snapshot })).length <= MAX_STATE_BYTES, "Combined view state exceeds 16 KiB");
+  if (!legacy) requireValue(encoder.encode(JSON.stringify(programSnapshotPayload(spec, snapshot))).length <= MAX_STATE_BYTES, "Combined view state exceeds 16 KiB");
   return snapshot;
 }
 function restoreProgramSnapshot(spec, raw) {
   if (!raw) return { values: programDefaults(spec), components: {} };
   // Old v2 snapshots had no component records and allowed an envelope overhead.
   requireValue(encoder.encode(raw).length <= MAX_STATE_BYTES + 64, "Saved state is too large");
-  const saved = JSON.parse(raw); object(saved, ["version", "values", "components"], ["version", "values"]);
+  const saved = JSON.parse(raw);
+  if (saved && Object.hasOwn(saved, "defaults")) {
+    requireValue(encoder.encode(raw).length <= MAX_STATE_BYTES, "Saved state is too large");
+    object(saved, ["version", "defaults"]);
+    requireValue(saved.version === 2 && saved.defaults === true, "Invalid defaults marker");
+    return { values: programDefaults(spec), components: {} };
+  }
+  object(saved, ["version", "values", "components"], ["version", "values"]);
   requireValue(saved.version === 2, "Unsupported saved state");
   const legacy = !Object.hasOwn(saved, "components");
   if (!legacy) requireValue(encoder.encode(raw).length <= MAX_STATE_BYTES, "Saved state is too large");
@@ -691,7 +704,7 @@ export async function activate(api) {
     function commit(next) {
       current.current = next; setSnapshot(next); setNotice("");
       const storage = persistence.current;
-      if (storage.key) void writeSnapshot(hostRef.current, storage.key, { version: 2, ...next }).catch(() => {
+      if (storage.key) void writeSnapshot(hostRef.current, storage.key, programSnapshotPayload(spec, next)).catch(() => {
         if (storage.mounted) setNotice("This view could not be saved. Your changes are still available here.");
       });
     }
@@ -716,7 +729,7 @@ export async function activate(api) {
       const scope = { item, event: boundValue };
       const budget = { operations: PROGRAM_LIMITS.operations };
       const effects = [];
-      let reset = false;
+      let reset = false, changed = false;
       try {
         if (node.state) next[node.state] = boundValue;
         for (const action of actions) {
@@ -729,14 +742,17 @@ export async function activate(api) {
           }
         }
         const components = reset ? {} : current.current.components;
-        validateProgramSnapshot(spec, { values: next, components });
+        changed = reset || JSON.stringify(next) !== JSON.stringify(current.current.values);
+        if (changed) validateProgramSnapshot(spec, { values: next, components });
+        else validateProgramValues(spec, next);
         renderProgram(spec, next, { disabled: true, run: () => {}, components }, budget);
         if (effects.some(effect => effect.type === "sendMessage")) {
           const invalid = [...(surface.current?.querySelectorAll("input,textarea,select") ?? [])].find(control => !control.validity.valid);
           if (invalid) { invalid.reportValidity(); throw new Error("Correct the highlighted value before sending a message."); }
         }
       } catch (error) { setNotice(error.message); return false; }
-      commit({ values: next, components: reset ? {} : current.current.components });
+      if (changed) commit({ values: next, components: reset ? {} : current.current.components });
+      else setNotice("");
       if (reset) setResetVersion(value => value + 1);
       const storage = persistence.current;
       // Host invocation stays synchronous with this trusted activation. The

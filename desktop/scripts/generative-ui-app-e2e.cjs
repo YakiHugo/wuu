@@ -449,7 +449,7 @@ async function run() {
     picker.files = transfer.files;
     picker.dispatchEvent(new Event('change', { bubbles: true }));
   });
-  await wait(() => document.querySelector('.composer').textContent.includes('draft-only.txt'));
+  await wait(() => [...document.querySelectorAll('.composer-shell .composer-attachment-tray-item:not([data-exiting]) .composer-document-card')].some(node => node.textContent.includes('draft-only.txt')));
   // A script or restored effect cannot forge a real button gesture.
   await click(sendAction);
   await settle();
@@ -464,7 +464,7 @@ async function run() {
   assert.ok(!JSON.stringify(afterAction.at(-1).args).includes('draft-only.txt'), 'Content actions do not consume draft attachments');
   assert.ok(await evaluate(selector => document.querySelector(selector).matches(':disabled'), sendAction));
   assert.equal(await evaluate(() => document.querySelector('.composer textarea').value), 'Unsent composer draft');
-  assert.ok(await evaluate(() => document.querySelector('.composer').textContent.includes('draft-only.txt')));
+  assert.ok(await evaluate(() => [...document.querySelectorAll('.composer-shell .composer-attachment-tray-item:not([data-exiting]) .composer-document-card')].some(node => node.textContent.includes('draft-only.txt'))));
   await capture('08-app-action-running.png', '[data-genui-node="send"]');
   followupResponse();
   await wait(() => [...document.querySelectorAll('.session-flow')].some(node => node.textContent.includes('Follow-up accepted for Engineering.')));
