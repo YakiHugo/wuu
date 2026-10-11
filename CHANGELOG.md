@@ -96,6 +96,9 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Dismiss the iOS conversation keyboard when tapping the message area, including
+  blank space in an empty conversation, while preserving the draft.
+
 - Keep browser tab listing and cleanup within the owning conversation, including
   popups. Reject cross-conversation tab access, and stop stale input after user
   takeover, request cancellation, navigation, or tab teardown.

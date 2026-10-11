@@ -178,6 +178,7 @@ struct ConversationView: View {
     @State private var conversationPresented = false
     @State private var searching = false
     @FocusState private var searchFocused: Bool
+    @FocusState private var composerFocused: Bool
     @State private var drafts: [String: String] = [:]
     @State private var attachmentDrafts: [String: [InputAttachment]] = [:]
     @State private var consent = false
@@ -247,11 +248,15 @@ struct ConversationView: View {
                     Task { await model.connect() }
                 }
             }
-            if model.activeID == nil {
-                ContentUnavailableView("继续你的对话", systemImage: "bubble.left.and.bubble.right", description: Text("打开会话列表，或新建会话。"))
-            } else {
-                ConversationTimeline(model: model).id(model.activeID)
+            Group {
+                if model.activeID == nil {
+                    ContentUnavailableView("继续你的对话", systemImage: "bubble.left.and.bubble.right", description: Text("打开会话列表，或新建会话。"))
+                } else {
+                    ConversationTimeline(model: model).id(model.activeID)
+                }
             }
+            .contentShape(Rectangle())
+            .onTapGesture { composerFocused = false }
             if let request = model.pendingApproval {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("电脑需要处理请求：" + (request["method"].string ?? "")).font(.caption)
@@ -261,7 +266,7 @@ struct ConversationView: View {
             if let request = model.questions.first(where: { $0["thread_id"].string == model.activeID }) {
                 QuestionView(model: model, request: request).id(request["request_id"].string)
             }
-            MobileComposer(text: draft, attachments: attachments, model: model,
+            MobileComposer(text: draft, attachments: attachments, focused: $composerFocused, model: model,
                 enabled: model.connected && model.live != nil && model.live?.readOnly != true && model.live?.archived != true,
                 sending: model.sending, placeholder: model.live?.running == true ? "添加后续消息" : "发送消息", identifier: "harness-composer",
                 stop: model.live?.running == true ? { model.perform { try await model.stop() } } : nil) {
