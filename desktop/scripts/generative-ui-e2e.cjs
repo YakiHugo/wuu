@@ -408,8 +408,8 @@ const rendererRun = app.whenReady().then(async () => {
   await waitFor(win, `document.body.textContent.includes('could not be saved')`);
   results.checks.push('storage failure stays editable and warns');
 
-  const literal = toolCall(edit(s => { s.fallback = '![Do not fetch](https://example.test/pixel)'; s.blocks[0].text = '<img src=x onerror=alert(1)>'; }), 'literal').result.result;
-  await evaluate(win, `window.probe.result(${JSON.stringify(literal)})`);
+  const literalResult = toolCall(edit(s => { s.fallback = '![Do not fetch](https://example.test/pixel)'; s.blocks[0].text = '<img src=x onerror=alert(1)>'; }), 'literal').result.result;
+  await evaluate(win, `window.probe.result(${JSON.stringify(literalResult)})`);
   await waitFor(win, `document.body.textContent.includes('<img src=x onerror=alert(1)>')`);
   assert.equal(await evaluate(win, `!!document.querySelector('#root img, #root iframe')`), false);
   await evaluate(win, 'window.probe.disable()');
