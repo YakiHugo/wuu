@@ -295,13 +295,92 @@ function validateProgramValues(spec, values) {
   walk(spec.body);
   return values;
 }
-function restoreProgramValues(spec, raw) {
-  if (!raw) return programDefaults(spec);
-  requireValue(encoder.encode(raw).length <= MAX_STATE_BYTES + 64, "Saved state is too large");
-  const saved = JSON.parse(raw); object(saved, ["version", "values"]);
-  requireValue(saved.version === 2, "Unsupported saved state");
-  return validateProgramValues(spec, saved.values);
+function componentDefaults(node) {
+  if (node.type === "table") return { type: "table", query: "", sort: -1, descending: false };
+  if (node.type === "chart") return { type: "chart", hidden: [], dataOpen: false };
+  return { type: "disclosure", open: node.open ?? false };
 }
+function componentCatalog(spec) {
+  const catalog = new Map();
+  function walk(nodes, ancestors) {
+    for (const node of nodes) {
+      if (["table", "chart", "disclosure"].includes(node.type)) catalog.set(node.id, { node, ancestors });
+      for (const field of ["children", "then", "else"]) if (node[field]) walk(node[field], node.type === "each" ? [...ancestors, node.id] : ancestors);
+    }
+  }
+  walk(spec.body, []);
+  return catalog;
+}
+function validateCollectionIdentity(raw, budget) {
+  string(raw, MAX_STATE_BYTES);
+  const encoded = JSON.parse(raw); list(encoded, 2, 2);
+  requireValue(Number.isInteger(encoded[1]) && encoded[1] >= 0 && encoded[1] < PROGRAM_LIMITS.iterations, "Invalid collection occurrence");
+  const identity = JSON.parse(encoded[0]);
+  if (identity[0] === "key") {
+    list(identity, 3, 3); requireValue(encoded[1] === 0, "Explicit collection keys cannot repeat");
+    if (identity[1] === "string") string(identity[2], 80);
+    else { requireValue(identity[1] === "number", "Invalid collection key type"); number(identity[2]); }
+  } else {
+    list(identity, 2, 2); requireValue(identity[0] === "value", "Invalid collection identity");
+    const value = JSON.parse(identity[1]); jsonValue(value, 1, budget);
+    requireValue(canonicalJSON(value, budget) === identity[1], "Noncanonical collection identity");
+  }
+  requireValue(JSON.stringify([JSON.stringify(identity), encoded[1]]) === raw, "Noncanonical collection address");
+}
+function validateComponentRecord(node, record) {
+  requireValue(record?.type === node.type, "Saved component type changed");
+  if (node.type === "table") {
+    object(record, ["type", "query", "sort", "descending"]); string(record.query, 100, false);
+    requireValue(Number.isInteger(record.sort) && record.sort >= -1 && record.sort < node.columns.length && typeof record.descending === "boolean", "Invalid saved table controls");
+  } else if (node.type === "chart") {
+    object(record, ["type", "hidden", "dataOpen"]); list(record.hidden, 0, 100); unique(record.hidden);
+    requireValue(typeof record.dataOpen === "boolean", "Invalid chart disclosure state");
+    if (node.chartType === "pie" || node.chartType === "donut") {
+      for (const identity of record.hidden) {
+        string(identity, 2000);
+        const parts = JSON.parse(identity); list(parts, 2, 2);
+        requireValue(Number.isInteger(parts[1]) && parts[1] >= 0 && parts[1] < 100, "Invalid chart point occurrence");
+        const point = JSON.parse(parts[0]); validateChartPoints([point], node.chartType);
+        requireValue(canonicalJSON(point, { operations: PROGRAM_LIMITS.operations }) === parts[0] && JSON.stringify(parts) === identity, "Invalid chart point identity");
+      }
+    } else {
+      const ids = new Set((node.series ?? []).map(series => series.id));
+      requireValue(record.hidden.every(id => typeof id === "string" && ids.has(id)), "Unknown chart series");
+    }
+  } else { object(record, ["type", "open"]); requireValue(typeof record.open === "boolean", "Invalid saved disclosure state"); }
+}
+function validateProgramSnapshot(spec, snapshot, legacy = false) {
+  object(snapshot, ["values", "components"]);
+  validateProgramValues(spec, snapshot.values);
+  requireValue(snapshot.components && typeof snapshot.components === "object" && !Array.isArray(snapshot.components), "Invalid saved component state");
+  const catalog = componentCatalog(spec);
+  const budget = { operations: PROGRAM_LIMITS.operations };
+  for (const [address, record] of Object.entries(snapshot.components)) {
+    string(address, MAX_STATE_BYTES);
+    const path = JSON.parse(address); list(path, 2, 2);
+    const known = catalog.get(path[0]); requireValue(known, "Unknown saved component");
+    list(path[1], known.ancestors.length, known.ancestors.length);
+    path[1].forEach((ancestor, index) => {
+      list(ancestor, 2, 2); requireValue(ancestor[0] === known.ancestors[index], "Saved component ancestry changed");
+      validateCollectionIdentity(ancestor[1], budget);
+    });
+    requireValue(JSON.stringify(path) === address, "Noncanonical component address");
+    validateComponentRecord(known.node, record);
+  }
+  if (!legacy) requireValue(encoder.encode(JSON.stringify({ version: 2, ...snapshot })).length <= MAX_STATE_BYTES, "Combined view state exceeds 16 KiB");
+  return snapshot;
+}
+function restoreProgramSnapshot(spec, raw) {
+  if (!raw) return { values: programDefaults(spec), components: {} };
+  // Old v2 snapshots had no component records and allowed an envelope overhead.
+  requireValue(encoder.encode(raw).length <= MAX_STATE_BYTES + 64, "Saved state is too large");
+  const saved = JSON.parse(raw); object(saved, ["version", "values", "components"], ["version", "values"]);
+  requireValue(saved.version === 2, "Unsupported saved state");
+  const legacy = !Object.hasOwn(saved, "components");
+  if (!legacy) requireValue(encoder.encode(raw).length <= MAX_STATE_BYTES, "Saved state is too large");
+  return validateProgramSnapshot(spec, { values: saved.values, components: saved.components ?? {} }, legacy);
+}
+
 function canonicalJSON(value, budget) {
   consume(budget);
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -511,9 +590,10 @@ async function hydrateView(host, key, restore, receive, state) {
   if (!state.mounted) return;
   const channel = liveViews.get(key) ?? { values: undefined, listeners: new Set() };
   liveViews.set(key, channel);
-  channel.listeners.add(receive);
+  const listener = snapshot => receive(restore(JSON.stringify(snapshot)));
+  channel.listeners.add(listener);
   state.unsubscribe = () => {
-    channel.listeners.delete(receive);
+    channel.listeners.delete(listener);
     if (!channel.listeners.size && liveViews.get(key) === channel) liveViews.delete(key);
   };
   state.key = key;
@@ -525,11 +605,13 @@ async function hydrateView(host, key, restore, receive, state) {
 }
 
 function saveValues(host, key, values, version = 1) {
-  const snapshot = { version, values };
+  return writeSnapshot(host, key, { version, values }, MAX_STATE_BYTES + (version === 2 ? 64 : 0));
+}
+function writeSnapshot(host, key, snapshot, maxBytes = MAX_STATE_BYTES) {
   const raw = JSON.stringify(snapshot);
-  if (encoder.encode(raw).length > MAX_STATE_BYTES + (version === 2 ? 64 : 0)) return Promise.reject(new Error("State exceeds 16 KiB"));
+  if (encoder.encode(raw).length > maxBytes) return Promise.reject(new Error("Combined view state exceeds 16 KiB"));
   const channel = liveViews.get(key);
-  if (channel) { channel.values = snapshot; for (const receive of channel.listeners) receive(values); }
+  if (channel) { channel.values = snapshot; for (const receive of channel.listeners) receive(snapshot); }
   const pending = (writes.get(key) ?? Promise.resolve()).catch(() => {}).then(() => host.setStorage(key, raw, "user"));
   writes.set(key, pending);
   void pending.finally(() => { if (writes.get(key) === pending) writes.delete(key); }).catch(() => {});
@@ -567,8 +649,8 @@ export async function activate(api) {
   }
 
   function ProgramUI({ spec, raw, metadata, host, preview, stopped }) {
-    const defaults = useMemo(() => programDefaults(spec), [spec]);
-    const [values, setValues] = useState(defaults);
+    const defaults = useMemo(() => ({ values: programDefaults(spec), components: {} }), [spec]);
+    const [snapshot, setSnapshot] = useState(defaults);
     const [ready, setReady] = useState(false);
     const [notice, setNotice] = useState("");
     const [pending, setPending] = useState(false);
@@ -576,6 +658,7 @@ export async function activate(api) {
     const current = useRef(defaults);
     const persistence = useRef({ mounted: true });
     const pendingRef = useRef(false);
+    const surface = useRef(null);
     const instanceId = useRef(null);
     if (instanceId.current === null) instanceId.current = `genui-${++instanceSequence}`;
     const hostRef = useRef(host);
@@ -591,11 +674,11 @@ export async function activate(api) {
           const digest = await crypto.subtle.digest("SHA-256", encoder.encode(identity));
           const key = "ui-v2-" + Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
           await hydrateView(hostRef.current, key, saved => {
-            const restored = restoreProgramValues(spec, saved);
+            const restored = restoreProgramSnapshot(spec, saved);
             // Invalid computed results cannot replace a valid initial view.
-            renderProgram(spec, restored, { disabled: true, run: () => {} });
+            renderProgram(spec, restored.values, { disabled: true, run: () => {}, components: restored.components });
             return restored;
-          }, restored => { current.current = restored; setValues(restored); }, state);
+          }, restored => { current.current = restored; setSnapshot(restored); }, state);
         } catch {
           if (state.mounted) setNotice("Saved view state is unavailable. The original values are shown.");
         } finally { if (state.mounted) setReady(true); }
@@ -605,9 +688,31 @@ export async function activate(api) {
 
     const disabled = preview || !ready || pending;
     const canSend = !preview && host.actions?.includes("conversation.composer.submit");
+    function commit(next) {
+      current.current = next; setSnapshot(next); setNotice("");
+      const storage = persistence.current;
+      if (storage.key) void writeSnapshot(hostRef.current, storage.key, { version: 2, ...next }).catch(() => {
+        if (storage.mounted) setNotice("This view could not be saved. Your changes are still available here.");
+      });
+    }
+    function changeComponent(address, node, update) {
+      if (disabled || pendingRef.current) return false;
+      const components = { ...current.current.components };
+      const record = update(components[address] ?? componentDefaults(node));
+      const isDefault = node.type === "table" ? record.query === "" && record.sort === -1 && record.descending === false
+        : node.type === "chart" ? record.hidden.length === 0 && record.dataOpen === false : record.open === (node.open ?? false);
+      if (isDefault) delete components[address];
+      else components[address] = record;
+      const next = { values: current.current.values, components };
+      try {
+        validateProgramSnapshot(spec, next);
+        renderProgram(spec, next.values, { disabled: true, run: () => {}, components });
+      } catch (error) { setNotice(error.message); return false; }
+      commit(next); return true;
+    }
     function run(node, actions, event, item, boundValue) {
       if (disabled || pendingRef.current || !event.isTrusted) return false;
-      let next = { ...current.current };
+      let next = { ...current.current.values };
       const scope = { item, event: boundValue };
       const budget = { operations: PROGRAM_LIMITS.operations };
       const effects = [];
@@ -623,15 +728,17 @@ export async function activate(api) {
             effects.push({ type: action.type, text });
           }
         }
-        validateProgramValues(spec, next);
-        renderProgram(spec, next, { disabled: true, run: () => {} }, budget);
+        const components = reset ? {} : current.current.components;
+        validateProgramSnapshot(spec, { values: next, components });
+        renderProgram(spec, next, { disabled: true, run: () => {}, components }, budget);
+        if (effects.some(effect => effect.type === "sendMessage")) {
+          const invalid = [...(surface.current?.querySelectorAll("input,textarea,select") ?? [])].find(control => !control.validity.valid);
+          if (invalid) { invalid.reportValidity(); throw new Error("Correct the highlighted value before sending a message."); }
+        }
       } catch (error) { setNotice(error.message); return false; }
-      current.current = next; setValues(next); setNotice("");
+      commit({ values: next, components: reset ? {} : current.current.components });
       if (reset) setResetVersion(value => value + 1);
       const storage = persistence.current;
-      if (storage.key) void saveValues(hostRef.current, storage.key, next, 2).catch(() => {
-        if (storage.mounted) setNotice("This view could not be saved. Your changes are still available here.");
-      });
       // Host invocation stays synchronous with this trusted activation. The
       // bound host checks source liveness and consumes the gesture exactly once.
       if (effects.length) { pendingRef.current = true; setPending(true); }
@@ -649,9 +756,12 @@ export async function activate(api) {
       return true;
     }
     let tree, error;
-    try { tree = renderProgram(spec, preview ? defaults : values, { disabled, canSend, run, instanceId: instanceId.current, resetVersion }); }
+    try {
+      const visible = preview ? defaults : snapshot;
+      tree = renderProgram(spec, visible.values, { disabled, canSend, run, instanceId: instanceId.current, resetVersion, components: visible.components, changeComponent });
+    }
     catch (caught) { error = caught.message; }
-    return h("section", { className: "plugin-genui plugin-genui-program", "data-wuu-component": "generated-ui", "data-genui-preview": String(Boolean(preview)), "aria-label": spec.title, "aria-busy": !stopped && Boolean(preview || !ready || pending) },
+    return h("section", { ref: surface, className: "plugin-genui plugin-genui-program", "data-wuu-component": "generated-ui", "data-genui-preview": String(Boolean(preview)), "aria-label": spec.title, "aria-busy": !stopped && Boolean(preview || !ready || pending) },
       h("header", { className: "plugin-genui-header" }, h("h2", null, spec.title), h("span", { className: "plugin-genui-muted" }, stopped ? "Incomplete preview" : preview ? "Building preview…" : "Interactive")),
       error ? h(ui.ErrorState, { title: "This view could not be calculated", description: error }) : tree,
       notice ? h("p", { role: "status", className: "plugin-genui-notice" }, notice) : null,
@@ -663,16 +773,19 @@ export async function activate(api) {
   function renderProgram(spec, values, runtime, budget = { operations: PROGRAM_LIMITS.operations }) {
     let rendered = 0, expanded = 0;
     function charge(count) { expanded += count; requireValue(expanded <= 10000, "Rendered data limit reached"); }
-    function nodes(nodeList, scope = {}, path = "root") {
+    function nodes(nodeList, scope = {}, ancestors = []) {
       return nodeList.map(node => {
         requireValue(++rendered <= PROGRAM_LIMITS.rendered, "Rendered UI limit reached");
         charge(4 + (node.options?.length ?? 0) * 3);
-        const key = `${path}/${node.id}`;
+        const key = node.id;
+        const address = JSON.stringify([node.id, ancestors]);
         const evaluate = expression => evaluateExpression(expression, values, scope, budget);
         const text = expression => valueText(evaluate(expression));
         const title = node.title === undefined ? undefined : text(node.title);
         const props = { key, "data-genui-node": node.id };
-        const children = () => nodes(node.children, scope, key);
+        const children = () => nodes(node.children, scope, ancestors);
+        const component = runtime.components?.[address] ?? componentDefaults(node);
+        const changeView = update => runtime.changeComponent?.(address, node, update) ?? false;
         const change = (value, event) => runtime.run(node, node.onChange ?? [], event, scope.item, value);
         const controlInvalid = Boolean(node.state && node.invalid !== undefined && evaluate(node.invalid));
         const controlProps = node.state ? {
@@ -690,18 +803,18 @@ export async function activate(api) {
           case "heading": return h(`h${(node.level ?? 2) + 1}`, { ...props, className: "plugin-genui-heading", "data-level": node.level ?? 2 }, text(node.text));
           case "badge": return h("span", { ...props, className: "plugin-genui-badge" }, text(node.text));
           case "divider": return h("hr", { ...props, className: "plugin-genui-divider" });
-          case "if": return h("div", { ...props, className: "plugin-genui-branch" }, nodes(evaluate(node.when) ? node.then : node.else ?? [], scope, key));
+          case "if": return h("div", { ...props, className: "plugin-genui-branch" }, nodes(evaluate(node.when) ? node.then : node.else ?? [], scope, ancestors));
           case "each": {
             const items = evaluate(node.items); list(items, 0, PROGRAM_LIMITS.iterations);
             const identities = collectionIdentities(node, items, values, scope, budget);
-            return h("div", { ...props, className: "plugin-genui-repeat" }, items.map((item, index) => h("div", { key: identities[index], className: "plugin-genui-repeat-item" }, nodes(node.children, { ...scope, item }, `${key}/${encodeURIComponent(identities[index])}`))));
+            return h("div", { ...props, className: "plugin-genui-repeat" }, items.map((item, index) => h("div", { key: identities[index], className: "plugin-genui-repeat-item" }, nodes(node.children, { ...scope, item }, [...ancestors, [node.id, identities[index]]]))));
           }
           case "form": {
             const sends = node.onSubmit.some(action => action.type === "sendMessage");
             return h("form", { ...props, className: "plugin-genui-form", onSubmit: event => { event.preventDefault(); if (event.currentTarget.reportValidity()) runtime.run(node, node.onSubmit, event, scope.item); } },
               children(), h("div", { className: "plugin-genui-action" }, h(ui.Button, { type: "submit", disabled: runtime.disabled || (sends && !runtime.canSend), variant: "primary" }, text(node.label)), sends ? h("span", { className: "plugin-genui-muted plugin-genui-action-hint" }, "Sends a message") : null));
           }
-          case "disclosure": return h("details", { ...props, className: "plugin-genui-disclosure", open: node.open }, h("summary", null, title), h("div", { className: "plugin-genui-stack plugin-genui-layout", "data-gap": "medium" }, children()));
+          case "disclosure": return h(ProgramDetails, { ...props, title, className: "plugin-genui-disclosure", disabled: runtime.disabled, open: component.open, change: open => changeView(current => ({ ...current, open })) }, h("div", { className: "plugin-genui-stack plugin-genui-layout", "data-gap": "medium" }, children()));
           case "metric": return h("div", { ...props, className: "plugin-genui-metric" }, h("span", { className: "plugin-genui-muted" }, text(node.label)), h("strong", null, text(node.value)), node.detail === undefined ? null : h("span", { className: "plugin-genui-muted" }, text(node.detail)));
           case "progress": {
             const value = evaluate(node.value), max = node.max === undefined ? 100 : evaluate(node.max); number(value); number(max); requireValue(max > 0 && value >= 0 && value <= max, "Progress must be within its range");
@@ -723,12 +836,12 @@ export async function activate(api) {
           case "checkbox": return h(ui.Checkbox, { ...props, label: text(node.label), ...controlProps, checked: values[node.state], onChange: event => change(event.target.checked, event) });
           case "slider": return h("label", { ...props, className: "plugin-ui-field plugin-genui-slider" }, h("span", { className: "plugin-genui-slider-label" }, text(node.label), h("output", null, valueText(values[node.state]))), h("input", { type: "range", ...controlProps, min: node.min, max: node.max, step: node.step ?? 1, value: values[node.state], onChange: event => change(event.target.valueAsNumber, event) }), h("span", { className: "plugin-genui-slider-bounds plugin-genui-muted", "aria-hidden": true }, h("span", null, node.min), h("span", null, node.max)));
           case "select": return h(ui.Select, { ...props, label: text(node.label), ...controlProps, value: String(node.options.findIndex(option => option.value === values[node.state])), onChange: event => change(node.options[Number(event.target.value)].value, event) }, node.options.map((option, index) => h("option", { key: index, value: String(index) }, option.label)));
-          case "radio": case "segmented": return h("fieldset", { ...props, disabled: controlProps.disabled, className: `plugin-genui-options plugin-genui-${node.type}` }, h("legend", null, text(node.label)), h("div", { className: "plugin-genui-options-list" }, node.options.map((option, index) => h("label", { key: index, "data-selected": option.value === values[node.state] }, h("input", { type: "radio", ...controlProps, name: `${runtime.instanceId}/${key}`, checked: option.value === values[node.state], onChange: event => change(option.value, event) }), h("span", null, option.label)))));
+          case "radio": case "segmented": return h("fieldset", { ...props, disabled: controlProps.disabled, className: `plugin-genui-options plugin-genui-${node.type}` }, h("legend", null, text(node.label)), h("div", { className: "plugin-genui-options-list" }, node.options.map((option, index) => h("label", { key: index, "data-selected": option.value === values[node.state] }, h("input", { type: "radio", ...controlProps, name: `${runtime.instanceId}/${address}`, checked: option.value === values[node.state], onChange: event => change(option.value, event) }), h("span", null, option.label)))));
           case "table": {
             const rows = evaluate(node.rows); list(rows, 0, 200);
             charge((rows.length + 1) * (node.columns.length + 1));
             for (const row of rows) { list(row, node.columns.length, node.columns.length); row.forEach(scalar); }
-            return h(ProgramTable, { ...props, node: { ...node, title, rows }, disabled: runtime.disabled });
+            return h(ProgramTable, { ...props, node: { ...node, title, rows }, disabled: runtime.disabled, value: component, change: changeView });
           }
           case "chart": {
             const chart = { ...node, title };
@@ -739,7 +852,14 @@ export async function activate(api) {
               const labels = chart.series[0].points.map(point => point.label);
               requireValue(chart.series.every(series => series.points.length === labels.length && series.points.every((point, index) => point.label === labels[index])), "Category series must share the same ordered labels");
             }
-            return h(ProgramChart, { ...props, node: chart, disabled: runtime.disabled });
+            if (["pie", "donut"].includes(node.chartType)) {
+              const seen = new Map();
+              chart.pointIdentities = chart.points.map(point => {
+                const identity = canonicalJSON(point, budget), ordinal = seen.get(identity) ?? 0;
+                seen.set(identity, ordinal + 1); return JSON.stringify([identity, ordinal]);
+              });
+            }
+            return h(ProgramChart, { ...props, node: chart, disabled: runtime.disabled, value: component, change: changeView });
           }
           default: throw new Error("Unsupported UI node");
         }
@@ -762,12 +882,22 @@ export async function activate(api) {
       onKeyDown: event => { if (event.key === "Escape" && invalid) { event.preventDefault(); event.stopPropagation(); setDraft(String(value)); setInvalid(false); } },
     });
   }
-  function ProgramTable({ node, disabled }) {
-    const [value, change] = useState({ query: "", sort: -1, descending: false });
-    return h("fieldset", { disabled, className: "plugin-genui-data-fieldset", "data-genui-node": node.id }, h(TableBlock, { block: node, value, change }));
+  function ProgramDetails({ title, open, change, disabled, children, ...props }) {
+    return h("details", { ...props, open, onToggle: event => {
+      if (event.currentTarget.open === open) return;
+      if (disabled || change(event.currentTarget.open) === false) event.currentTarget.open = open;
+    } }, h("summary", { onClick: event => { if (disabled) event.preventDefault(); } }, title), children);
   }
-  function ProgramChart({ node, disabled }) {
-    const [hidden, setHidden] = useState([]);
+  function ProgramTable({ node, disabled, value, change }) {
+    const update = next => {
+      const patch = Object.fromEntries(["query", "sort", "descending"].filter(key => next[key] !== value[key]).map(key => [key, next[key]]));
+      return change(current => ({ ...current, ...patch }));
+    };
+    return h("fieldset", { disabled, className: "plugin-genui-data-fieldset", "data-genui-node": node.id }, h(TableBlock, { block: node, value, change: update }));
+  }
+  function ProgramChart({ node, disabled, value, change }) {
+    const hidden = value.hidden;
+    const setHidden = update => change(current => ({ ...current, hidden: update(current.hidden).sort() }));
     const [active, setActive] = useState(-1);
     const circular = node.chartType === "pie" || node.chartType === "donut";
     const sources = node.series ?? [{ id: node.id, label: node.title ?? "Values", chartType: node.chartType, points: node.points }];
@@ -797,11 +927,11 @@ export async function activate(api) {
     };
     let chart;
     if (circular) {
-      const points = node.points.filter((_, index) => !hidden.includes(String(index)));
-      const total = points.reduce((sum, point) => sum + point.value, 0);
+      const points = node.points.map((point, index) => ({ point, index })).filter(entry => !hidden.includes(node.pointIdentities[entry.index]));
+      const total = points.reduce((sum, entry) => sum + entry.point.value, 0);
       let angle = -Math.PI / 2;
       chart = total > 0 ? h("svg", { className: "plugin-genui-pie", viewBox: "0 0 240 240", role: "img", "aria-label": `${node.title ?? "Chart"}. Total ${formatAxis(total)}. Exact values are in the chart data table.` },
-        h("title", null, node.title ?? "Chart"), points.map(point => {
+        h("title", null, node.title ?? "Chart"), points.map(({ point, index }) => {
           const start = angle; angle += point.value / total * Math.PI * 2;
           const end = angle;
           const radius = 104, inner = node.chartType === "donut" ? 64 : 0;
@@ -809,7 +939,7 @@ export async function activate(api) {
           // Two half arcs also represent a single full-circle segment correctly.
           const mid = (start + end) / 2;
           const path = `M ${polar(start, radius)} A ${radius} ${radius} 0 0 1 ${polar(mid, radius)} A ${radius} ${radius} 0 0 1 ${polar(end, radius)} ${inner ? `L ${polar(end, inner)} A ${inner} ${inner} 0 0 0 ${polar(mid, inner)} A ${inner} ${inner} 0 0 0 ${polar(start, inner)}` : "L 120 120"} Z`;
-          return h("path", { key: node.points.indexOf(point), d: path, fill: palette(node.points.indexOf(point)), stroke: "var(--wuu-color-canvas)", strokeWidth: 2 }, h("title", null, `${point.label}: ${point.value} (${Math.round(point.value / total * 100)}%)`));
+          return h("path", { key: node.pointIdentities[index], d: path, fill: palette(index), stroke: "var(--wuu-color-canvas)", strokeWidth: 2 }, h("title", null, `${point.label}: ${point.value} (${Math.round(point.value / total * 100)}%)`));
         })) : h("p", { className: "plugin-genui-muted" }, "No positive values to plot");
     } else {
       chart = h("div", { className: "plugin-genui-plot" },
@@ -840,12 +970,12 @@ export async function activate(api) {
       );
     }
     function seriesListForBars() { return series.filter(series => (series.chartType ?? node.chartType) === "bar"); }
-    const legend = circular ? node.points.map((point, index) => ({ id: String(index), label: point.label, color: palette(index) })) : sources.map((series, index) => ({ ...series, color: palette(index) }));
+    const legend = circular ? node.points.map((point, index) => ({ id: node.pointIdentities[index], label: point.label, color: palette(index) })) : sources.map((series, index) => ({ ...series, color: palette(index) }));
     return h(ui.Section, { title: node.title, "data-genui-block": node.id, "data-genui-node": node.id, className: "plugin-genui-chart-section" },
       circular || sources.length > 1 ? h("div", { className: "plugin-genui-legend", "aria-label": "Chart series" }, legend.map(item => h(ui.Button, { key: item.id, variant: "ghost", disabled, "aria-pressed": !hidden.includes(item.id), onClick: () => { setActive(-1); setHidden(current => current.includes(item.id) ? current.filter(id => id !== item.id) : [...current, item.id]); } }, h("span", { className: "plugin-genui-legend-swatch", style: { background: item.color }, "aria-hidden": true }), item.label))) : null,
       chart,
       !circular ? h("p", { className: "plugin-genui-chart-caption", role: "status" }, selected?.labelText ?? ([node.xLabel, node.yLabel].filter(Boolean).join(" · ") || (series.length ? `${entries.length} values` : "Select a series to show data"))) : null,
-      h("details", null, h("summary", null, "Chart data"), h("div", { className: "plugin-genui-table-scroll", tabIndex: 0, role: "region", "aria-label": "Chart data" }, h("table", null,
+      h(ProgramDetails, { title: "Chart data", open: value.dataOpen, disabled, change: dataOpen => change(current => ({ ...current, dataOpen })) }, h("div", { className: "plugin-genui-table-scroll", tabIndex: 0, role: "region", "aria-label": "Chart data" }, h("table", null,
         h("thead", null, h("tr", null, sources.length > 1 ? h("th", { scope: "col" }, "Series") : null, h("th", { scope: "col" }, node.xLabel ?? "Label"), scatterPoints.length ? h("th", { scope: "col" }, "X") : null, h("th", { scope: "col" }, node.yLabel ?? "Value"))),
         h("tbody", null, sources.flatMap(series => series.points.map((point, index) => h("tr", { key: `${series.id}/${index}` }, sources.length > 1 ? h("td", null, series.label) : null, h("td", null, point.label), scatterPoints.length ? h("td", null, point.x ?? "—") : null, h("td", null, point.value)))))))),
     );
@@ -1095,7 +1225,7 @@ line.plugin-genui-grid { stroke:var(--genui-border); stroke-dasharray:3 4; }
 .plugin-genui-options-list { display:flex; flex-wrap:wrap; gap:0.5em; }
 .plugin-genui-options-list label { display:flex; align-items:center; gap:0.45em; min-height:2.4em; padding:0.2em 0.65em; border:1px solid var(--genui-border); border-radius:var(--wuu-radius-control,8px); cursor:pointer; overflow-wrap:anywhere; }
 .plugin-genui-options-list input { flex:none; accent-color:var(--wuu-color-accent); }
-.plugin-genui-options-list label:has(:focus-visible) { outline:2px solid var(--wuu-color-focus,var(--wuu-color-accent)); outline-offset:2px; }
+.plugin-genui-options-list label:has(:focus-visible) { outline:2px solid var(--wuu-color-focus,var(--focus-ring,currentColor)); outline-offset:2px; }
 .plugin-genui-options-list label[data-selected="true"] { background:var(--wuu-color-surface-muted); border-color:var(--wuu-color-accent); }
 .plugin-genui-options:disabled label { cursor:default; opacity:0.65; }
 .plugin-genui-segmented .plugin-genui-options-list { gap:0.25em; padding:0.25em; width:fit-content; max-width:100%; background:var(--wuu-color-surface-muted); border-radius:var(--wuu-radius-control,8px); }

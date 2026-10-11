@@ -29,9 +29,10 @@ While tool arguments stream, the renderer previews complete, validated nodes.
 Incomplete or invalid updates keep the last usable preview. Preview state is
 transient; final results use namespaced plugin storage on this device, scoped to
 conversation, tool-result part, and exact spec. Reopening the same result restores
-its saved state. Version 2 persists declared program state (including bound input
-values), while table filters, sort order, chart legend visibility, and disclosure
-expansion remain local to the mounted view. A storage failure or oversized draft leaves the current view
+its saved state. Version 2 separates declared input values from table filters,
+sorting, chart legend visibility, and disclosure expansion. Their combined saved
+snapshot must fit in 16 KiB. Component state stays out of follow-up message context.
+A storage failure or oversized draft leaves the current view
 usable and reports the persistence failure. State does not sync between devices.
 Treat saved input as local conversation data; do not enter passwords or secrets.
 

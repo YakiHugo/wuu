@@ -102,7 +102,10 @@ const server = http.createServer((req, res) => {
       const input = JSON.parse(body);
       // Runtime reminder messages can follow the actual user input. Route by
       // the last marked user request rather than the last role=user entry.
+      // Providers can merge consecutive user messages after an interruption;
+      // choose the final marker in that merged content, not the first match.
       const user = JSON.stringify((input.messages || []).findLast(message => message.role === 'user' && /GENUI_(DEFAULT_OFF|ENABLED|DISABLED_AGAIN|CANCEL|ACTION|RESPONSE)/.test(JSON.stringify(message.content)))?.content || '');
+      const route = user.match(/GENUI_(DEFAULT_OFF|ENABLED|DISABLED_AGAIN|CANCEL|ACTION|RESPONSE)/g)?.at(-1);
       const toolNames = (input.tools || []).map(tool => tool.function?.name || tool.name);
       const uiTools = toolNames.filter(name => /^plugin_generative_ui_render_ui_[a-f0-9]+$/.test(name));
       requests.push({ path: req.url, body: input, toolNames, latestUser: user });
@@ -110,11 +113,11 @@ const server = http.createServer((req, res) => {
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
       if (!Array.isArray(input.tools)) {
         res.write(delta({ role: 'assistant', content: 'Generative UI acceptance' }));
-      } else if (user.includes('GENUI_DEFAULT_OFF')) {
+      } else if (route === 'GENUI_DEFAULT_OFF') {
         assert.equal(uiTools.length, 0, 'Disabled-by-default tool must be absent from the actual provider request');
         assert.ok(!JSON.stringify(input.tools).includes('plugin_generative_ui_render_ui_'), 'Disabled plugin must also be absent from nested discovery');
         res.write(delta({ role: 'assistant', content: 'Default-off discovery verified.' }));
-      } else if (user.includes('GENUI_ENABLED')) {
+      } else if (route === 'GENUI_ENABLED') {
         assert.equal(uiTools.length, 1, 'User enablement exposes exactly one render_ui tool');
         if (!emittedTool) {
           emittedTool = true;
@@ -145,11 +148,11 @@ const server = http.createServer((req, res) => {
         }
         assert.ok((input.messages || []).some(message => message.role === 'tool' && JSON.stringify(message.content).includes('Design: 12 tasks')), 'The real native tool result returned to the model loop');
         res.write(delta({ role: 'assistant', content: 'The interactive overview is ready.' }));
-      } else if (user.includes('GENUI_RESPONSE')) {
+      } else if (route === 'GENUI_RESPONSE') {
         assert.ok(user.includes('Submitted artifact context') && user.includes('Engineering follow-up'), 'The continuation includes explicit values and host attribution');
         followupResponse = () => res.end(delta({ role: 'assistant', content: 'Follow-up accepted for Engineering.' }) + delta({}, 'stop') + 'data: [DONE]\n\n');
         return;
-      } else if (user.includes('GENUI_ACTION')) {
+      } else if (route === 'GENUI_ACTION') {
         assert.equal(uiTools.length, 1);
         if (!emittedAction) {
           emittedAction = true;
@@ -158,7 +161,7 @@ const server = http.createServer((req, res) => {
           return;
         }
         res.write(delta({ role: 'assistant', content: 'The follow-up form is ready.' }));
-      } else if (user.includes('GENUI_CANCEL')) {
+      } else if (route === 'GENUI_CANCEL') {
         assert.equal(uiTools.length, 1);
         const canceled = { version: 2, title: 'Canceled stream', fallback: 'Incomplete preview only.', state: [], body: [{ id: 'canceled', type: 'text', text: 'This generation can be stopped.' }] };
         const partial = JSON.stringify({ spec: canceled }).slice(0, -3);
@@ -166,7 +169,7 @@ const server = http.createServer((req, res) => {
         canceledStream = { closed: false };
         res.once('close', () => { canceledStream.closed = true; });
         return;
-      } else if (user.includes('GENUI_DISABLED_AGAIN')) {
+      } else if (route === 'GENUI_DISABLED_AGAIN') {
         assert.equal(uiTools.length, 0, 'Disabled tool is removed from subsequent actual provider requests');
         assert.ok(!JSON.stringify(input.tools).includes('plugin_generative_ui_render_ui_'), 'Disabled plugin must also be removed from nested discovery');
         res.write(delta({ role: 'assistant', content: 'Disabled-again discovery verified.' }));

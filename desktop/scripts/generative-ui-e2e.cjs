@@ -31,7 +31,7 @@ const operation = (op, ...args) => ({ op, args });
 const samplePoints = [{ label: 'Design', value: 18 }, { label: 'Engineering', value: 32 }, { label: 'Review', value: 12 }];
 const program = {
   version: 2, title: 'Delivery scenario planner', fallback: 'An interactive local scenario with editable capacity, computed totals, local tabs, and six chart types.',
-  state: [{ id: 'capacity', value: 40 }, { id: 'tab', value: 'overview' }, { id: 'includeReview', value: true }, { id: 'note', value: 'Local scenario' }],
+  state: [{ id: 'capacity', value: 40 }, { id: 'tab', value: 'overview' }, { id: 'includeReview', value: true }, { id: 'note', value: 'Local scenario' }, { id: 'date', value: '2026-10-11' }, { id: 'mode', value: 'focused' }, { id: 'points', value: samplePoints }, { id: 'cards', value: [{id:'A',name:'Alpha'}, {id:'B',name:'Beta'}] }],
   body: [
     { id: 'introV2', type: 'caption', text: 'Adjust the scenario. Calculations and view changes stay in this conversation until you explicitly send a message.' },
     { id: 'controlsV2', type: 'grid', columns: 2, children: [
@@ -61,12 +61,40 @@ const program = {
       { id: 'requiredNote', type: 'input', label: 'Required scenario note', state: 'note', required: true, invalid: operation('eq', state('note'), 'invalid') },
       { id: 'formCapacity', type: 'input', inputType: 'number', label: 'Form capacity', state: 'capacity' },
     ], onSubmit: [{ type: 'set', state: 'capacity', value: 100 }] },
+    { id: 'nestedControls', type: 'card', title: 'Scenario preferences', children: [
+      { id: 'preferenceHeading', type: 'heading', level: 3, text: 'Controls adapt to the reading size' },
+      { id: 'preferencesRow', type: 'row', children: [
+        { id: 'modeSelect', type: 'select', label: 'Choose a longer planning-mode label for the current scenario', state: 'mode', options: [{label:'Focused delivery',value:'focused'},{label:'Exploration and review',value:'explore'}] },
+        { id: 'dateInput', type: 'input', inputType: 'date', label: 'Planning date', state: 'date' },
+      ] },
+      { id: 'preferenceDivider', type: 'divider' },
+      { id: 'modeRadio', type: 'radio', label: 'LongUnbrokenPlanningPreferenceLabelForSmallWindows 与中文说明', state: 'mode', options: [{label:'Focused delivery',value:'focused'},{label:'Exploration and review',value:'explore'}] },
+      { id: 'localBadge', type: 'badge', text: 'Local scenario' },
+    ] },
+    { id: 'nestedGrid', type: 'grid', columns: 2, children: ['First','Second'].map((name,index)=>({
+      id: `nestedCard${index}`, type:'card', title:`${name} nested layout`, children:[{
+        id:`nestedInner${index}`,type:'grid',columns:2,children:[
+          {id:`nestedNote${index}`,type:'input',label:'A long scenario note inside a narrow card',state:'note'},
+          {id:`nestedMode${index}`,type:'input',label:'LongUnbrokenNestedFieldLabel 与中文说明',state:'mode'},
+        ],
+      }],
+    })) },
+    { id: 'reversePoints', type: 'button', label: 'Reverse chart categories', onClick: [{type:'set',state:'points',value:literal([...samplePoints].reverse())}] },
+    { id: 'swapCards', type: 'button', label: 'Reverse repeated cards', onClick: [{type:'set',state:'cards',value:literal([{id:'B',name:'Beta'},{id:'A',name:'Alpha'}])}] },
+    { id: 'cardsList', type: 'each', items: state('cards'), key: {op:'item',path:['id']}, children: [
+      { id: 'repeatedCard', type: 'disclosure', title: {op:'item',path:['name']}, children: [
+        { id: 'repeatedCapacity', type: 'input', inputType:'number', label:'Card capacity', state:'capacity' },
+        { id: 'nestedList', type: 'each', items:literal(['One','Two']), key:{op:'item'}, children:[
+          {id:'nestedDisclosure',type:'disclosure',title:{op:'item'},children:[{id:'nestedText',type:'text',text:'Nested local details'}]},
+        ] },
+      ] },
+    ] },
     { id: 'chartGridV2', type: 'grid', columns: 2, gap: 'large', children: [
       { id: 'areaV2', type: 'chart', title: 'Capacity projection', chartType: 'area', points: operation('map', operation('range', 1, 6), operation('object', 'label', operation('concat', 'Week ', { op: 'item' }), 'value', operation('multiply', { op: 'item' }, state('capacity')))) },
       { id: 'mixedV2', type: 'chart', title: 'Completed and planned', chartType: 'bar', series: [{ id: 'actual', label: 'Completed', points: literal(samplePoints) }, { id: 'plan', label: 'Planned', chartType: 'line', points: literal(samplePoints.map(point => ({ ...point, value: point.value + 8 }))) }] },
       { id: 'scatterV2', type: 'chart', title: 'Effort vs impact', chartType: 'scatter', points: literal([{ label: 'A', x: 2, value: 7 }, { label: 'B', x: 5, value: 3 }, { label: 'C', x: 9, value: 10 }]) },
       { id: 'stackedV2', type: 'chart', title: 'Work allocation', chartType: 'bar', stacked: true, series: [{ id: 'first', label: 'Current', points: literal(samplePoints) }, { id: 'second', label: 'Next', points: literal(samplePoints.map(point => ({ ...point, value: point.value / 2 }))) }] },
-      { id: 'pieV2', type: 'chart', title: 'Team share', chartType: 'pie', points: literal(samplePoints) },
+      { id: 'pieV2', type: 'chart', title: 'Team share', chartType: 'pie', points: state('points') },
       { id: 'donutV2', type: 'chart', title: 'Capacity share', chartType: 'donut', points: literal(samplePoints) },
     ] },
     { id: 'detailsV2', type: 'disclosure', title: 'Scenario data', children: [
@@ -145,14 +173,18 @@ let currentResult = ${JSON.stringify(result)};
 let streamingInput = null;
 let failStorage = false;
 let mounted = true;
+let copies = 1;
+let holdReads = false;
+let storageKey = null;
+const heldReads = [];
 let pending = 0;
 desktopWorkbenchController.updateServices({
- getStorage: async (_p, _g, key) => { if (failStorage) throw Error('Fixture storage unavailable'); return localStorage.getItem(key); },
+ getStorage: async (_p, _g, key) => { storageKey=key; if (failStorage) throw Error('Fixture storage unavailable'); const saved=localStorage.getItem(key); if(holdReads) await new Promise(resolve=>heldReads.push(resolve)); return saved; },
  setStorage: async (_p, _g, key, value) => { pending++; try { if (failStorage) throw Error('Fixture storage unavailable'); localStorage.setItem(key, value); } finally { pending--; } },
 });
 function render() {
  const turn = { id:'fixture-turn', items: [{ id:itemId, type:'tool_call', status:streamingInput?.status ?? 'completed', arguments:streamingInput?.text, display:streamingInput ? {capability:'generative-ui', label:'Building view'} : undefined, result_detail:streamingInput?.final ? currentResult : streamingInput ? undefined : currentResult }] };
- root.render(<I18nProvider><ArtifactThreadContext.Provider value={threadId}>{mounted ? <TurnInlineArtifactOutputs artifacts={collectTurnArtifacts(turn)} /> : null}</ArtifactThreadContext.Provider></I18nProvider>);
+ root.render(<I18nProvider><ArtifactThreadContext.Provider value={threadId}>{mounted ? Array.from({length:copies},(_,copy)=><section key={copy} data-fixture-copy={copy}><TurnInlineArtifactOutputs artifacts={collectTurnArtifacts(turn)} /></section>) : null}</ArtifactThreadContext.Provider></I18nProvider>);
 }
 window.nativeEvents=[];
 for(const type of ["submit","invalid","keydown","keypress","keyup"]) document.addEventListener(type,event=>{window.nativeEvents.push({type,trusted:event.isTrusted,target:event.target.getAttribute("data-genui-node"),key:event.key,value:event.target.value});if(window.nativeEvents.length>100)window.nativeEvents.shift();},true);
@@ -161,6 +193,11 @@ window.probe = {
  async enable() { await desktopPluginHost.activateGeneration({ pluginId:'generative-ui', generation:'e2e', register:activate }); render(); },
  disable() { desktopPluginHost.disable('generative-ui'); render(); },
  mount(value = true) { mounted=value; render(); },
+ copies(value) {copies=value;render();},
+ holdReads(value) {holdReads=value;},
+ releaseReads() {holdReads=false;while(heldReads.length)heldReads.shift()();},
+ get heldReads() {return heldReads.length;},
+ get storageKey() {return storageKey;},
  thread(value) { threadId=value; render(); },
  item(value) { itemId=value; render(); },
  result(value) { streamingInput=null; currentResult=value; render(); },
@@ -181,6 +218,8 @@ fs.writeFileSync(path.join(output, 'pdf-inline-css.js'), `export default ${JSON.
 buildSync({ entryPoints: [fixture], outfile: path.join(output, 'fixture.js'), bundle: true, platform: 'browser', format: 'iife', alias: { 'pdfjs-dist/build/pdf.worker.min.mjs?url': path.join(output, 'pdf-worker-url.js'), 'pdfjs-dist/web/pdf_viewer.css?inline': path.join(output, 'pdf-inline-css.js') }, define: { 'import.meta.env': '{}' }, loader: { '.woff2': 'file', '.woff': 'file', '.ttf': 'file', '.svg': 'file', '.gif': 'file' }, nodePaths: [path.join(root, 'desktop/node_modules')], logLevel: 'warning' });
 fs.writeFileSync(path.join(output, 'index.html'), '<!doctype html><html lang="en" data-theme="light"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'self\'; style-src \'self\' \'unsafe-inline\'; font-src \'self\' data:; img-src \'self\' data:"><link rel="stylesheet" href="fixture.css"><style>body{overflow:auto;margin:0;padding:32px}#root{max-width:760px;margin:auto}html{--font-size:14px}</style></head><body><main id="root"></main><script src="fixture.js"></script></body></html>');
 if (process.env.WUU_GENUI_PREPARE_ONLY === '1') {
+  const checkedProgram = toolCall(program, 'prepare-reactive-program').result?.result;
+  assert.ok(checkedProgram && !checkedProgram.is_error, 'Native helper accepts the complete v2 fixture');
   fs.writeFileSync(path.join(output, 'native-validation.json'), JSON.stringify(results, null, 2));
   fs.rmSync(profile, { recursive:true, force:true });
   console.log('Native validation passed and Electron fixture built; renderer checks not run.');
@@ -419,8 +458,9 @@ app.whenReady().then(async () => {
   assert.equal(await evaluate(win, `document.querySelector('[data-genui-node="mixedV2"] .plugin-genui-legend button').getAttribute('aria-pressed')`), 'false');
   await click(win, '[data-genui-node="mixedV2"] .plugin-genui-legend button:nth-child(1)');
   await click(win, '[data-genui-node="areaV2"] svg');
-  win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'ArrowRight' });
-  win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'ArrowRight' });
+  win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Right' });
+  win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Right' });
+  assert.ok(await evaluate(win, `window.nativeEvents.some(event=>event.type==='keydown'&&event.key==='ArrowRight')`),'Native accelerator produces the expected DOM arrow key');
   await waitFor(win, `document.querySelector('[data-genui-node="areaV2"] .plugin-genui-chart-caption').textContent.includes('Week')`);
   assert.equal(await evaluate(win, `document.querySelectorAll('[data-genui-node="scatterV2"] svg circle').length`), 3);
   assert.equal(await evaluate(win, `document.querySelectorAll('[data-genui-node="stackedV2"] svg rect').length`), 6);
@@ -436,16 +476,115 @@ app.whenReady().then(async () => {
     const geometry = await evaluate(win, `({width:innerWidth,scroll:document.documentElement.scrollWidth,controls:[...document.querySelectorAll('.plugin-genui-program input,.plugin-genui-program textarea')].map(node=>({left:node.getBoundingClientRect().left,right:node.getBoundingClientRect().right,font:parseFloat(getComputedStyle(node).fontSize)}))})`);
     assert.ok(geometry.scroll <= width + 1, JSON.stringify(geometry));
     assert.ok(geometry.controls.every(control => control.left >= 0 && control.right <= width + 1 && control.font >= size), JSON.stringify(geometry));
+    const nestedGeometry = await evaluate(win, `Array.from(document.querySelectorAll('[data-genui-node^="nestedCard"]')).map(card=>{const box=card.getBoundingClientRect();return {cardWidth:box.width,controls:Array.from(card.querySelectorAll('input')).map(input=>{const control=input.getBoundingClientRect();return {width:control.width,left:control.left-box.left,right:box.right-control.right};})};})`);
+    results.nestedLayouts ??= [];
+    results.nestedLayouts.push({theme,size,width,cards:nestedGeometry});
+    assert.ok(nestedGeometry.every(card=>card.controls.every(control=>control.left>=0&&control.right>=0)),'Nested grid controls stay inside their own card');
     fs.writeFileSync(path.join(output, `v2-${theme}-${size}-${width}.png`), (await win.webContents.capturePage()).toPNG());
     await evaluate(win, `document.querySelector('[data-genui-node="chartGridV2"]').scrollIntoView({block:'start',behavior:'instant'})`);
     await settlePaint();
     fs.writeFileSync(path.join(output, `v2-charts-${theme}-${size}-${width}.png`), (await win.webContents.capturePage()).toPNG());
+    for (const node of ['nestedControls','nestedGrid','areaV2','mixedV2','scatterV2','stackedV2','pieV2','donutV2','detailsV2']) {
+      await evaluate(win, `document.querySelector('[data-genui-node="${node}"]').scrollIntoView({block:'start',behavior:'instant'})`);
+      await settlePaint();
+      fs.writeFileSync(path.join(output, `v2-${node}-${theme}-${size}-${width}.png`), (await win.webContents.capturePage()).toPNG());
+    }
+
   }
   results.checks.push('v2 light/dark, default/large type, wide/narrow controls and chart screenshots without page overflow');
+  await click(win, '[data-genui-node="noteInput"]');
+  win.webContents.sendInputEvent({type:'keyDown',keyCode:'Tab'});
+  win.webContents.sendInputEvent({type:'keyUp',keyCode:'Tab'});
+  await waitFor(win, `document.activeElement?.closest('[data-genui-node="tabsV2"]') && document.activeElement.matches(':focus-visible')`);
+  const focusOutline = await evaluate(win, `(() => {const style=getComputedStyle(document.activeElement.closest('label'));return {style:style.outlineStyle,width:parseFloat(style.outlineWidth)};})()`);
+  assert.ok(focusOutline.style !== 'none' && focusOutline.width >= 2,'Segmented choices expose a visible keyboard focus outline');
+  await settlePaint();
+  fs.writeFileSync(path.join(output, 'v2-segmented-keyboard-focus.png'), (await win.webContents.capturePage()).toPNG());
+  results.checks.push('native Tab exposes the segmented control focus outline');
+  await input(win, '[data-genui-node="tableV2"] input', '0');
+  await click(win, '[data-genui-node="tableV2"] th:nth-child(2) button');
+  await click(win, '[data-genui-node="tableV2"] th:nth-child(2) button');
+  await click(win, '[data-genui-node="mixedV2"] .plugin-genui-legend button:first-child');
+  await click(win, '[data-genui-node="areaV2"] details > summary');
+  await click(win, '[data-genui-node="pieV2"] .plugin-genui-legend button:first-child');
+  await waitFor(win, `window.probe.pending===0 && document.querySelector('[data-genui-node="tableV2"] tbody td').textContent==='4'`);
+  await click(win, '[data-genui-node="reversePoints"] button');
+  await waitFor(win, `document.querySelector('[data-genui-node="pieV2"] .plugin-genui-legend button:last-child').textContent==='Design'`);
+  assert.equal(await evaluate(win, `document.querySelector('[data-genui-node="pieV2"] .plugin-genui-legend button:last-child').getAttribute('aria-pressed')`),'false','Hidden pie segments follow their point identity through reordering');
+
+  const alpha = '[data-genui-node="cardsList"] > .plugin-genui-repeat-item:first-child';
+  await click(win, `${alpha} [data-genui-node="repeatedCard"] > summary`);
+  await click(win, `${alpha} [data-genui-node="nestedList"] > .plugin-genui-repeat-item:first-child > details > summary`);
+  await nativeInput(`${alpha} [data-genui-node="repeatedCapacity"]`, '999');
+  await waitFor(win, `document.querySelector(${JSON.stringify(`${alpha} [data-genui-node="repeatedCapacity"]`)}).validity.customError`);
+  await click(win, '[data-genui-node="swapCards"] button');
+  await waitFor(win, `document.querySelector('[data-genui-node="cardsList"] > .plugin-genui-repeat-item:last-child [data-genui-node="repeatedCard"] > summary').textContent==='Alpha'`);
+  const movedAlpha = '[data-genui-node="cardsList"] > .plugin-genui-repeat-item:last-child';
+  assert.equal(await evaluate(win, `document.querySelector(${JSON.stringify(`${movedAlpha} [data-genui-node="repeatedCapacity"]`)}).value`),'999','An invalid numeric draft follows its explicit entity key');
+  assert.equal(await evaluate(win, `document.querySelector(${JSON.stringify(`${movedAlpha} [data-genui-node="repeatedCard"]`)}).open`),true);
+  assert.equal(await evaluate(win, `document.querySelector(${JSON.stringify(`${movedAlpha} [data-genui-node="nestedDisclosure"]`)}).open`),true);
+  await click(win, `${movedAlpha} [data-genui-node="repeatedCapacity"]`);
+  win.webContents.sendInputEvent({type:'keyDown',keyCode:'Escape'});
+  win.webContents.sendInputEvent({type:'keyUp',keyCode:'Escape'});
+  await waitFor(win, `document.querySelector(${JSON.stringify(`${movedAlpha} [data-genui-node="repeatedCapacity"]`)}).checkValidity()`);
+  await waitFor(win, 'window.probe.pending===0');
+  await evaluate(win, 'window.probe.mount(false)');
+  await waitFor(win, `!document.querySelector('.plugin-genui-program')`);
+  await evaluate(win, 'window.probe.mount(true)');
+  await waitFor(win, `document.querySelector('.plugin-genui-program')?.getAttribute('aria-busy')==='false'`);
+  assert.equal(await evaluate(win, `document.querySelector('[data-genui-node="tableV2"] input').value`),'0');
+  assert.equal(await evaluate(win, `document.querySelector('[data-genui-node="tableV2"] th:nth-child(2)').getAttribute('aria-sort')`),'descending');
+  assert.equal(await evaluate(win, `document.querySelector('[data-genui-node="mixedV2"] .plugin-genui-legend button:first-child').getAttribute('aria-pressed')`),'false');
+  assert.equal(await evaluate(win, `document.querySelector('[data-genui-node="areaV2"] details').open`),true);
+  assert.equal(await evaluate(win, `document.querySelector('[data-genui-node="detailsV2"]').open`),true);
+  assert.equal(await evaluate(win, `document.querySelector(${JSON.stringify(`${movedAlpha} [data-genui-node="nestedDisclosure"]`)}).open`),true);
+  results.checks.push('combined snapshot restores table query/sort, chart legend/data disclosure, nested disclosures and keyed collections; pie hiding survives data reordering');
+
+  // The new mount reads an older saved value while the existing mount edits.
+  // Releasing that read must not overwrite the newer shared snapshot.
+  await evaluate(win, 'window.probe.holdReads(true);window.probe.copies(2)');
+  await waitFor(win, 'window.probe.heldReads>0');
+  await nativeInput('[data-fixture-copy="0"] [data-genui-node="capacityInput"]','120');
+  await input(win, '[data-fixture-copy="0"] [data-genui-node="tableV2"] input','2');
+  await evaluate(win, 'window.probe.releaseReads()');
+  await waitFor(win, `document.querySelector('[data-fixture-copy="1"] .plugin-genui-program')?.getAttribute('aria-busy')==='false'`);
+  assert.equal(await evaluate(win, `document.querySelector('[data-fixture-copy="1"] [data-genui-node="capacityInput"]').value`),'120');
+  assert.equal(await evaluate(win, `document.querySelector('[data-fixture-copy="1"] [data-genui-node="tableV2"] input').value`),'2');
+  await nativeInput('[data-fixture-copy="1"] [data-genui-node="capacityInput"]','121');
+  await waitFor(win, `document.querySelector('[data-fixture-copy="0"] [data-genui-node="capacityInput"]').value==='121' && window.probe.pending===0`);
+  await evaluate(win, 'window.probe.copies(1)');
+  assert.equal(await evaluate(win, `document.querySelector('[data-genui-node="tableV2"] input').value`),'2');
+  assert.deepEqual(await evaluate(win, `Object.keys(JSON.parse(localStorage.getItem(window.probe.storageKey)).values).sort()`),program.state.map(slot=>slot.id).sort(),'Component state never becomes model-declared state');
+  results.checks.push('two live mounts merge model and component updates, and late hydration cannot roll back a newer snapshot');
+
+  const unkeyed = structuredClone(program);
+  delete unkeyed.body.find(node=>node.id==='cardsList').key;
+  const unkeyedResult = toolCall(unkeyed,'unkeyed-values').result.result;
+  await evaluate(win, `window.probe.result(${JSON.stringify(unkeyedResult)})`);
+  await waitFor(win, `document.querySelector('.plugin-genui-program')?.getAttribute('aria-busy')==='false'`);
+  await click(win, `${alpha} [data-genui-node="repeatedCard"] > summary`);
+  await click(win, '[data-genui-node="swapCards"] button');
+  await waitFor(win, `document.querySelector(${JSON.stringify(`${movedAlpha} [data-genui-node="repeatedCard"] > summary`)}).textContent==='Alpha'`);
+  assert.equal(await evaluate(win, `document.querySelector(${JSON.stringify(`${movedAlpha} [data-genui-node="repeatedCard"]`)}).open`),true,'Default full-value identity preserves state for unchanged items after reordering');
+  await evaluate(win, `window.probe.result(${JSON.stringify(programResult)})`);
+  await waitFor(win, `document.querySelector('[data-genui-node="capacityInput"]')?.value==='121'`);
+  results.checks.push('unkeyed collections use canonical full-value identity rather than positional component state');
+  await waitFor(win,'window.probe.pending===0');
+  win.reload();
+  await waitFor(win,'!!window.probe');
+  await evaluate(win,`window.probe.result(${JSON.stringify(programResult)});window.probe.enable()`);
+  await waitFor(win,`document.querySelector('[data-genui-node="capacityInput"]')?.value==='121' && document.querySelector('.plugin-genui-program')?.getAttribute('aria-busy')==='false'`);
+  assert.equal(await evaluate(win,`document.querySelector('[data-genui-node="tableV2"] input').value`),'2');
+  assert.equal(await evaluate(win,`document.querySelector('[data-genui-node="tableV2"] th:nth-child(2)').getAttribute('aria-sort')`),'descending');
+  assert.equal(await evaluate(win,`document.querySelector('[data-genui-node="mixedV2"] .plugin-genui-legend button:first-child').getAttribute('aria-pressed')`),'false');
+  assert.equal(await evaluate(win,`document.querySelector('[data-genui-node="areaV2"] details').open`),true);
+  assert.equal(await evaluate(win,`document.querySelector(${JSON.stringify(`${movedAlpha} [data-genui-node="nestedDisclosure"]`)}).open`),true);
+  results.checks.push('a full renderer process reload restores the combined component and model snapshot');
+
   await waitFor(win, 'window.probe.pending === 0');
   await evaluate(win, `window.probe.mount(false)`);
   await waitFor(win, `!document.querySelector('.plugin-genui-program')`);
-  await evaluate(win, `(() => {const key=Object.keys(localStorage).find(key=>{try{return JSON.parse(localStorage.getItem(key)).version===2&&Object.hasOwn(JSON.parse(localStorage.getItem(key)).values,'capacity')}catch{return false}});if(!key)throw Error('Missing persisted program state');localStorage.setItem(key,'{broken');window.probe.mount(true);})()`);
+  await evaluate(win, `(() => {const key=window.probe.storageKey;if(!key)throw Error('Missing persisted program state');localStorage.setItem(key,'{broken');window.probe.mount(true);})()`);
   await waitFor(win, `document.body.textContent.includes('Saved view state is unavailable') && document.querySelector('.plugin-genui-program')?.getAttribute('aria-busy') === 'false'`);
   await nativeInput('[data-genui-node="capacityInput"]', '60');
   await waitFor(win, `window.probe.pending === 0 && document.querySelector('[data-genui-node="capacityMetric"] strong').textContent === '240'`);
@@ -485,7 +624,8 @@ app.whenReady().then(async () => {
   const manyRows = Array.from({length:200},()=>Array(8).fill(0));
   const renderBudget = {version:2,title:'Render budget',fallback:'The oversized view remains text-only.',state:[{id:'rows',value:manyRows}],body:[{id:'repeat',type:'each',items:operation('range',0,100),children:Array.from({length:9},(_,index)=>({id:`table${index}`,type:'table',columns:Array.from({length:8},(_,column)=>({key:`c${column}`,label:`Column ${column}`})),rows:state('rows')}))}]};
   const aliasBudget = {version:2,title:'Computation budget',fallback:'The oversized computation remains text-only.',state:[{id:'data',value:Array.from({length:40},()=>Array(200).fill(0))}],body:[{id:'result',type:'text',text:operation('length',operation('map',operation('range',0,95),operation('map',operation('range',0,95),state('data'))))}]};
-  for (const [name,value,message] of [['expanded-data-budget',renderBudget,'Rendered data limit reached'],['aliased-computation-budget',aliasBudget,'Local computation limit reached']]) {
+  const duplicateKeys={version:2,title:'Duplicate keys',fallback:'Duplicate entity keys are rejected.',state:[],body:[{id:'items',type:'each',items:literal(['same','same']),key:{op:'item'},children:[{id:'text',type:'text',text:{op:'item'}}]}]};
+  for (const [name,value,message] of [['expanded-data-budget',renderBudget,'Rendered data limit reached'],['aliased-computation-budget',aliasBudget,'Local computation limit reached'],['duplicate-entity-key',duplicateKeys,'Collection keys must be unique']]) {
     const bounded = toolCall(value,name).result?.result;
     assert.ok(bounded&&!bounded.is_error,'Native schema accepts the bounded program syntax');
     await evaluate(win, `window.probe.result(${JSON.stringify(bounded)})`);
