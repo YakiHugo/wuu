@@ -1217,6 +1217,8 @@ line.plugin-genui-grid { stroke:var(--genui-border); stroke-dasharray:3 4; }
 .plugin-genui-layout[data-align="stretch"] { align-items:stretch; }
 .plugin-genui-layout.plugin-genui-grid { display:grid; grid-template-columns:repeat(var(--genui-columns),minmax(0,1fr)); }
 .plugin-genui-card { padding:1.15em; }
+/* Grid tracks give these cards a definite width; descendants query that width. */
+.plugin-genui-grid > .plugin-genui-card { container-type:inline-size; }
 .plugin-genui-card-title { margin:0; font:inherit; font-weight:600; overflow-wrap:anywhere; }
 .plugin-genui-heading { margin:0; font-weight:600; line-height:1.3; overflow-wrap:anywhere; }
 .plugin-genui-heading[data-level="1"] { font-size:1.6em; }

@@ -58,6 +58,10 @@ jobs:
         run: |
           npm ci --prefix desktop
           node desktop/node_modules/electron/install.js
+      - name: Install fonts for multilingual captures
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fonts-noto-cjk fonts-noto-color-emoji
       - name: Build native UI tool
         id: native-tool
         run: |
@@ -94,10 +98,11 @@ jobs:
             desktop/out/e2e/generative-ui/*.json
             desktop/out/e2e/generative-ui/*.png
             desktop/out/e2e/generative-ui/*.log
-            desktop/out/e2e/generative-ui/failure.txt
+            desktop/out/e2e/generative-ui/*.txt
             desktop/out/e2e/generative-ui-app/*.json
             desktop/out/e2e/generative-ui-app/*.png
             desktop/out/e2e/generative-ui-app/*.log
+            desktop/out/e2e/generative-ui-app/*.txt
             desktop/out/e2e/generative-ui-app/recordings/**
           if-no-files-found: ignore
           retention-days: 14

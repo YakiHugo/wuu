@@ -225,7 +225,15 @@ if (process.env.WUU_GENUI_PREPARE_ONLY === '1') {
   console.log('Native validation passed and Electron fixture built; renderer checks not run.');
   process.exit(0);
 }
-async function evaluate(win, script) { return win.webContents.executeJavaScript(script, true); }
+let lastOperation = 'Start Electron renderer';
+function withDeadline(promise, label, timeout = 20000) {
+  lastOperation = label;
+  fs.writeFileSync(path.join(output, 'progress.json'), JSON.stringify({operation:label,time:new Date().toISOString()}));
+  let timer;
+  return Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error(`Timed out after ${timeout} ms: ${label}`)),timeout);})]).finally(()=>clearTimeout(timer));
+}
+async function evaluate(win, script) { return withDeadline(win.webContents.executeJavaScript(script, true),`Renderer evaluation: ${script.slice(0,160)}`); }
+async function capturePage(win) { return withDeadline(win.webContents.capturePage(),'Compositor viewport capture'); }
 async function waitFor(win, expression) {
   const deadline = Date.now() + 12000;
   while (Date.now() < deadline) {
@@ -242,11 +250,11 @@ async function click(win, selector) {
   win.webContents.sendInputEvent({ type:'mouseDown', x:Math.round(box.x), y:Math.round(box.y), button:'left', clickCount:1 });
   win.webContents.sendInputEvent({ type:'mouseUp', x:Math.round(box.x), y:Math.round(box.y), button:'left', clickCount:1 });
 }
-app.whenReady().then(async () => {
+const rendererRun = app.whenReady().then(async () => {
   const win = new BrowserWindow({ width:1100, height:1200, show:true, webPreferences:{ contextIsolation:true, nodeIntegration:false, sandbox:true, backgroundThrottling:false } });
   activeWindow = win;
   win.webContents.on('console-message', event => { if (event.level === 'error') console.error(event.message); });
-  await win.loadFile(path.join(output, 'index.html'));
+  await withDeadline(win.loadFile(path.join(output, 'index.html')),'Load renderer fixture');
   win.focus();
   win.webContents.focus();
   await waitFor(win, '!!window.probe');
@@ -319,6 +327,7 @@ app.whenReady().then(async () => {
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   })()`);
   for (const theme of ['light', 'dark']) for (const size of [14, 20]) for (const width of [1100, 480]) {
+    console.log(`Visual matrix: ${theme}, ${size}px, ${width}px`);
     win.setContentSize(width, 1200);
     await evaluate(win, `document.documentElement.dataset.theme=${JSON.stringify(theme)};window.probe.fontSize(${size});window.scrollTo({top:0,behavior:'instant'})`);
     await settlePaint();
@@ -327,11 +336,11 @@ app.whenReady().then(async () => {
     assert.notEqual(geometry.lineStroke, 'none', 'Chart line is painted without optional theme overrides');
     assert.ok(geometry.labelSize >= size, 'Chart labels retain the user UI font size');
     assert.ok(geometry.axisOffsets.every(offset=>offset<1), 'Y-axis labels align with their grid values');
-    fs.writeFileSync(path.join(output, `${theme}-${size}-${width}.png`), (await win.webContents.capturePage()).toPNG());
+    fs.writeFileSync(path.join(output, `${theme}-${size}-${width}.png`), (await capturePage(win)).toPNG());
     await evaluate(win, `document.querySelector('[data-genui-block="draft"]').scrollIntoView({block:'center',behavior:'instant'})`);
     await settlePaint();
     assert.ok(await evaluate(win, `(() => { const r=document.querySelector('[data-genui-block="draft"] input').getBoundingClientRect(); return r.top>=0 && r.bottom<=innerHeight; })()`), 'Form input is visible before screenshot');
-    fs.writeFileSync(path.join(output, `${theme}-${size}-${width}-form.png`), (await win.webContents.capturePage()).toPNG());
+    fs.writeFileSync(path.join(output, `${theme}-${size}-${width}-form.png`), (await capturePage(win)).toPNG());
   }
   results.checks.push('light/dark, 14/20 px, wide/narrow screenshots and page overflow');
   await click(win, '[data-genui-block="draft"] input[type="text"]');
@@ -339,14 +348,14 @@ app.whenReady().then(async () => {
   win.webContents.sendInputEvent({type:'keyUp',keyCode:'Tab'});
   await waitFor(win, `document.activeElement === document.querySelector('[data-genui-block="draft"] select')`);
   assert.equal(await evaluate(win, `document.activeElement.matches(':focus-visible')`), true);
-  fs.writeFileSync(path.join(output, 'keyboard-focus.png'), (await win.webContents.capturePage()).toPNG());
+  fs.writeFileSync(path.join(output, 'keyboard-focus.png'), (await capturePage(win)).toPNG());
   results.checks.push('native keyboard focus reaches the next form control visibly');
   const bars = toolCall(edit(s => { s.blocks[2].chartType = 'bar'; }), 'bar-render').result.result;
   await evaluate(win, `window.probe.result(${JSON.stringify(bars)})`);
   await waitFor(win, `document.querySelectorAll('.plugin-genui-chart rect').length === 30`);
   await evaluate(win, `document.querySelector('[data-genui-block="progress"]').scrollIntoView({block:'center',behavior:'instant'})`);
   await settlePaint();
-  fs.writeFileSync(path.join(output, 'bar-chart.png'), (await win.webContents.capturePage()).toPNG());
+  fs.writeFileSync(path.join(output, 'bar-chart.png'), (await capturePage(win)).toPNG());
   for (const chartType of ['bar', 'line']) for (const count of [1, 2, 7]) {
     const categories = toolCall(edit(s => {
       s.blocks[2].chartType = chartType;
@@ -361,8 +370,8 @@ app.whenReady().then(async () => {
       const labels = await evaluate(win, `(() => { const marks=[...document.querySelectorAll('.plugin-genui-chart ${chartType === 'bar' ? 'rect' : 'circle'}')];return [...document.querySelectorAll('.plugin-genui-x-categories span')].map((node,index)=>{const label=node.getBoundingClientRect(),mark=marks[index].getBoundingClientRect();const style=getComputedStyle(node);return {offset:Math.abs((label.left+label.right-mark.left-mark.right)/2),fontSize:parseFloat(style.fontSize),singleLine:label.height<=parseFloat(style.lineHeight)+1,fullName:node.title===node.textContent&&document.querySelector('[data-genui-block="progress"] details').textContent.includes(node.title)};}); })()`);
       results.categoryAxes.push({ chartType, count, theme, size, width, labels });
       assert.ok(labels.every(label => label.offset < 1 && label.fontSize >= size && label.singleLine && label.fullName), `${chartType} ${count} category labels align with marks without shrinking text`);
-      if (chartType === 'bar' && count === 2) fs.writeFileSync(path.join(output, `bar-categories-${theme}-${size}-${width}.png`), (await win.webContents.capturePage()).toPNG());
-      if (chartType === 'bar' && count === 7 && width === 480) fs.writeFileSync(path.join(output, 'bar-categories-seven-dark-20-480.png'), (await win.webContents.capturePage()).toPNG());
+      if (chartType === 'bar' && count === 2) fs.writeFileSync(path.join(output, `bar-categories-${theme}-${size}-${width}.png`), (await capturePage(win)).toPNG());
+      if (chartType === 'bar' && count === 7 && width === 480) fs.writeFileSync(path.join(output, 'bar-categories-seven-dark-20-480.png'), (await capturePage(win)).toPNG());
     }
   }
   await evaluate(win, `window.probe.result(${JSON.stringify(result)})`);
@@ -398,6 +407,7 @@ app.whenReady().then(async () => {
   await click(win, '[data-genui-node="detailsV2"] > summary');
   await waitFor(win, `document.querySelector('[data-genui-node="detailsV2"]').open`);
   for (const theme of ['light', 'dark']) for (const size of [14, 20]) for (const width of [1100, 480]) {
+    console.log(`Visual matrix: ${theme}, ${size}px, ${width}px`);
     win.setContentSize(width, 1200);
     await evaluate(win, `document.documentElement.dataset.theme=${JSON.stringify(theme)};window.probe.fontSize(${size});window.scrollTo({top:0,behavior:'instant'})`);
     await settlePaint();
@@ -408,14 +418,16 @@ app.whenReady().then(async () => {
     results.nestedLayouts ??= [];
     results.nestedLayouts.push({theme,size,width,cards:nestedGeometry});
     assert.ok(nestedGeometry.every(card=>card.controls.every(control=>control.left>=0&&control.right>=0)),'Nested grid controls stay inside their own card');
-    fs.writeFileSync(path.join(output, `v2-${theme}-${size}-${width}.png`), (await win.webContents.capturePage()).toPNG());
+    assert.ok(nestedGeometry.every(card=>card.cardWidth>=30*size || card.controls.every(control=>control.width>=card.cardWidth*0.7)),'A grid inside a narrow card becomes one readable column even in a wide root');
+    fs.writeFileSync(path.join(output, `v2-${theme}-${size}-${width}.png`), (await capturePage(win)).toPNG());
     await evaluate(win, `document.querySelector('[data-genui-node="chartGridV2"]').scrollIntoView({block:'start',behavior:'instant'})`);
     await settlePaint();
-    fs.writeFileSync(path.join(output, `v2-charts-${theme}-${size}-${width}.png`), (await win.webContents.capturePage()).toPNG());
+    fs.writeFileSync(path.join(output, `v2-charts-${theme}-${size}-${width}.png`), (await capturePage(win)).toPNG());
     for (const node of ['nestedControls','nestedGrid','areaV2','mixedV2','scatterV2','stackedV2','pieV2','donutV2','detailsV2']) {
+      console.log(`Capturing v2 ${node}: ${theme}, ${size}px, ${width}px`);
       await evaluate(win, `document.querySelector('[data-genui-node="${node}"]').scrollIntoView({block:'start',behavior:'instant'})`);
       await settlePaint();
-      fs.writeFileSync(path.join(output, `v2-${node}-${theme}-${size}-${width}.png`), (await win.webContents.capturePage()).toPNG());
+      fs.writeFileSync(path.join(output, `v2-${node}-${theme}-${size}-${width}.png`), (await capturePage(win)).toPNG());
     }
 
   }
@@ -431,7 +443,7 @@ app.whenReady().then(async () => {
     win.webContents.sendInputEvent({type:'keyDown',keyCode:'Backspace'});
     win.webContents.sendInputEvent({type:'keyUp',keyCode:'Backspace'});
     await waitFor(win, `document.querySelector(${JSON.stringify(selector)}).value === ''`);
-    await win.webContents.insertText(value);
+    await withDeadline(win.webContents.insertText(value),'Insert native input text');
   };
   await nativeInput('[data-genui-node="capacityInput"]', '50');
   await waitFor(win, `document.querySelector('[data-genui-node="capacityMetric"] strong')?.textContent === '200'`);
@@ -443,7 +455,7 @@ app.whenReady().then(async () => {
   win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Backspace' });
   await waitFor(win, `document.querySelector('[data-genui-node="capacityInput"]').value === ''`);
   assert.equal(await evaluate(win, `document.querySelector('[data-genui-node="capacityMetric"] strong').textContent`), '200', 'An empty numeric draft does not corrupt committed calculations');
-  await win.webContents.insertText('75');
+  await withDeadline(win.webContents.insertText('75'),'Replace numeric draft');
   await waitFor(win, `document.querySelector('[data-genui-node="capacityMetric"] strong').textContent === '300'`);
   await click(win, '[data-genui-node="increaseV2"] button');
   await waitFor(win, `document.querySelector('[data-genui-node="capacityInput"]').value === '85'`);
@@ -513,7 +525,7 @@ app.whenReady().then(async () => {
   const focusOutline = await evaluate(win, `(() => {const style=getComputedStyle(document.activeElement.closest('label'));return {style:style.outlineStyle,width:parseFloat(style.outlineWidth)};})()`);
   assert.ok(focusOutline.style !== 'none' && focusOutline.width >= 2,'Segmented choices expose a visible keyboard focus outline');
   await settlePaint();
-  fs.writeFileSync(path.join(output, 'v2-segmented-keyboard-focus.png'), (await win.webContents.capturePage()).toPNG());
+  fs.writeFileSync(path.join(output, 'v2-segmented-keyboard-focus.png'), (await capturePage(win)).toPNG());
   results.checks.push('native Tab exposes the segmented control focus outline');
   await input(win, '[data-genui-node="tableV2"] input', '0');
   await click(win, '[data-genui-node="tableV2"] th:nth-child(2) button');
@@ -675,11 +687,13 @@ app.whenReady().then(async () => {
   fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify(results, null, 2));
   win.destroy();
   app.quit();
-}).catch(async error => {
+});
+withDeadline(rendererRun,'Complete renderer E2E suite',10*60*1000).catch(async error => {
   console.error(error);
-  fs.writeFileSync(path.join(output, 'failure.txt'), error.stack);
+  const failedOperation = lastOperation;
+  fs.writeFileSync(path.join(output, 'failure.txt'), `${error.stack}\nLast operation: ${failedOperation}`);
   if (activeWindow && !activeWindow.isDestroyed()) {
-    fs.writeFileSync(path.join(output, 'failure.png'), (await activeWindow.webContents.capturePage()).toPNG());
+    try { fs.writeFileSync(path.join(output, 'failure.png'), (await capturePage(activeWindow)).toPNG()); } catch (captureError) { fs.writeFileSync(path.join(output,'failure-capture.txt'),captureError.stack); }
     const state = await evaluate(activeWindow, `({text:document.body.innerText, focused:document.hasFocus(), activeElement:document.activeElement?.outerHTML,nativeEvents:window.nativeEvents,inputs:[...document.querySelectorAll(".plugin-genui-program input")].map(input=>({node:input.dataset.genuiNode,value:input.value,valid:input.validity.valid,message:input.validationMessage}))})`).catch(() => null);
     fs.writeFileSync(path.join(output, 'failure-state.json'), JSON.stringify(state, null, 2));
   }

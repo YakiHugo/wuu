@@ -182,7 +182,19 @@ const server = http.createServer((req, res) => {
   });
 });
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-const evaluate = (fn, arg) => main.webContents.executeJavaScript(`(${fn})(${JSON.stringify(arg)})`);
+let lastOperation = 'Start full App acceptance';
+function withDeadline(promise, label, timeout = 20000) {
+  if (label !== lastOperation) {
+    lastOperation = label;
+    fs.writeFileSync(path.join(output, 'progress.json'), JSON.stringify({ operation: label, at: new Date().toISOString() }));
+  }
+  let timer;
+  return Promise.race([promise, new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Timed out after ${timeout} ms: ${label}`)), timeout);
+  })]).finally(() => clearTimeout(timer));
+}
+const evaluate = (fn, arg) => withDeadline(main.webContents.executeJavaScript(`(${fn})(${JSON.stringify(arg)})`), `Renderer evaluation: ${String(fn).slice(0, 180)}`);
+const capturePage = () => withDeadline(main.webContents.capturePage(), 'Capture live App compositor');
 async function until(read, label, timeout = 45000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
@@ -216,7 +228,7 @@ async function trustedType(selector, value) {
     if (!node) throw new Error(`Missing ${target}`);
     node.focus(); node.select();
   }, selector);
-  if (value) await main.webContents.insertText(value);
+  if (value) await withDeadline(main.webContents.insertText(value), `Native text entry: ${selector}`);
   else {
     main.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Backspace' });
     main.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Backspace' });
@@ -239,7 +251,7 @@ async function settle() {
 async function capture(name, selector) {
   if (selector) await evaluate(target => document.querySelector(target).scrollIntoView({ block: 'center', behavior: 'instant' }), selector);
   await settle();
-  fs.writeFileSync(path.join(output, name), (await main.webContents.capturePage()).toPNG());
+  fs.writeFileSync(path.join(output, name), (await capturePage()).toPNG());
   screenshots.push(name);
 }
 function pass(name, evidence) { checks.push({ name, passed: true, ...evidence }); console.log(`PASS ${name}`); }
@@ -303,9 +315,9 @@ app.on('browser-window-created', (_event, win) => {
   main = win;
   win.webContents.on('console-message', (_event, level, message) => { if (level >= 2) errors.push(message); });
 });
-const timeout = setTimeout(() => { console.error('Full App E2E timed out', fixture); app.exit(1); }, 240000);
+const timeout = setTimeout(() => { void fail(new Error(`Full App E2E exceeded 240000 ms during ${lastOperation}`)); }, 240000);
 async function run() {
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  await withDeadline(new Promise(resolve => server.listen(0, '127.0.0.1', resolve)), 'Start isolated provider');
   // Preserve the tested plugin's actual manifest default, without a false override.
   const disabled = Object.fromEntries(fs.readdirSync(path.join(root, 'internal/plugin/bundled')).filter(name => name !== 'generative-ui').map(name => [`plugin:bundled:${name}`, true]));
   fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ default_provider: 'fixture',
@@ -316,7 +328,7 @@ async function run() {
   const stamp = '2026-01-01T00:00:00Z';
   fs.writeFileSync(path.join(home, 'projects.json'), JSON.stringify({ projects: [{ id: 'genui-app', name: 'Generated UI acceptance', path: project, created_at: stamp, updated_at: stamp }], active_context: { kind: 'project', project_id: 'genui-app', cwd: project } }));
   fs.writeFileSync(path.join(home, 'desktop-settings.json'), JSON.stringify({ onboarding_version: 100, language: 'en-US', theme: 'light', message_flow_font_size: 14 }));
-  await import(pathToFileURL(path.join(desktop, 'out/main/index.js')).href);
+  await withDeadline(import(pathToFileURL(path.join(desktop, 'out/main/index.js')).href), 'Import production App main');
   await until(() => main, 'main BrowserWindow');
   main.setSize(1280, 1000);
   main.show(); main.focus();
@@ -386,7 +398,7 @@ async function run() {
   pass('production storage IPC writes the edited filter and form into the Go user-scope store', { writes: writes.length });
   const beforeReload = rpc.length;
   const loaded = new Promise(resolve => main.webContents.once('did-finish-load', resolve));
-  main.reload(); await loaded;
+  main.reload(); await withDeadline(loaded, 'Reload production App history');
   await wait(() => document.querySelector('[data-genui-block="draft"] input')?.value === 'Persisted via production storage');
   assert.equal(await evaluate(() => document.querySelector('[data-genui-block="teams"] input').value), 'Engineering');
   assert.ok(rpc.slice(beforeReload).some(entry => entry.channel === 'wuu:plugin-storage-get' && entry.completed && entry.result?.value?.includes('Persisted via production storage')));
@@ -474,7 +486,7 @@ async function run() {
   pass('explicit trusted UI action starts one origin-bound normal turn with values and retains local form, composer draft and attachment');
   const beforeActionReload = rpc.filter(entry => entry.channel === 'wuu:turn-start').length;
   const actionReloaded = new Promise(resolve => main.webContents.once('did-finish-load', resolve));
-  main.reload(); await actionReloaded;
+  main.reload(); await withDeadline(actionReloaded, 'Reload action history');
   await wait(() => document.querySelector('input[data-genui-node="ownerInput"]')?.value === 'Engineering follow-up');
   assert.equal(rpc.filter(entry => entry.channel === 'wuu:turn-start').length, beforeActionReload, 'Restoring action history must not replay submission');
   await capture('09-app-action-history.png', '[data-genui-node="send"]');
@@ -523,9 +535,34 @@ async function run() {
   fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify(evidence, null, 2));
   console.log(`Full App generative UI E2E passed: ${output}`);
 }
-run().then(() => { clearTimeout(timeout); server.close(); app.quit(); }).catch(async error => {
+let failing = false;
+async function fail(error) {
+  if (failing) return;
+  failing = true;
   clearTimeout(timeout);
-  fs.writeFileSync(path.join(output, 'failure.json'), JSON.stringify({ error: String(error.stack || error), fixture, checks, requests, rpc, errors, processes, recordings, binaries: { core: { path: process.env.WUU_DESKTOP_CORE, hash: hash(process.env.WUU_DESKTOP_CORE) }, helper: { path: process.env.WUU_GENERATIVE_UI_PLUGIN_HELPER, hash: hash(process.env.WUU_GENERATIVE_UI_PLUGIN_HELPER), mode: fs.statSync(process.env.WUU_GENERATIVE_UI_PLUGIN_HELPER).mode } } }, null, 2));
-  if (main) fs.writeFileSync(path.join(output, 'failure.png'), (await main.webContents.capturePage()).toPNG());
-  console.error(error); server.close(); app.exit(1);
-});
+  console.error(error);
+  const failedOperation = lastOperation;
+  // Even diagnostics must terminate when Chromium's compositor or renderer is
+  // unresponsive. Write the primary evidence before asking it for anything.
+  const forceExit = setTimeout(() => app.exit(1), 30000);
+  try {
+    const binary = filename => {
+      try { return { path: filename, hash: hash(filename), mode: fs.statSync(filename).mode }; }
+      catch (inspectionError) { return { path: filename, error: String(inspectionError) }; }
+    };
+    fs.writeFileSync(path.join(output, 'failure.json'), JSON.stringify({ error: String(error.stack || error), failedOperation, fixture, checks, requests, rpc, errors, processes, recordings, binaries: { core: binary(process.env.WUU_DESKTOP_CORE), helper: binary(process.env.WUU_GENERATIVE_UI_PLUGIN_HELPER) } }, null, 2));
+    if (main && !main.isDestroyed()) {
+      try { fs.writeFileSync(path.join(output, 'failure.png'), (await capturePage()).toPNG()); }
+      catch (captureError) { fs.writeFileSync(path.join(output, 'failure-capture.txt'), String(captureError.stack || captureError)); }
+      try {
+        const state = await withDeadline(main.webContents.executeJavaScript(`({ text: document.body.innerText, focused: document.hasFocus(), activeElement: document.activeElement?.outerHTML, inputs: [...document.querySelectorAll('[data-wuu-component="generated-ui"] input')].map(input => ({ node: input.dataset.genuiNode, value: input.value, valid: input.validity.valid, disabled: input.matches(':disabled') })) })`), 'Read failed App DOM', 5000);
+        fs.writeFileSync(path.join(output, 'failure-state.json'), JSON.stringify(state, null, 2));
+      } catch (stateError) { fs.writeFileSync(path.join(output, 'failure-state.json'), JSON.stringify({ error: String(stateError) })); }
+    }
+  } finally {
+    clearTimeout(forceExit);
+    server.close();
+    app.exit(1);
+  }
+}
+run().then(() => { clearTimeout(timeout); server.close(); app.quit(); }).catch(fail);
