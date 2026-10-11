@@ -29,7 +29,7 @@ struct ConversationTimeline: View {
                             HStack {
                                 Spacer()
                                 if historyFailed {
-                                    Button("读取失败，轻点重试") { loadHistory() }.disabled(!model.connected)
+                                    Button("读取失败，轻点重试") { loadHistory() }.disabled(!model.connected || model.refreshing)
                                 } else if model.loadingHistory {
                                     ProgressView().accessibilityLabel("正在读取更早的消息")
                                 }
@@ -86,6 +86,26 @@ struct ConversationTimeline: View {
                             }
                         }.animation(chromeAnimation(reduceMotion), value: pausedEdit?.id)
                     }
+                    // Floats over retained content so the reading position never moves.
+                    .overlay(alignment: .top) {
+                        // Animate only the indicator; the snapshot's row changes apply without motion.
+                        ZStack {
+                            if model.updating {
+                                Label { Text("正在更新…") } icon: { ProgressView().controlSize(.small) }
+                                    .font(.caption).foregroundStyle(.secondary)
+                                    .padding(10).background(.regularMaterial, in: Capsule())
+                                    .padding(12).transition(.opacity).allowsHitTesting(false)
+                            } else if model.refreshing && model.connected, let id = model.activeID {
+                                Button {
+                                    model.perform { try await model.open(id, preservingContent: true) }
+                                } label: {
+                                    Label("重新加载会话", systemImage: "arrow.clockwise")
+                                        .font(.caption).padding(10).background(.regularMaterial, in: Capsule())
+                                }.padding(12)
+                            }
+                        }
+                            .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.updating)
+                    }
             }
         }.sheet(item: $model.attachmentPreview) { attachment in AttachmentPreview(attachment: attachment) }
             // Owned here, not by the row, so a turn finishing or regrouping cannot close it.
@@ -137,7 +157,7 @@ struct ConversationTimeline: View {
         return edit
     }
     private func loadHistory() {
-        guard historyRequest == nil, model.connected, !model.loadingHistory,
+        guard historyRequest == nil, model.connected, !model.refreshing, !model.loadingHistory,
               model.live?.historyCursor.isEmpty == false else { return }
         historyFailed = false
         historyRequest = Task {

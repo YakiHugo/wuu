@@ -53,7 +53,8 @@ struct MobileComposer: View {
     let model: AppModel
     var enabled = true
     var sending = false
-    var placeholder = "发送消息"
+    /// Also states why input is disabled; the caller knows the reason.
+    let placeholder: String
     var identifier = "native-composer"
     var stop: (() -> Void)? = nil
     var send: () -> Void
@@ -67,17 +68,20 @@ struct MobileComposer: View {
                             if file.isImage {
                                 DraftImage(attachment: file).overlay(alignment: .topTrailing) {
                                     Button { attachments.removeAll { $0.id == file.id } } label: {
+                                        // A small visible mark with a full-size touch target.
                                         Image(systemName: "xmark").font(.system(size: 10, weight: .bold)).padding(5)
-                                            .background(.regularMaterial, in: Circle()).frame(width: 32, height: 32)
+                                            .background(.regularMaterial, in: Circle()).padding(4)
+                                            .frame(width: 44, height: 44, alignment: .topTrailing).contentShape(Rectangle())
                                     }.accessibilityLabel("移除附件 " + file.filename).disabled(sending)
                                 }
                             } else {
                             Button { attachments.removeAll { $0.id == file.id } } label: {
                                 HStack(spacing: 6) {
-                                    Image(systemName: file.isImage ? "photo" : "doc")
+                                    Image(systemName: "doc")
                                     Text(file.filename).lineLimit(1).frame(maxWidth: 150)
                                     Image(systemName: "xmark")
                                 }.font(.caption).padding(10).background(Color(uiColor: .secondarySystemBackground), in: Capsule())
+                                    .frame(minHeight: 44).contentShape(Rectangle())
                             }.accessibilityLabel("移除附件 " + file.filename).disabled(sending)
                             }
                         }

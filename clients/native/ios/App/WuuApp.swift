@@ -21,7 +21,13 @@ import WuuCore
                 }
                 .onChange(of: phase) { _, value in
                     if value == .active { model.foreground() }
-                    else if value == .background { Task { await model.background() } }
+                    else if value == .background {
+                        Task {
+                            // A foreground transition may run before this task gets the main actor.
+                            guard phase == .background else { return }
+                            await model.background()
+                        }
+                    }
                 }
         }
     }
@@ -179,12 +185,14 @@ struct ConversationView: View {
     }
     private var activeQuestion: JSONValue? { model.questions.first { $0["thread_id"].string == model.activeID } }
     private var composerEnabled: Bool {
-        model.connected && model.live != nil && model.live?.readOnly != true && model.live?.archived != true
+        model.connected && !model.refreshing && model.live != nil && model.live?.readOnly != true && model.live?.archived != true
     }
     private var composerPlaceholder: String {
         guard let live = model.live else { return model.connected ? "正在打开会话…" : "发送消息" }
         if live.archived { return "已归档的会话" }
         if live.readOnly { return "此会话只读" }
+        if !model.connected && !model.updating { return "连接电脑后发送" }
+        if model.refreshing && !model.updating { return "会话更新失败" }
         return live.running ? "添加后续消息" : "发送消息"
     }
     private var freshConversation: Bool {
@@ -193,7 +201,7 @@ struct ConversationView: View {
     }
     private var conversation: some View {
         VStack(spacing: 0) {
-            if !model.connected {
+            if !model.connected && !model.updating {
                 ConnectionStatusView(connecting: model.connecting, offlineMessage: "电脑未连接 · 连接后才能发送", detail: model.connectionStatus) {
                     Task { await model.connect() }
                 }.transition(.opacity)
@@ -263,10 +271,10 @@ struct ConversationView: View {
                         }
                     }
                     Button("会话设置", systemImage: "slider.horizontal.3") { settingsThread = model.live }
-                        .disabled(!model.connected || model.live == nil)
+                        .disabled(!model.connected || model.refreshing || model.live == nil)
                     Button("重命名", systemImage: "pencil") {
                         renameID = model.activeID ?? ""; renameTitle = model.live?.title ?? ""; renaming = true
-                    }.disabled(!model.connected || model.live == nil)
+                    }.disabled(!model.connected || model.refreshing || model.live == nil)
                     Button(model.live?.historyCursor.isEmpty == false || model.messages.contains(where: { !$0.contentRef.isEmpty }) ? "导出已加载文本" : "导出对话文本", systemImage: "square.and.arrow.up") {
                         exportDocument = ConversationDocument(text: model.messages.filter { $0.tool == nil }.map { "## \($0.role)\n\n\($0.text)" }.joined(separator: "\n\n"))
                         exporting = true

@@ -44,6 +44,20 @@ struct NativeUIFixtureView: View {
                         model.live?.apply("turn/started", ["thread_id": "local-ui-fixture", "turn": ["id": "stream", "status": "in_progress",
                             "items": [["id": "reply", "type": "agent_message", "text": "追加的新消息"]]]])
                     }
+                    // Two steps instead of a timer: inspect the retained state, then apply the snapshot.
+                    Button(model.refreshing ? "应用快照" : "模拟重连") {
+                        guard let live = model.live, model.refreshing else { model.refreshing = true; return }
+                        // A recent page that starts mid-turn, plus a turn completed while disconnected.
+                        var recent = Array(live.turns.suffix(20))
+                        if recent[0]["items"].array.count > 1, case .object(var first) = recent[0] {
+                            first["items"] = .array(Array(recent[0]["items"].array.dropFirst())); recent[0] = .object(first)
+                        }
+                        recent.append(["id": .string("resumed-\(live.turns.count)"), "status": "completed",
+                            "items": [["id": "reply", "type": "agent_message", "text": "断开期间完成的回复"]]])
+                        model.live?.resume(from: ChatThread(["id": .string(live.id), "title": .string(live.title),
+                            "history_cursor": "fixture-page", "turns": .array(recent)]))
+                        model.refreshing = false
+                    }
                 }
         }
     }

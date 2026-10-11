@@ -180,6 +180,27 @@ public struct ChatThread: Identifiable, Sendable {
         historyCursor = page["history_cursor"].string ?? ""
         rebuildProjection()
     }
+    /// A reconnect snapshot of this thread is authoritative from its first item onward.
+    /// Loaded older pages stay only when that boundary is found in them, so the result
+    /// has no gap; otherwise the snapshot alone replaces this thread.
+    public mutating func resume(from snapshot: ChatThread) {
+        var next = snapshot
+        if !snapshot.historyCursor.isEmpty, let first = snapshot.turns.first, case .object(var boundaryTurn) = first,
+           let boundary = turns.firstIndex(where: { $0["id"] == first["id"] }) {
+            let items = turns[boundary]["items"].array
+            var split: Int? = 0
+            if let item = first["items"].array.first { split = items.firstIndex { $0["id"] == item["id"] } }
+            if let split, boundary > 0 || split > 0 {
+                boundaryTurn["items"] = .array(Array(items[..<split]) + first["items"].array)
+                next.turns = Array(turns[..<boundary]) + [JSONValue.object(boundaryTurn)] + snapshot.turns.dropFirst()
+                next.historyCursor = historyCursor
+                // Retained older turns keep their parsed projections.
+                next.projectedTurns.merge(projectedTurns) { current, _ in current }
+                next.rebuildProjection(changed: .object(boundaryTurn))
+            }
+        }
+        self = next
+    }
     public mutating func expandContent(_ ref: String, item: JSONValue) {
         for t in turns.indices {
             guard case .object(var turn) = turns[t] else { continue }

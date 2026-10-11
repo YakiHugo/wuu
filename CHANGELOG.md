@@ -115,6 +115,10 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Keep iOS conversation content in place while reconnecting, merge overlapping
+  history pages, and wait for a fresh snapshot before applying live updates.
+  Simplify the attachment menu and show accurate disabled composer states.
+
 - Dismiss the iOS conversation keyboard when tapping the message area, including
   blank space in an empty conversation, while preserving the draft.
 

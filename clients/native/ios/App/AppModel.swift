@@ -53,6 +53,10 @@ struct MessageForkRequest: Identifiable {
     var saved: HistoryThread?
     var connected = false
     var connecting = false
+    /// The displayed conversation predates the current connection and awaits its snapshot.
+    var refreshing = false
+    /// Refreshing without a known connection failure; the retained content stays in place.
+    var updating: Bool { refreshing && connectionStatus.isEmpty }
     var busy = false
     var sending = false
     var historyActionBusy = false
@@ -121,14 +125,14 @@ struct MessageForkRequest: Identifiable {
                let pair = pairedComputers.first(where: { $0.id == location.host }) {
                 selectedPair = pair
                 host = AccountDevice(pub: pair.hostPub, name: pair.hostName, role: "host", online: false)
-                activeID = location.thread; workspace = location.workspace
+                activeID = location.thread; workspace = location.workspace; refreshing = activeID != nil
             }
             resetRecovery = try vault.load("recovery", as: String.self)
             if let account, let directory = try vault.load("directory", as: RememberedDirectory.self)?.restore(account: account) {
                 devices = directory.devices; authMethod = directory.auth_method; directoryCached = true
                 if selectedPair == nil, let location = try vault.load("location", as: NavigationLocation.self)?.restore(account: account, devices: devices) {
                     host = devices.first { $0.pub == location.host }
-                    activeID = location.thread; workspace = location.workspace
+                    activeID = location.thread; workspace = location.workspace; refreshing = activeID != nil
                     history = try ConversationHistory(account: account, host: location.host, directory: cacheDirectory)
                 }
             }
@@ -390,7 +394,7 @@ struct MessageForkRequest: Identifiable {
         loginTask?.cancel()
         events?.cancel(); events = nil
         let oldRemote = remote; remote = nil
-        connected = false; connecting = false; pendingApproval = nil; sending = false; historyActionBusy = false
+        connected = false; connecting = false; pendingApproval = nil; sending = false; historyActionBusy = false; refreshing = activeID != nil
         imagePreviews.clear(); loadingHistory = false; loadingContent = []; attachmentPreview = nil; loadingAttachment = false
         pendingFork = nil
         questions = []; questionRevision += 1
@@ -473,9 +477,13 @@ struct MessageForkRequest: Identifiable {
                     switch event {
                     case .snapshot(let tag, let result):
                         if opening.uuidString == tag {
-                            live = ChatThread(result["thread"], pending: result["pending_user_messages"].array, held: result["held_user_messages"].array)
+                            let thread = ChatThread(result["thread"], pending: result["pending_user_messages"].array, held: result["held_user_messages"].array)
+                            // One update over the retained rows: unchanged rows keep identity and position.
+                            if live?.id == thread.id { live?.resume(from: thread) } else { live = thread }
+                            refreshing = false
                         }
-                    case .disconnected(let reason): connected = false; pendingApproval = nil; connectionStatus = reason
+                    case .disconnected(let reason):
+                        connected = false; pendingApproval = nil; connectionStatus = reason; refreshing = activeID != nil
                     case .notification(let method, let params):
                         if method == "user-question/requested" {
                             questionRevision += 1
@@ -486,7 +494,9 @@ struct MessageForkRequest: Identifiable {
                             questionRevision += 1
                             questions.removeAll { $0["request_id"] == params["request_id"] }
                         }
-                        live?.apply(method, params)
+                        // The pending snapshot already includes anything ordered before it. Applying
+                        // deltas to a retained copy would show text with gaps from the disconnect.
+                        if !refreshing { live?.apply(method, params) }
                         if ["thread/started", "thread/updated", "thread/archived", "turn/completed"].contains(method) {
                             perform { try await self.loadThreads() }
                         }
@@ -510,6 +520,13 @@ struct MessageForkRequest: Identifiable {
         }
         // A missing conversation or failed directory read is not a transport failure.
         guard let connection = remote, epoch == stamp else { return }
+        if let id = activeID {
+            do { try await open(id, preservingContent: true) }
+            catch is CancellationError {} catch {
+                if epoch == stamp, remote === connection { report(error) }
+            }
+        }
+        guard epoch == stamp, remote === connection else { return }
         do {
             async let pendingQuestions: Void = loadQuestions()
             let result = try await connection.call("workspace/list")
@@ -517,7 +534,6 @@ struct MessageForkRequest: Identifiable {
             workspaces = result["workspaces"].array
             if workspace.isEmpty { workspace = result["current"].string ?? workspaces.first?["path"].string ?? "" }
             async let pendingThreads: Void = loadThreads()
-            if let id = activeID { try await open(id, preservingContent: true) }
             try await pendingThreads
             try await pendingQuestions
         } catch is CancellationError {} catch {
@@ -540,11 +556,21 @@ struct MessageForkRequest: Identifiable {
     func open(_ id: String, preservingContent: Bool = false) async throws {
         if activeID != id { showingHistoryEdit = false }
         opening = UUID(); let selection = opening
-        if activeID != id || (!preservingContent && connected) { live = nil; saved = nil }
-        activeID = id; imagePreviews.clear(); loadingHistory = false; loadingContent = []; attachmentPreview = nil; loadingAttachment = false
+        // Reopening the displayed conversation keeps its rows and in-flight thumbnails.
+        if activeID != id || (!preservingContent && connected) { live = nil; saved = nil; refreshing = false; imagePreviews.clear() }
+        activeID = id; loadingHistory = false; loadingContent = []; attachmentPreview = nil; loadingAttachment = false
         let stamp = epoch
         if connected, let remote {
-            _ = try await remote.call("thread/resume", params: ["session_id": .string(id), "response_only": true, "history_page": true], snapshotTag: selection.uuidString)
+            refreshing = true; connectionStatus = ""
+            do {
+                _ = try await remote.call("thread/resume", params: ["session_id": .string(id), "response_only": true, "history_page": true], snapshotTag: selection.uuidString)
+            } catch {
+                // Keep rejecting deltas until an authoritative snapshot succeeds.
+                if epoch == stamp, opening == selection, self.remote === remote {
+                    connectionStatus = error.localizedDescription
+                }
+                throw error
+            }
         } else if let history, entries.contains(where: { $0.id == id }) {
             let body = try await history.thread(id)
             guard epoch == stamp, opening == selection else { throw CancellationError() }
@@ -559,7 +585,7 @@ struct MessageForkRequest: Identifiable {
         return result["providers"].array.map(RemoteProvider.init)
     }
     func updateSettings(_ settings: ThreadSettings, threadID: String) async throws {
-        guard connected, let remote, let live, live.id == threadID, !live.running, !live.readOnly, !live.archived,
+        guard connected, !refreshing, let remote, let live, live.id == threadID, !live.running, !live.readOnly, !live.archived,
               live.engine.isEmpty || live.engine == "wuu" else { throw NativeError.invalid("请在会话空闲且电脑在线时修改设置") }
         let stamp = epoch, selection = opening
         // The response describes global defaults. The ordered thread/updated event owns this selection.
@@ -567,7 +593,7 @@ struct MessageForkRequest: Identifiable {
         guard epoch == stamp, opening == selection, self.remote === remote else { throw CancellationError() }
     }
     func loadOlder(beforePrepend: () -> Void) async throws {
-        guard connected, let remote, let live, !live.historyCursor.isEmpty, !loadingHistory else { return }
+        guard connected, !refreshing, let remote, let live, !live.historyCursor.isEmpty, !loadingHistory else { return }
         let stamp = epoch, selection = opening
         loadingHistory = true
         defer { if epoch == stamp, opening == selection { loadingHistory = false } }
@@ -598,11 +624,11 @@ struct MessageForkRequest: Identifiable {
         guard epoch == stamp, opening == selection else { throw CancellationError() }
         let thread = ChatThread(result["thread"])
         workspace = thread.cwd
-        activeID = thread.id; live = thread; saved = nil; imagePreviews.clear(); loadingHistory = false; loadingContent = []; attachmentPreview = nil; loadingAttachment = false
+        activeID = thread.id; live = thread; saved = nil; refreshing = false; imagePreviews.clear(); loadingHistory = false; loadingContent = []; attachmentPreview = nil; loadingAttachment = false
         perform { try await self.loadThreads() }
     }
     func send(_ text: String, attachments: [InputAttachment] = []) async throws {
-        guard !sending, let remote, let live, connected, !live.readOnly, !live.archived, !text.isEmpty || !attachments.isEmpty else { throw NativeError.invalid("当前无法发送") }
+        guard !sending, !refreshing, let remote, let live, connected, !live.readOnly, !live.archived, !text.isEmpty || !attachments.isEmpty else { throw NativeError.invalid("当前无法发送") }
         let input = try ChatInput(text: text, attachments: attachments)
         let stamp = epoch
         sending = true; defer { if epoch == stamp { sending = false } }
@@ -610,7 +636,7 @@ struct MessageForkRequest: Identifiable {
         guard epoch == stamp else { throw CancellationError() }
     }
     private func canChangeHistory(_ message: ChatMessage) -> Bool {
-        guard connected, let live, !live.readOnly, !live.archived,
+        guard connected, !refreshing, let live, !live.readOnly, !live.archived,
               let item = live.item(for: message) else { return false }
         return item["status"].string != "in_progress" && !item["read_only"].bool
     }
@@ -684,7 +710,7 @@ struct MessageForkRequest: Identifiable {
         showingHistoryEdit = true
     }
     func submitHistoryEdit(_ edit: HistoryMessageEdit) async throws {
-        guard !edit.submitting, !sending, !historyActionBusy, connected, let remote, let live,
+        guard !edit.submitting, !sending, !historyActionBusy, !refreshing, connected, let remote, let live,
               live.id == edit.threadID, host?.pub == edit.hostID, !live.readOnly, !live.archived else {
             throw NativeError.invalid("请连接原来的电脑和会话后重试")
         }
@@ -772,7 +798,7 @@ struct MessageForkRequest: Identifiable {
         let stamp = epoch
         _ = try await remote.call("thread/archive", params: ["thread_id": .string(thread.id), "archived": .bool(!thread.archived)])
         guard epoch == stamp, self.remote === remote else { return }
-        if activeID == thread.id { opening = UUID(); activeID = nil; live = nil; saved = nil; attachmentPreview = nil; loadingAttachment = false }
+        if activeID == thread.id { opening = UUID(); activeID = nil; live = nil; saved = nil; refreshing = false; attachmentPreview = nil; loadingAttachment = false }
         try await loadThreads()
     }
     func rename(_ id: String, title: String) async throws {
@@ -785,7 +811,7 @@ struct MessageForkRequest: Identifiable {
     }
     enum PendingAction { case remove, resume, steer, requeue }
     func pendingAction(_ message: PendingMessage, action: PendingAction) async throws {
-        guard connected, let remote, let live, live.id == message.value["thread_id"].string, !live.readOnly,
+        guard connected, !refreshing, let remote, let live, live.id == message.value["thread_id"].string, !live.readOnly,
               live.pending.contains(where: { $0.id == message.id }) else { throw NativeError.invalid("消息状态已改变，请重新打开会话") }
         switch action {
         case .resume:

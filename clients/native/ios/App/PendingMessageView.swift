@@ -65,7 +65,7 @@ struct PendingMessageView: View {
     @State private var working = false
     private var status: PendingStatus { PendingStatus(message) }
     private var attachmentCount: Int { message.value["images"].array.count + message.value["files"].array.count }
-    private var editable: Bool { model.connected && model.live?.readOnly != true }
+    private var editable: Bool { model.connected && !model.refreshing && model.live?.readOnly != true }
     private var preview: String {
         let text = message.text.split(whereSeparator: \.isNewline).joined(separator: " ").trimmingCharacters(in: .whitespaces)
         if !text.isEmpty { return text.count > 120 ? String(text.prefix(120)) + "…" : text }
@@ -160,7 +160,7 @@ private struct PendingMessageDetail: View {
     @State private var attachmentPreview: LoadedAttachment?
     private var images: [JSONValue] { message.value["images"].array }
     private var files: [JSONValue] { message.value["files"].array }
-    private var editable: Bool { model.connected && model.live?.readOnly != true }
+    private var editable: Bool { model.connected && !model.refreshing && model.live?.readOnly != true }
     var body: some View {
         NavigationStack {
             ScrollView {
