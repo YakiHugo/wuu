@@ -10,6 +10,10 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Added
 
+- Inline completion providers can refresh asynchronously cached suggestions and
+  receive scoped display, acceptance, dismissal, and dispatch interactions without
+  receiving later draft text. Dispatch events do not imply backend delivery.
+
 - Optional read-only `memory.notebook` service for bounded index and topic reads,
   with source revisions, UTF-8 limits, and explicit missing-file results.
 
