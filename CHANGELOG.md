@@ -10,9 +10,18 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Added
 
+- A Trigger button beside the latest assistant reply's timestamp shows background
+  task wakeups, scheduled checks, and recent output, with a control to cancel
+  automatic continuation without stopping the task.
+
 - The desktop app bundles ripgrep, so search tools and agent shell commands can
   use `rg` on machines without it installed. A user-installed `rg` still takes
   precedence.
+
+### Fixed
+
+- Deliver scheduled background-process checks while the task is still running,
+  without treating them as process-exit notifications.
 
 ## [2026.10.11] - 2026-10-11
 
