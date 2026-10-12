@@ -33,6 +33,9 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Keep the sidebar's recent-history range stable while a first message creates
+  its conversation, avoiding a temporary extra row and subsequent layout jump,
+  including while saving a draft's custom name.
 - Keep reply actions stable when opening background triggers, preserve their
   completion reveal order, and use a compact notification icon for the trigger list.
 
