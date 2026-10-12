@@ -8,6 +8,13 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ## [Unreleased]
 
+### Added
+
+- Plugin APIs for host-rendered inline draft suffixes and bounded, text-only
+  model requests through configured providers, with cancellation and lifecycle
+  handling. Completion plugins supply their own policy; no completion provider
+  is registered by default.
+
 ### Fixed
 
 - Align desktop navigation and control labels with icons using the selected
