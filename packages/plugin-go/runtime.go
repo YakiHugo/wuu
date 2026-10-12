@@ -260,11 +260,12 @@ type ProcessSandboxResult struct {
 }
 
 type Definition struct {
-	Tools                []Tool               `json:"tools,omitempty"`
-	Capabilities         []Capability         `json:"capabilities,omitempty"`
-	RequiredHostServices []HostService        `json:"required_host_services,omitempty"`
-	ProvidedServices     []Service            `json:"provided_services,omitempty"`
-	RequiredServices     []ServiceRequirement `json:"required_services,omitempty"`
+	ModelAdapters        []ModelAdapterDescriptor `json:"model_adapters,omitempty"`
+	Tools                []Tool                   `json:"tools,omitempty"`
+	Capabilities         []Capability             `json:"capabilities,omitempty"`
+	RequiredHostServices []HostService            `json:"required_host_services,omitempty"`
+	ProvidedServices     []Service                `json:"provided_services,omitempty"`
+	RequiredServices     []ServiceRequirement     `json:"required_services,omitempty"`
 }
 
 type ToolCall struct {
@@ -285,14 +286,16 @@ type ToolCall struct {
 }
 
 type ContentPart struct {
-	Type     string                `json:"type"`
-	Text     string                `json:"text,omitempty"`
-	Data     string                `json:"data,omitempty"`
-	MIMEType string                `json:"mime_type,omitempty"`
-	URI      string                `json:"uri,omitempty"`
-	Name     string                `json:"name,omitempty"`
-	Resource json.RawMessage       `json:"resource,omitempty"`
-	Artifact *ArtifactPresentation `json:"artifact,omitempty"`
+	// RemoteRef is an output-only deferred-media reference carried by model snapshots.
+	RemoteRef string                `json:"remote_ref,omitempty"`
+	Type      string                `json:"type"`
+	Text      string                `json:"text,omitempty"`
+	Data      string                `json:"data,omitempty"`
+	MIMEType  string                `json:"mime_type,omitempty"`
+	URI       string                `json:"uri,omitempty"`
+	Name      string                `json:"name,omitempty"`
+	Resource  json.RawMessage       `json:"resource,omitempty"`
+	Artifact  *ArtifactPresentation `json:"artifact,omitempty"`
 }
 
 type ArtifactPresentation struct {
@@ -890,6 +893,8 @@ type Handler struct {
 	// execution and each other. Opt in only for handlers safe under concurrent
 	// access; all other requests retain ordered dispatch. Initialize completes
 	// before these handlers run, and shutdown waits for them to finish.
+	// model.adapter and model.middleware are always reentrant so callbacks can
+	// delegate model work through the host without deadlocking their caller.
 	ConcurrentCapabilities []string
 
 	Definition       Definition
@@ -1106,9 +1111,11 @@ type rpcError struct {
 // goroutine that later reads any execution.cancel frame — so a cancel can
 // never arrive before the registration it targets.
 type queuedDispatch struct {
-	request rpcRequest
-	ctx     context.Context
-	release func()
+	request         rpcRequest
+	ctx             context.Context
+	release         func()
+	lifecycleDone   chan struct{}
+	priorConcurrent *sync.WaitGroup
 }
 
 func Serve(ctx context.Context, handler Handler) error {
@@ -1127,7 +1134,6 @@ func ServeIO(ctx context.Context, input io.Reader, output io.Writer, handler Han
 	incomingRequests := make(chan queuedDispatch)
 	requests := make(chan queuedDispatch)
 	workerDone := make(chan error, 1)
-	var initialized atomic.Bool
 	var concurrent sync.WaitGroup
 	defer func() {
 		cancel()
@@ -1137,13 +1143,10 @@ func ServeIO(ctx context.Context, input io.Reader, output io.Writer, handler Han
 	go queueRequests(serveCtx, incomingRequests, requests)
 	go func() {
 		for envelope := range requests {
-			if envelope.request.Method == "shutdown" {
-				concurrent.Wait()
+			if envelope.priorConcurrent != nil {
+				envelope.priorConcurrent.Wait()
 			}
 			result, stop, err := dispatch(envelope.ctx, client, handler, envelope.request)
-			if envelope.request.Method == "initialize" && err == nil {
-				initialized.Store(true)
-			}
 			if envelope.release != nil {
 				envelope.release()
 			}
@@ -1155,6 +1158,9 @@ func ServeIO(ctx context.Context, input io.Reader, output io.Writer, handler Han
 				workerDone <- writeErr
 				return
 			}
+			if envelope.lifecycleDone != nil {
+				close(envelope.lifecycleDone)
+			}
 			if stop {
 				workerDone <- nil
 				return
@@ -1164,6 +1170,10 @@ func ServeIO(ctx context.Context, input io.Reader, output io.Writer, handler Han
 	}()
 
 	acceptConcurrent := true
+	initializationSeen := false
+	lifecycleReady := make(chan struct{})
+	close(lifecycleReady)
+	concurrentEpoch := &sync.WaitGroup{}
 	for scanner.Scan() {
 		if err := serveCtx.Err(); err != nil {
 			client.closeTransport(err)
@@ -1203,18 +1213,38 @@ func ServeIO(ctx context.Context, input io.Reader, output io.Writer, handler Han
 			_ = json.Unmarshal(request.Params, &probe)
 			envelope.ctx, envelope.release = client.trackExecution(serveCtx, probe.ExecutionID)
 		}
+		if request.Method == "initialize" {
+			initializationSeen = true
+		}
+		if request.Method == "initialize" || request.Method == "activate" || request.Method == "shutdown" {
+			// Each lifecycle waits only for concurrency admitted before its frame.
+			// Later callbacks wait for this barrier outside the serial work queue,
+			// so ordinary handlers after activation can still reenter an adapter.
+			envelope.priorConcurrent = concurrentEpoch
+			envelope.lifecycleDone = make(chan struct{})
+			lifecycleReady = envelope.lifecycleDone
+			concurrentEpoch = &sync.WaitGroup{}
+		}
 		if request.Method == "shutdown" {
 			acceptConcurrent = false
 		}
-		if acceptConcurrent && initialized.Load() && request.Method == "capability.invoke" {
+		if acceptConcurrent && initializationSeen && request.Method == "capability.invoke" {
 			var call CapabilityCall
 			_ = json.Unmarshal(request.Params, &call)
-			if slices.Contains(handler.ConcurrentCapabilities, call.Capability) {
+			if call.Capability == CapabilityModelAdapter || call.Capability == CapabilityModelMiddleware || slices.Contains(handler.ConcurrentCapabilities, call.Capability) {
+				ready, epoch := lifecycleReady, concurrentEpoch
 				concurrent.Add(1)
+				epoch.Add(1)
 				go func() {
 					defer concurrent.Done()
+					defer epoch.Done()
 					if envelope.release != nil {
 						defer envelope.release()
+					}
+					select {
+					case <-ready:
+					case <-serveCtx.Done():
+						return
 					}
 					result, _, err := dispatch(envelope.ctx, client, handler, envelope.request)
 					response := rpcResponse{ID: envelope.request.ID, Result: result}
