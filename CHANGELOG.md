@@ -85,6 +85,10 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
   retry action, including attachments restored after a failed send. Retrying
   prepares the file again without sending the message automatically. If sending
   fails after preparation completes, restore the ready attachment and preview.
+- Refresh local skill instructions and metadata without restarting the runtime.
+  Model rounds adopt changed catalogs while loaded history and plugin package
+  generations remain pinned; stale or invalid file identities fail closed.
+
 - Honor manual-only skill invocation settings when loading skills by name, and
   recognize reachable plugin and MCP tools in skill requirements without
   enabling unavailable tools or changing permissions. Session tool restrictions

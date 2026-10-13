@@ -309,7 +309,15 @@ func (t *Toolkit) CloneForRoot(rootDir string) (*Toolkit, error) {
 		OnSessionWorkspaceChanged: t.env.OnSessionWorkspaceChanged,
 	}
 
-	env.skillCatalog.Store(t.env.skillCatalog.Load())
+	catalog := t.env.skillCatalog.Load()
+	if catalog != nil && abs != t.env.RootDir {
+		rebound := *catalog
+		// Discovery closures belong to their configured root. Runtime callers
+		// bind destination discovery after installing that checkout's skills.
+		rebound.refresh, rebound.baseline = nil, ""
+		catalog = &rebound
+	}
+	env.skillCatalog.Store(catalog)
 
 	clone := &Toolkit{
 		env:                 &env,
@@ -537,6 +545,8 @@ func (t *Toolkit) SetSkills(s []skills.Skill) {
 		previous := t.env.skillCatalog.Load()
 		if previous != nil {
 			catalog.available = previous.available
+			catalog.refresh = previous.refresh
+			catalog.baseline = previous.baseline
 		}
 		if t.env.skillCatalog.CompareAndSwap(previous, catalog) {
 			return
@@ -689,6 +699,19 @@ func (t *Toolkit) DisableTools(names ...string) {
 // SetToolPolicy binds an immutable session restriction before execution. Clones
 // retain it, including for tools discovered after the session was configured.
 func (t *Toolkit) SetToolPolicy(allowed func(string) bool) {
+	// The initial prompt was assembled before session attenuation. Preserve its
+	// catalog baseline so the next model boundary can append the corrected view.
+	for {
+		catalog := t.env.skillCatalog.Load()
+		if catalog == nil || catalog.baseline != "" {
+			break
+		}
+		next := *catalog
+		next.baseline = skills.FormatAvailable(t.env.VisibleSkills(), true)
+		if t.env.skillCatalog.CompareAndSwap(catalog, &next) {
+			break
+		}
+	}
 	t.toolPolicy = allowed
 }
 
