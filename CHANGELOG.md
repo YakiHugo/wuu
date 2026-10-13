@@ -126,6 +126,10 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 - Disconnecting or reconnecting an MCP server cancels older connection attempts,
   preventing queued startup, delayed initialization or tool discovery from
   restoring a stopped connection or replacing its newer tools and status.
+- Share one Codex startup across concurrent sessions, retry failed or closed
+  hosts on later turns, and release each turn's process ownership without
+  interrupting other sessions. Keep healthy hosts warm until their app-server
+  owners shut down or switch engines.
 
 - Remember iOS model and reasoning choices for new conversations per account,
   computer and engine, including first sends without reopening settings and app relaunches.
