@@ -76,6 +76,10 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
   or losing conversation drafts. Retries recover loading, page-fetch, and rendering
   errors, refresh workspace file metadata, preserve the requested page, and cancel
   the previous viewer when switching files or closing.
+- Keep unreadable composer attachments in their original draft with an explicit
+  retry action, including attachments restored after a failed send. Retrying
+  prepares the file again without sending the message automatically. If sending
+  fails after preparation completes, restore the ready attachment and preview.
 
 - Remember iOS model and reasoning choices for new conversations per account,
   computer and engine, including first sends without reopening settings and app relaunches.
