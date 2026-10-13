@@ -96,6 +96,9 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 - Bound skill resource sampling for both selected skills and model tool calls,
   honor request cancellation, and identify incomplete filename hints without
   changing the resource base directory.
+- MCP OAuth logout and newer logins now fence late token exchanges and refresh
+  writes across processes, preventing older credentials from becoming active
+  again after logout or a newer login.
 
 - Bind saved MCP OAuth credentials to the resource used for login, require
   reauthentication after resource changes, and prevent credentials from reaching
