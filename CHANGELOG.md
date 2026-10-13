@@ -53,6 +53,9 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 - Bound plugin runtime shutdown, retire undeliverable execution cancellations,
   preserve shutdown failures, and cap stderr so stalled or noisy extensions
   cannot strand retirement.
+- Bound asynchronous desktop plugin startup, cancel superseded staging promptly,
+  and let optional consumers proceed after a provider times out while retaining
+  the last working replacement generation.
 
 - Remember iOS model and reasoning choices for new conversations per account,
   computer and engine, including first sends without reopening settings and app relaunches.
