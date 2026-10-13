@@ -126,6 +126,10 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 - Disconnecting or reconnecting an MCP server cancels older connection attempts,
   preventing queued startup, delayed initialization or tool discovery from
   restoring a stopped connection or replacing its newer tools and status.
+- Keep resumed Codex turns in the admitted conversation workspace, including
+  linked worktree switches, and honor the turn's effective permission boundary
+  without restarting the native conversation.
+
 - Preserve Codex-native context when forking or editing conversation history.
   Validate whole-turn cutoffs, commit the new native binding with the visible
   history, and refuse unsupported cuts instead of silently losing context.
