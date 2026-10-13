@@ -96,6 +96,10 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 - Bound skill resource sampling for both selected skills and model tool calls,
   honor request cancellation, and identify incomplete filename hints without
   changing the resource base directory.
+- Remote MCP POST streams now close when their call completes or is cancelled.
+  An interrupted or malformed response fails only its originating call promptly,
+  without replaying tools or disconnecting healthy calls and notifications.
+  Responses cannot resolve a different call through a mismatched POST request ID.
 - MCP OAuth logout and newer logins now fence late token exchanges and refresh
   writes across processes, preventing older credentials from becoming active
   again after logout or a newer login.
