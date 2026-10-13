@@ -126,6 +126,15 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 - Disconnecting or reconnecting an MCP server cancels older connection attempts,
   preventing queued startup, delayed initialization or tool discovery from
   restoring a stopped connection or replacing its newer tools and status.
+- Keep stopped agent subtrees stopped when child cancellation results arrive.
+  Parked parents now finish cancellation durably, and explicit follow-ups reopen
+  their edges for later work without blocking shutdown cancellation or restart recovery.
+- Keep shutdown cancellation from waiting on durable worker terminal retries,
+  allowing server close to hand unacknowledged state to recovery.
+
+- Persist accepted human queue and steering input before acknowledging it, with
+  durable edits, cancellation, and stable-ID deduplication. After a core restart,
+  unconsumed input returns as held work instead of automatically executing.
 - Apply the selected Codex reasoning effort to native turns, including changes
   and restores to the configured or model default on resumed conversations.
 
