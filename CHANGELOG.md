@@ -56,6 +56,8 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 - Bound asynchronous desktop plugin startup, cancel superseded staging promptly,
   and let optional consumers proceed after a provider times out while retaining
   the last working replacement generation.
+- Keep live plugin executions visible in diagnostics after hot reload, with
+  generation-scoped identities that distinguish overlapping execution IDs.
 
 - Back off repeated automatic plugin refresh failures without delaying changed
   candidates or manual retries, while retaining healthy running generations.
