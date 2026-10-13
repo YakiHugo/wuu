@@ -15,6 +15,9 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
   per draft and 24 hours; closing the window or disabling recovery clears them.
   Attachments and quotes are excluded.
 
+- Bounded per-server MCP tool execution budgets through `tool_timeout_ms`,
+  shared by native and PTC calls while preserving earlier caller cancellation
+  and the 30-second default.
 - iOS conversation settings can select a computer's available engine before the
   first message, and edit the selected engine's models, reasoning and advertised
   permission modes. Existing conversations display their bound engine.

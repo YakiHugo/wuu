@@ -160,6 +160,13 @@ func (m *Manager) add(ctx context.Context, cfg ServerConfig, mode connectionMode
 		}
 		return err
 	}
+	if _, err := cfg.ToolTimeoutMS.Duration(); err != nil {
+		err = fmt.Errorf("mcp server %q: %w", cfg.Name, err)
+		if statusErr := m.recordConnectionStatus(generation, ServerStatus{Name: cfg.Name, State: MCPServerStateFailed, AuthStatus: authStatusForConfig(cfg), Error: err.Error()}, false); statusErr != nil {
+			return statusErr
+		}
+		return err
+	}
 	if !cfg.IsEnabled() {
 		return nil
 	}
@@ -649,7 +656,7 @@ func (m *Manager) NativeTools() []NativeTool {
 			out = append(out, NativeTool{
 				Definition: definition,
 				Client:     client,
-				Timeout:    30 * time.Second,
+				Timeout:    client.ToolTimeout(),
 				Provenance: extensions.Provenance{Kind: extensions.KindMCP, Source: name, Scope: "user"},
 			})
 		}
