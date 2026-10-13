@@ -68,6 +68,11 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
   candidates or manual retries, while retaining healthy running generations.
 - Prevent cancelled queued plugin tool, capability, and service calls from
   entering their handlers while preserving lifecycle cleanup.
+- Failed PDF previews can retry in the same panel without reloading the window
+  or losing conversation drafts. Retries recover loading, page-fetch, and rendering
+  errors, refresh workspace file metadata, preserve the requested page, and cancel
+  the previous viewer when switching files or closing.
+
 - Remember iOS model and reasoning choices for new conversations per account,
   computer and engine, including first sends without reopening settings and app relaunches.
 - Preserve the iOS reading position across lazy layout updates when loading older
