@@ -564,14 +564,14 @@ func (s *Session) startTurn(ctx context.Context, inputs []UserInput) (TurnStartR
 	// with the sandbox so its implicit writable CWD cannot remain on the old
 	// worktree while WritableRoots points at the newly selected workspace.
 	err := s.client.Request(ctx, MethodTurnStart, TurnStartParams{
-		CWD:             s.rootDir,
-		ThreadID:        s.ref,
-		Input:           inputs,
-		Model:           s.model,
-		ReasoningEffort: s.effort,
-		ServiceTier:     s.serviceTier(),
-		ApprovalPolicy:  approval,
-		SandboxPolicy:   &sandboxPolicy,
+		CWD:            s.rootDir,
+		ThreadID:       s.ref,
+		Input:          inputs,
+		Model:          s.model,
+		Effort:         s.effort,
+		ServiceTier:    s.serviceTier(),
+		ApprovalPolicy: approval,
+		SandboxPolicy:  &sandboxPolicy,
 	}, &resp)
 	return resp, err
 }

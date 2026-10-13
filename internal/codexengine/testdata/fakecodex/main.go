@@ -57,15 +57,21 @@ func waitForGate(name string) {
 }
 
 func main() {
-	threadCount, turnCount := 0, 0
-	turns := make(map[string]string)
-	modes := make(map[string]string)
 	record("started")
+	// A missing/null turn effort retains the native setting. Model discovery
+	// uses reasoningEffort, but turn/start accepts effort.
+	effectiveEffort := os.Getenv("WUU_TEST_CODEX_DEFAULT_EFFORT")
+	if effectiveEffort == "" {
+		effectiveEffort = "high"
+	}
 	defer func() {
 		record("exiting")
 		waitForGate("WUU_TEST_CODEX_EXIT_GATE")
 		record("exited")
 	}()
+	threadCount, turnCount := 0, 0
+	turns := make(map[string]string)
+	modes := make(map[string]string)
 	workspace := newWorkspaceProbe()
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 1024*1024), 16*1024*1024)
@@ -109,7 +115,11 @@ func main() {
 		case "model/list":
 			respond(req.ID, map[string]any{"data": []any{map[string]any{"id": "gpt-6-astra", "model": "gpt-6-astra", "displayName": "GPT-6 Astra", "isDefault": true, "defaultReasoningEffort": "high", "supportedReasoningEfforts": []any{map[string]any{"reasoningEffort": "low"}, map[string]any{"reasoningEffort": "high"}}, "serviceTiers": []any{map[string]any{"id": "fast"}}, "defaultServiceTier": os.Getenv("WUU_TEST_CODEX_DEFAULT_TIER")}}})
 		case "config/read":
-			respond(req.ID, map[string]any{"config": map[string]any{"service_tier": os.Getenv("WUU_TEST_CODEX_DEFAULT_TIER")}})
+			var effort any
+			if configured := os.Getenv("WUU_TEST_CODEX_DEFAULT_EFFORT"); configured != "" {
+				effort = configured
+			}
+			respond(req.ID, map[string]any{"config": map[string]any{"service_tier": os.Getenv("WUU_TEST_CODEX_DEFAULT_TIER"), "model_reasoning_effort": effort}})
 		case "thread/start":
 			threadCount++
 			threadID := fmt.Sprintf("codex-thread-%d", threadCount)
@@ -141,12 +151,20 @@ func main() {
 				}
 			}
 			var params struct {
-				ThreadID string `json:"threadId"`
+				ThreadID string  `json:"threadId"`
+				Effort   *string `json:"effort"`
 				Input    []struct {
 					Text string `json:"text"`
 				} `json:"input"`
 			}
 			_ = json.Unmarshal(req.Params, &params)
+			if params.Effort != nil {
+				effectiveEffort = *params.Effort
+			}
+			text := "Hello from codex."
+			if os.Getenv("WUU_TEST_CODEX_REPORT_EFFORT") == "1" {
+				text = "Reasoning effort: " + effectiveEffort
+			}
 			turnCount++
 			turnID := fmt.Sprintf("turn-%d", turnCount)
 			turns[params.ThreadID] = turnID
@@ -155,6 +173,10 @@ func main() {
 				mode = strings.TrimPrefix(params.Input[0].Text, "e2e:")
 			}
 			modes[params.ThreadID] = mode
+			split := len("Hello from ")
+			if os.Getenv("WUU_TEST_CODEX_REPORT_EFFORT") == "1" {
+				split = len(text) / 2
+			}
 			if mode != "cancel-start-confirmed" && mode != "start-response-invalid" {
 				respond(req.ID, map[string]any{
 					"turn": map[string]any{"id": turnID},
@@ -173,7 +195,7 @@ func main() {
 				"threadId": params.ThreadID,
 				"turnId":   turnID,
 				"itemId":   "item-1",
-				"delta":    "Hello from ",
+				"delta":    text[:split],
 			})
 			switch mode {
 			case "crash":
@@ -204,7 +226,7 @@ func main() {
 				"threadId": params.ThreadID,
 				"turnId":   turnID,
 				"itemId":   "item-1",
-				"delta":    "codex.",
+				"delta":    text[split:],
 			})
 			notify("thread/tokenUsage/updated", map[string]any{
 				"threadId": params.ThreadID,
@@ -217,7 +239,7 @@ func main() {
 			notify("item/completed", map[string]any{
 				"threadId": params.ThreadID,
 				"turnId":   turnID,
-				"item":     map[string]any{"id": "item-1", "type": "agentMessage", "text": "Hello from codex.", "phase": "final_answer"},
+				"item":     map[string]any{"id": "item-1", "type": "agentMessage", "text": text, "phase": "final_answer"},
 			})
 			notify("turn/completed", map[string]any{
 				"threadId": params.ThreadID,
