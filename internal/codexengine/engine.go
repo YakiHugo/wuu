@@ -85,6 +85,7 @@ func (e *Engine) SessionForThread(ctx context.Context, binding agentengine.Threa
 		mcpServers:     binding.MCPServers,
 		externalRef:    binding.ExternalRef,
 		persistRef:     binding.PersistRef,
+		persistTurnRef: binding.PersistTurnRef,
 		approval:       binding.RequestApproval,
 	})
 }
@@ -100,6 +101,7 @@ type sessionOptions struct {
 	mcpServers     []agentengine.MCPServer
 	externalRef    string
 	persistRef     func(string) error
+	persistTurnRef func(string, bool) error
 	approval       agentengine.ApprovalHandler
 }
 
@@ -128,6 +130,7 @@ func (e *Engine) newSession(ctx context.Context, opts sessionOptions) (agentengi
 		mcpServers:     append([]agentengine.MCPServer(nil), opts.mcpServers...),
 		ref:            opts.externalRef,
 		persist:        opts.persistRef,
+		persistTurnRef: opts.persistTurnRef,
 		approval:       approval,
 	}, nil
 }
@@ -149,11 +152,12 @@ type Session struct {
 	instructions   string
 	mcpServers     []agentengine.MCPServer
 
-	mu          sync.Mutex
-	ref         string
-	persist     func(string) error
-	approval    agentengine.ApprovalHandler
-	approvalCtx context.Context
+	mu             sync.Mutex
+	ref            string
+	persist        func(string) error
+	persistTurnRef func(string, bool) error
+	approval       agentengine.ApprovalHandler
+	approvalCtx    context.Context
 }
 
 // RunTurn starts a codex turn and translates its notifications into Wuu
@@ -164,6 +168,45 @@ func (s *Session) RunTurn(ctx context.Context, input agentengine.TurnInput, sink
 	}
 	if err := ctx.Err(); err != nil {
 		return agentengine.TurnResult{}, err
+	}
+	// Pending is written only by the native admission protocol below. Missing
+	// IDs in older conversations do not imply uncertain work and stay usable.
+	if s.persistTurnRef != nil {
+		var native *historyThread
+		for _, message := range input.History {
+			if !message.EngineTurnPending {
+				continue
+			}
+			if message.EngineTurnID == "" {
+				return agentengine.TurnResult{}, errors.New("an earlier Codex admission has no verified native turn ID; fork an earlier completed turn before continuing")
+			}
+			if native == nil {
+				var response struct {
+					Thread historyThread `json:"thread"`
+				}
+				if err := s.client.Request(ctx, "thread/read", map[string]any{"threadId": s.ref, "includeTurns": true}, &response); err != nil {
+					return agentengine.TurnResult{}, fmt.Errorf("verify pending Codex turn: %w", err)
+				}
+				if response.Thread.ID != s.ref || response.Thread.Turns == nil {
+					return agentengine.TurnResult{}, errors.New("Codex did not return the pending native history; no new input was sent")
+				}
+				native = &response.Thread
+			}
+			matches := 0
+			terminal := false
+			for _, turn := range native.Turns {
+				if turn.ID == message.EngineTurnID {
+					matches++
+					terminal = turn.Status == "completed" || turn.Status == "interrupted" || turn.Status == "failed"
+				}
+			}
+			if matches != 1 || !terminal {
+				return agentengine.TurnResult{}, errors.New("an earlier Codex turn still has an unconfirmed native outcome; no new input was sent")
+			}
+			if err := s.persistTurnRef(message.EngineTurnID, false); err != nil {
+				return agentengine.TurnResult{}, fmt.Errorf("settle recovered native turn: %w", err)
+			}
+		}
 	}
 	s.mu.Lock()
 	s.approvalCtx = ctx
@@ -186,6 +229,28 @@ func (s *Session) RunTurn(ctx context.Context, input agentengine.TurnInput, sink
 	done := make(chan turnOutcome, 1)
 	sub := newTurnSubscription(s.client, s.ref, sink, done)
 	defer sub.close()
+	if s.persistTurnRef != nil {
+		if err := s.persistTurnRef("", true); err != nil {
+			return agentengine.TurnResult{}, fmt.Errorf("persist native turn admission: %w", err)
+		}
+	}
+	settle := func(out turnOutcome) (agentengine.TurnResult, error) {
+		// Stream failure and transport shutdown are not proof of native completion.
+		// Read the independently retained terminal notification even when partial
+		// output failed before its event could be delivered to the stream consumer.
+		sub.mu.Lock()
+		status, turnID, nativeDone := sub.nativeStatus, sub.turnID, sub.nativeDone
+		sub.mu.Unlock()
+		if s.persistTurnRef != nil && nativeDone {
+			switch status {
+			case "completed", "interrupted", "failed":
+				if err := s.persistTurnRef(turnID, false); err != nil {
+					out.err = errors.Join(out.err, fmt.Errorf("persist native turn settlement: %w", err))
+				}
+			}
+		}
+		return out.result, out.err
+	}
 	turnResp, err := s.startTurn(ctx, inputs)
 	if err == nil {
 		if strings.TrimSpace(turnResp.Turn.ID) == "" {
@@ -194,16 +259,31 @@ func (s *Session) RunTurn(ctx context.Context, input agentengine.TurnInput, sink
 			sub.setTurnID(turnResp.Turn.ID)
 		}
 	}
+	sub.mu.Lock()
+	turnID := sub.turnID
+	sub.mu.Unlock()
+	if turnID != "" && s.persistTurnRef != nil {
+		if persistErr := s.persistTurnRef(turnID, true); persistErr != nil {
+			err = errors.Join(err, fmt.Errorf("persist native turn boundary: %w", persistErr))
+		}
+	}
 	if err != nil {
-		// Only an explicit RPC rejection proves that the request did not start
-		// a turn. Cancellation or an invalid response can leave it executing.
 		var rejected *RPCError
-		if !errors.As(err, &rejected) {
+		definitelyRejected := errors.As(err, &rejected) &&
+			(rejected.Code == -32600 || rejected.Code == -32601 || rejected.Code == -32602)
+		if definitelyRejected && turnID == "" {
+			if s.persistTurnRef != nil {
+				err = errors.Join(err, s.persistTurnRef("", false))
+			}
+		} else {
+			// Internal errors and invalid/lost responses may follow acceptance.
+			// Retain partial output and require bounded native stop confirmation.
 			s.stopNativeTurn(sub)
 		}
 		sub.fail(err)
 		out := <-done
-		return out.result, err
+		out.err = errors.Join(err, out.err)
+		return settle(out)
 	}
 
 	select {
@@ -214,15 +294,13 @@ func (s *Session) RunTurn(ctx context.Context, input agentengine.TurnInput, sink
 		if streamFailed {
 			s.stopNativeTurn(sub)
 		}
-		return out.result, out.err
+		return settle(out)
 	case <-ctx.Done():
 		s.stopNativeTurn(sub)
 		sub.fail(ctx.Err())
 		out := <-done
-		if out.err == nil || errors.Is(out.err, context.Canceled) {
-			return out.result, ctx.Err()
-		}
-		return out.result, errors.Join(ctx.Err(), out.err)
+		out.err = errors.Join(ctx.Err(), out.err)
+		return settle(out)
 	}
 }
 
@@ -516,6 +594,20 @@ func (s *Session) interrupt(ctx context.Context, turnID string) error {
 	}, &out)
 }
 
+const nativeCleanupTimeout = 2 * time.Second
+
+// Cleanup must outlive a canceled turn without letting an unresponsive engine
+// hold its Wuu execution lease forever.
+func (s *Session) interruptBestEffort(turnID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), nativeCleanupTimeout)
+	defer cancel()
+	if err := s.interrupt(ctx, turnID); err != nil {
+		providers.DebugLogf("interrupt Codex turn %q during cleanup: %v", turnID, err)
+		return err
+	}
+	return nil
+}
+
 // Interrupt cancels the in-flight turn via turn/interrupt.
 func (s *Session) Interrupt(ctx context.Context, reason string) error {
 	if s == nil {
@@ -643,6 +735,7 @@ type turnSubscription struct {
 	terminal        *turnNotification
 	terminalTurnID  string
 	nativeStopped   chan struct{}
+	nativeStatus    string
 	nativeDone      bool
 	unsubs          []func()
 	labels          map[string]string
@@ -754,6 +847,7 @@ func (sub *turnSubscription) enqueue(notification turnNotification) {
 		// never hide proof that the native turn has stopped.
 		sub.terminal = &notification
 		sub.terminalTurnID = envelope.TurnID
+		sub.nativeStatus = envelope.Turn.Status
 		if sub.turnID != "" && !sub.nativeDone {
 			sub.nativeDone = true
 			close(sub.nativeStopped)
