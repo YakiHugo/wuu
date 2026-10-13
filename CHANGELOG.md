@@ -18,6 +18,9 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 - Bounded per-server MCP tool execution budgets through `tool_timeout_ms`,
   shared by native and PTC calls while preserving earlier caller cancellation
   and the 30-second default.
+- Steer active Codex turns with stable human-message IDs and native turn fencing.
+  Confirmed input is saved once; rejected or uncertain delivery remains held,
+  with unconfirmed submissions protected from replay after restart.
 - iOS conversation settings can select a computer's available engine before the
   first message, and edit the selected engine's models, reasoning and advertised
   permission modes. Existing conversations display their bound engine.

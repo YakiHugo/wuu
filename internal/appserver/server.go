@@ -126,6 +126,8 @@ type threadState struct {
 	admissionReserved              bool
 	nativeHistoryMutation          bool
 	pendingSteers                  []providers.ChatMessage
+	nativeSteerInFlight            string
+	nativeSteerUnsupported         bool
 	pendingSteerControls           map[string]session.Control
 	SessionControl                 *ThreadSessionControl
 	steerWake                      chan struct{}
