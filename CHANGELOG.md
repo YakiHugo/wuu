@@ -97,6 +97,9 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
   honor request cancellation, and identify incomplete filename hints without
   changing the resource base directory.
 
+- Bind saved MCP OAuth credentials to the resource used for login, require
+  reauthentication after resource changes, and prevent credentials from reaching
+  cross-origin redirects or legacy SSE message endpoints.
 
 - Remember iOS model and reasoning choices for new conversations per account,
   computer and engine, including first sends without reopening settings and app relaunches.
