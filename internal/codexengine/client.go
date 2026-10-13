@@ -344,7 +344,7 @@ func (c *Client) fatal(reason string) {
 	go func() { _ = c.transport.Close() }()
 }
 
-// Close shuts down the client and its transport.
+// Close releases all waiting turns and requests before closing the transport.
 func (c *Client) Close() error {
 	c.terminate(errors.New("codex app-server client closed"))
 	return c.transport.Close()

@@ -23,7 +23,8 @@ type Engine struct {
 	host *Host
 	// RequestApproval bridges Codex's reverse-RPC approval requests to Wuu's
 	// host-owned interaction broker. Nil declines every request.
-	RequestApproval agentengine.ApprovalHandler
+	RequestApproval  agentengine.ApprovalHandler
+	RequestUserInput agentengine.UserInputHandler
 }
 
 // NewEngine builds the codex engine around a host (binary discovery +
@@ -47,6 +48,7 @@ func (e *Engine) Descriptor(context.Context) (agentengine.Descriptor, error) {
 			"native-session-resume",
 			"active-turn-steering",
 			"approval-requests",
+			"user-input-requests",
 			// engine/list with include_quota reads this engine's account
 			// allowance, so clients can reserve room for it beforehand.
 			"account-quota",
@@ -88,6 +90,7 @@ func (e *Engine) SessionForThread(ctx context.Context, binding agentengine.Threa
 		persistRef:     binding.PersistRef,
 		persistTurnRef: binding.PersistTurnRef,
 		approval:       binding.RequestApproval,
+		userInput:      binding.RequestUserInput,
 	})
 }
 
@@ -104,6 +107,7 @@ type sessionOptions struct {
 	persistRef     func(string) error
 	persistTurnRef func(string, bool) error
 	approval       agentengine.ApprovalHandler
+	userInput      agentengine.UserInputHandler
 }
 
 func (e *Engine) newSession(ctx context.Context, opts sessionOptions) (agentengine.Session, error) {
@@ -117,6 +121,10 @@ func (e *Engine) newSession(ctx context.Context, opts sessionOptions) (agentengi
 	approval := opts.approval
 	if approval == nil {
 		approval = e.RequestApproval
+	}
+	userInput := opts.userInput
+	if userInput == nil {
+		userInput = e.RequestUserInput
 	}
 	return &Session{
 		client:         client,
@@ -134,6 +142,7 @@ func (e *Engine) newSession(ctx context.Context, opts sessionOptions) (agentengi
 		persistTurnRef: opts.persistTurnRef,
 		approval:       approval,
 		steerReady:     make(chan struct{}),
+		userInput:      userInput,
 	}, nil
 }
 
@@ -154,15 +163,18 @@ type Session struct {
 	instructions   string
 	mcpServers     []agentengine.MCPServer
 
-	mu             sync.Mutex
-	ref            string
-	persist        func(string) error
-	persistTurnRef func(string, bool) error
-	approval       agentengine.ApprovalHandler
-	approvalCtx    context.Context
-	activeTurnID   string
-	steerReady     chan struct{}
-	steerReadyOnce sync.Once
+	mu                   sync.Mutex
+	ref                  string
+	persist              func(string) error
+	persistTurnRef       func(string, bool) error
+	approval             agentengine.ApprovalHandler
+	approvalCtx          context.Context
+	activeTurnID         string
+	steerReady           chan struct{}
+	steerReadyOnce       sync.Once
+	userInput            agentengine.UserInputHandler
+	userInputDefaultMode bool
+	cancelTurn           context.CancelFunc
 }
 
 // RunTurn starts a codex turn and translates its notifications into Wuu
@@ -214,13 +226,17 @@ func (s *Session) RunTurn(ctx context.Context, input agentengine.TurnInput, sink
 			}
 		}
 	}
+	ctx, cancel := context.WithCancel(ctx)
 	s.mu.Lock()
 	s.approvalCtx = ctx
+	s.cancelTurn = cancel
 	s.mu.Unlock()
 	defer func() {
+		cancel()
 		s.mu.Lock()
 		s.approvalCtx = nil
 		s.activeTurnID = ""
+		s.cancelTurn = nil
 		s.mu.Unlock()
 	}()
 	// First turn: create the codex thread and persist its id so later turns
@@ -236,6 +252,22 @@ func (s *Session) RunTurn(ctx context.Context, input agentengine.TurnInput, sink
 	done := make(chan turnOutcome, 1)
 	sub := newTurnSubscription(s.client, s.ref, sink, done)
 	defer sub.close()
+	// Questions use the same authenticated native identity as output. A
+	// turn/started notification may precede a delayed or lost start response.
+	questionCtx, cancelQuestions := context.WithCancel(ctx)
+	defer cancelQuestions()
+	go func() {
+		select {
+		case <-sub.nativeStopped:
+		case <-s.client.done:
+		case <-questionCtx.Done():
+		}
+		cancelQuestions()
+	}()
+	removeInput := s.client.OnRequest(MethodToolRequestUserInput, func(raw json.RawMessage) (any, error) {
+		return s.handleUserInput(questionCtx, sub, raw)
+	})
+	defer removeInput()
 	if s.persistTurnRef != nil {
 		if err := s.persistTurnRef("", true); err != nil {
 			return agentengine.TurnResult{}, fmt.Errorf("persist native turn admission: %w", err)
@@ -324,7 +356,7 @@ func (s *Session) stopNativeTurn(sub *turnSubscription) {
 		return
 	default:
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), nativeCleanupTimeout)
 	defer cancel()
 	// turn/started can identify an accepted turn even when the start response
 	// is lost. Do not send an empty ID or discard its eventual stop proof.
@@ -510,7 +542,7 @@ func (s *Session) matchesThread(threadID string) bool {
 
 // ensureThread runs thread/start once and persists the native thread id.
 func (s *Session) ensureThread(ctx context.Context) error {
-	if s.speed == "" || s.model == "" || s.effort == "" {
+	if s.userInput != nil || s.speed == "" || s.model == "" || s.effort == "" {
 		// Omitting fields on a warm native thread inherits its previous
 		// overrides. Resolve the native configuration before every new binding.
 		var response struct {
@@ -518,10 +550,17 @@ func (s *Session) ensureThread(ctx context.Context) error {
 				Model       string          `json:"model"`
 				Effort      ReasoningEffort `json:"model_reasoning_effort"`
 				ServiceTier *string         `json:"service_tier"`
+				Features    struct {
+					DefaultModeUserInput *bool `json:"default_mode_request_user_input"`
+				} `json:"features"`
 			} `json:"config"`
 		}
 		if err := s.client.Request(ctx, "config/read", map[string]any{"cwd": s.rootDir, "includeLayers": false}, &response); err != nil {
 			return fmt.Errorf("codex config/read: %w", err)
+		}
+		if s.userInput != nil {
+			configured := response.Config.Features.DefaultModeUserInput
+			s.userInputDefaultMode = configured == nil || *configured
 		}
 		if s.model == "" {
 			s.model = response.Config.Model
@@ -605,6 +644,11 @@ func (s *Session) ensureThread(ctx context.Context) error {
 
 func (s *Session) threadConfig() map[string]any {
 	config := map[string]any{}
+	if s.userInput != nil {
+		// Enable the host question bridge in ordinary native turns while
+		// preserving explicit opt-outs. The native tool-level gate is untouched.
+		config["features.default_mode_request_user_input"] = s.userInputDefaultMode
+	}
 	if len(s.mcpServers) > 0 {
 		servers := make(map[string]any, len(s.mcpServers))
 		for _, server := range s.mcpServers {
@@ -665,18 +709,6 @@ func (s *Session) interrupt(ctx context.Context, turnID string) error {
 
 const nativeCleanupTimeout = 2 * time.Second
 
-// Cleanup must outlive a canceled turn without letting an unresponsive engine
-// hold its Wuu execution lease forever.
-func (s *Session) interruptBestEffort(turnID string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), nativeCleanupTimeout)
-	defer cancel()
-	if err := s.interrupt(ctx, turnID); err != nil {
-		providers.DebugLogf("interrupt Codex turn %q during cleanup: %v", turnID, err)
-		return err
-	}
-	return nil
-}
-
 // Interrupt cancels the in-flight turn via turn/interrupt.
 func (s *Session) Interrupt(ctx context.Context, reason string) error {
 	if s == nil {
@@ -697,8 +729,16 @@ func (s *Session) Interrupt(ctx context.Context, reason string) error {
 // Close releases the client reference held by this session. The shared
 // app-server stays alive while other threads or app-server owners use it.
 func (s *Session) Close(context.Context) error {
-	if s != nil && s.release != nil {
-		s.release()
+	if s != nil {
+		s.mu.Lock()
+		cancel := s.cancelTurn
+		s.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		if s.release != nil {
+			s.release()
+		}
 	}
 	return nil
 }

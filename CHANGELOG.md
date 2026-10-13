@@ -135,6 +135,10 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 - Keep shutdown cancellation from waiting on durable worker terminal retries,
   allowing server close to hand unacknowledged state to recovery.
 
+- Native engine questions now use the existing choice and free-text cards, return
+  answers to the original call, and clear on cancellation or disconnection.
+  Optional answers no longer need to become a separate user message.
+
 - Persist accepted human queue and steering input before acknowledging it, with
   durable edits, cancellation, and stable-ID deduplication. After a core restart,
   unconsumed input returns as held work instead of automatically executing.
