@@ -67,6 +67,10 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Forking a conversation from an assistant reply that streamed in the current
+  session no longer fails with "fork target not found" after the model used
+  several thinking blocks in one step.
+
 - Preserve message-wide Markdown references and unique heading anchors across
   streamed blocks. Mermaid fences keep their source and a stable container
   through loading, settlement, and rendering errors.
