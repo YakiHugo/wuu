@@ -304,6 +304,8 @@ const plugin: RuntimePlugin = {
 
 工具和能力调用具有宿主管理的执行 ID。SDK 提供 `execution.signal`，应传给可取消操作，在信号中止时停止工作。调用返回后，执行作用域关闭；迟到的进度不能重新打开已完成执行，取消也不会等待插件确认。
 
+Go 和 TypeScript 运行时会在进入处理函数前拒绝已取消的工具、能力和服务请求，包括等待其他工作或生命周期屏障的请求。取消某次执行不会跳过清理所需的生命周期回调，并会通知共享该执行 ID 的所有活跃回调。处理函数一旦开始，取消仍是协作式的：应将 Go context 或 TypeScript signal 传给支持取消的操作。取消不能撤销已完成的副作用，也不能强制中断任意插件代码。
+
 App-server 的只读 `plugin/executions/list` 返回 `{ executions: [...] }`，
 包含当前连接运行时的当前 generation，以及仍被活动工作持有的旧 generation。
 每行在宿主局部 `id`、所属 `plugin_id`、可用执行作用域和最新进度之外，增加

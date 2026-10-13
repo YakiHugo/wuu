@@ -398,6 +398,15 @@ Use this only for reentrant handlers: protect shared mutable state and propagate
 
 Tool and capability calls have a host-owned execution ID. The SDK supplies `execution.signal`; pass it to cancellable operations and stop work when it aborts. Returning from the invocation closes its scope. Late progress cannot reopen a completed execution, and cancellation does not wait for the plugin to acknowledge it.
 
+The Go and TypeScript runtimes reject cancelled tool, capability, and service
+requests before entering their handlers, including requests waiting behind other
+work or a lifecycle barrier. Cancelling an execution does not skip lifecycle
+callbacks needed for cleanup, and reaches every live callback sharing that
+execution ID.
+Once a handler has started, cancellation remains cooperative: propagate the Go
+context or TypeScript signal to operations that support it. Cancellation cannot
+undo completed effects or forcibly interrupt arbitrary plugin code.
+
 App-server's read-only `plugin/executions/list` returns `{ executions: [...] }`
 for the connected runtime's current generation and older generations still held
 by active work. Each row adds `generation_id` and `retained` to the host-local

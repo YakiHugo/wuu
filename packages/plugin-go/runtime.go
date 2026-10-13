@@ -934,37 +934,51 @@ type Client struct {
 	executions *executionTable
 }
 
-// executionTable maps live execution IDs to their cancellation functions so
-// an out-of-band execution.cancel frame can preempt the exact running
-// execution. Entries are released when the dispatch returns; a cancel for an
-// unknown or already-closed ID is a no-op and can never hit a later
-// execution.
+// executionTable maps each live execution to all of its callbacks, including
+// nested service calls. Each dispatch releases only its own registration;
+// cancellation snapshots the current registrations and cannot hit a later
+// invocation that reuses the ID.
 type executionTable struct {
 	mu      sync.Mutex
-	cancels map[string]context.CancelFunc
+	cancels map[string]map[*executionRegistration]struct{}
+}
+
+type executionRegistration struct {
+	cancel context.CancelFunc
 }
 
 func newExecutionTable() *executionTable {
-	return &executionTable{cancels: make(map[string]context.CancelFunc)}
+	return &executionTable{cancels: make(map[string]map[*executionRegistration]struct{})}
 }
 
-func (t *executionTable) track(id string, cancel context.CancelFunc) {
+func (t *executionTable) track(id string, cancel context.CancelFunc) *executionRegistration {
+	registration := &executionRegistration{cancel: cancel}
 	t.mu.Lock()
-	t.cancels[id] = cancel
+	if t.cancels[id] == nil {
+		t.cancels[id] = make(map[*executionRegistration]struct{})
+	}
+	t.cancels[id][registration] = struct{}{}
 	t.mu.Unlock()
+	return registration
 }
 
-func (t *executionTable) release(id string) {
+func (t *executionTable) release(id string, registration *executionRegistration) {
 	t.mu.Lock()
-	delete(t.cancels, id)
+	delete(t.cancels[id], registration)
+	if len(t.cancels[id]) == 0 {
+		delete(t.cancels, id)
+	}
 	t.mu.Unlock()
 }
 
 func (t *executionTable) cancelExecution(id string) {
 	t.mu.Lock()
-	cancel := t.cancels[id]
+	cancels := make([]context.CancelFunc, 0, len(t.cancels[id]))
+	for registration := range t.cancels[id] {
+		cancels = append(cancels, registration.cancel)
+	}
 	t.mu.Unlock()
-	if cancel != nil {
+	for _, cancel := range cancels {
 		cancel()
 	}
 }
@@ -986,9 +1000,9 @@ func (c *Client) trackExecution(ctx context.Context, executionID string) (contex
 	}
 	execCtx, cancel := context.WithCancel(ctx)
 	execCtx = context.WithValue(execCtx, executionContextKey{}, executionID)
-	c.executions.track(executionID, cancel)
+	registration := c.executions.track(executionID, cancel)
 	return execCtx, func() {
-		c.executions.release(executionID)
+		c.executions.release(executionID, registration)
 		cancel()
 	}
 }
@@ -1393,6 +1407,11 @@ func dispatch(ctx context.Context, client *Client, handler Handler, request rpcR
 		if err := json.Unmarshal(request.Params, &call); err != nil {
 			return nil, false, err
 		}
+		// Cancellation may arrive while this request waits in the dispatch
+		// queue. Do not enter user code after its execution has been cancelled.
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
 		result, err := handler.ExecuteTool(ctx, client, call)
 		if err != nil {
 			return nil, false, err
@@ -1406,6 +1425,9 @@ func dispatch(ctx context.Context, client *Client, handler Handler, request rpcR
 		}
 		var call CapabilityCall
 		if err := json.Unmarshal(request.Params, &call); err != nil {
+			return nil, false, err
+		}
+		if err := ctx.Err(); err != nil {
 			return nil, false, err
 		}
 		value, err := handler.InvokeCapability(ctx, client, call)
@@ -1424,6 +1446,9 @@ func dispatch(ctx context.Context, client *Client, handler Handler, request rpcR
 		}
 		var call ServiceCall
 		if err := json.Unmarshal(request.Params, &call); err != nil {
+			return nil, false, err
+		}
+		if err := ctx.Err(); err != nil {
 			return nil, false, err
 		}
 		value, err := handler.InvokeService(ctx, client, call)

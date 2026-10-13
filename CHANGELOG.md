@@ -61,6 +61,8 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 - Back off repeated automatic plugin refresh failures without delaying changed
   candidates or manual retries, while retaining healthy running generations.
+- Prevent cancelled queued plugin tool, capability, and service calls from
+  entering their handlers while preserving lifecycle cleanup.
 - Remember iOS model and reasoning choices for new conversations per account,
   computer and engine, including first sends without reopening settings and app relaunches.
 - Preserve the iOS reading position across lazy layout updates when loading older
