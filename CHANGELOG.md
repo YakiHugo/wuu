@@ -99,6 +99,12 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 - Bound skill resource sampling for both selected skills and model tool calls,
   honor request cancellation, and identify incomplete filename hints without
   changing the resource base directory.
+- PTC runtime shutdown settles when its control connection closes, keeping
+  native teardown warnings out of completed program results.
+- MCP server-request replies no longer block healthy tool calls or notifications.
+  Reply work is bounded, follows its originating call's cancellation, and stops
+  on connection close without replaying replies into a replacement session.
+
 - MCP OAuth credentials and pending sign-ins remain available across plugin
   reloads, including startup and adding the first MCP server to a running session.
 - Remote MCP notification streams recover after session expiry or credential
