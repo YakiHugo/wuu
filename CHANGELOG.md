@@ -68,6 +68,10 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
   candidates or manual retries, while retaining healthy running generations.
 - Prevent cancelled queued plugin tool, capability, and service calls from
   entering their handlers while preserving lifecycle cleanup.
+- PDF links to named destinations and page references navigate within the
+  current preview, preserve zoom, and ignore invalid or superseded targets.
+  External links retain the desktop's existing safe URL policy.
+
 - Failed PDF previews can retry in the same panel without reloading the window
   or losing conversation drafts. Retries recover loading, page-fetch, and rendering
   errors, refresh workspace file metadata, preserve the requested page, and cancel
