@@ -10,6 +10,8 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Added
 
+- Add opt-in macOS app snapshots: capture a single frontmost window with a global shortcut, review its image and optional available text locally, then add it to a draft without sending. Computer Use remains excluded from release builds.
+
 - Optional unsent-text recovery after a renderer reload, disabled by default.
   Recovery copies are limited to the current window, 20 drafts, 32K characters
   per draft and 24 hours; closing the window or disabling recovery clears them.

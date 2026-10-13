@@ -1,3 +1,4 @@
+import { useAppContextDraftTarget } from "./AppContextCapture";
 import { composerDraftRecoveryGeneration, composerDraftRecoveryEnabled, observeComposerDraftRecovery, readComposerDraftRecovery, sameRecoveryContext, writeComposerDraftRecovery } from "./ComposerDraftRecovery";
 import { validPdfSelectionReference } from "./PdfSelection";
 import { createArtifactComposerFile } from "./ArtifactComposerFile";
@@ -5315,6 +5316,25 @@ export function App(): JSX.Element {
     return () => window.removeEventListener("wuu:workbench-back", back);
   }, [accountOpen, settingsOpen, sidebarDrawerVisible, closeSidebarDrawer, rightPanelOpen, setRightPanelOpenWithMotion]);
 
+  useAppContextDraftTarget(submissionTargetPending || !state.initialized || showingManagementCatalog ? undefined : JSON.stringify([
+    state.activeContext ? runtimeContextKey(state.activeContext) : undefined, state.activeSessionTabID, state.activePane, state.thread?.id, state.secondaryThread?.id,
+  ]), (image, context) => {
+    // A workspace panel may cover split panes without changing their draft
+    // ownership. Route by the conversation state, never by panel visibility.
+    const current = appStateRef.current;
+    if (current.thread && current.secondaryThread) {
+      const pane = current.activePane;
+      setSplitComposerDrafts((drafts) => ({ ...drafts, [pane]: {
+        ...drafts[pane], images: [...drafts[pane].images, image], files: [...drafts[pane].files, context],
+      } }));
+      requestAnimationFrame(() => focusComposerTextarea(document.querySelector<HTMLTextAreaElement>(".conversation-split-pane.active textarea")));
+    } else {
+      setComposerImages((images) => [...images, image]);
+      setComposerFiles((files) => [...files, context]);
+      requestMainComposerFocus(documentComposerVisible ? "document" : "dock");
+    }
+  });
+
   if (ENABLE_ACCOUNT && accountOpen && window.wuu?.remoteAccount) {
     return <AccountScreen driver={window.wuu.remoteAccount} onBack={() => setAccountOpen(false)} />;
   }
@@ -6066,6 +6086,7 @@ export function App(): JSX.Element {
         />
       )}
       </>
+
 
       {environmentDialog === "commit" ? (
         <CommitChangesDialog
