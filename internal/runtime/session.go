@@ -26,6 +26,7 @@ import (
 	"github.com/blueberrycongee/wuu/internal/codexengine"
 	"github.com/blueberrycongee/wuu/internal/config"
 	wuucontext "github.com/blueberrycongee/wuu/internal/context"
+	"github.com/blueberrycongee/wuu/internal/credentialstore"
 	"github.com/blueberrycongee/wuu/internal/executionenv"
 	"github.com/blueberrycongee/wuu/internal/extensions"
 	"github.com/blueberrycongee/wuu/internal/hooks"
@@ -93,6 +94,9 @@ type Options struct {
 	// SafeMode discovers plugin manifests for management but activates no
 	// runtime, tool, skill, hook, or desktop contribution from a plugin.
 	SafeMode bool
+	// MCPOAuth supplies the host authentication service before any MCP connection
+	// starts. All plugin generations share it; nil uses the desktop credential store.
+	MCPOAuth *mcp.OAuthManager
 }
 
 // ConfigLoadMode identifies the three supported config source models. It is
@@ -190,6 +194,8 @@ type Session struct {
 	pluginTransitionMu sync.Mutex
 	pluginGenerationMu sync.Mutex
 	pluginGeneration   *PluginGeneration
+	// mcpOAuth outlives individual connection managers, including retained turns.
+	mcpOAuth *mcp.OAuthManager
 	// Retired generations are tracked without an extra reference so policy
 	// revocation reaches older conversations without extending their lifetime.
 	retiredPluginGenerations   map[*PluginGeneration]struct{}
@@ -240,6 +246,7 @@ func (s *Session) cloneForThreadModel() (*Session, error) {
 		ExtensionSettings:           s.ExtensionSettings,
 		PluginHost:                  s.PluginHost,
 		pluginGeneration:            s.pluginGeneration,
+		mcpOAuth:                    s.mcpOAuth,
 		UserQuestions:               s.UserQuestions,
 		DriverProfile:               s.DriverProfile,
 		PluginSessionRouter:         s.PluginSessionRouter,
@@ -514,6 +521,15 @@ func NewSession(opts Options) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
+	mcpOAuth := opts.MCPOAuth
+	if mcpOAuth == nil {
+		store, err := credentialstore.NewDesktopStore()
+		if err != nil {
+			providers.DebugLogf("desktop credential store: %v", err)
+		} else {
+			mcpOAuth = mcp.NewOAuthManager(store, nil)
+		}
+	}
 	activityRegistry := activity.NewRegistry()
 	var toolExecutor agent.ToolExecutor
 	var toolkit *tools.Toolkit
@@ -558,7 +574,7 @@ func NewSession(opts Options) (*Session, error) {
 		})
 		toolkit = kit
 		toolExecutor = newPluginAwareToolExecutor(kit, pluginHost, hookDispatcher, "", "", rootDir)
-		connectMCPServers(cfg, activePlugins, toolkit)
+		connectMCPServers(cfg, activePlugins, toolkit, mcpOAuth)
 	}
 
 	// Interpreter processes start only when called. Thread clones share lifecycle
@@ -791,6 +807,7 @@ func NewSession(opts Options) (*Session, error) {
 		AgentControl:                agentControl,
 		ProcessManager:              processMgr,
 		Toolkit:                     toolkit,
+		mcpOAuth:                    mcpOAuth,
 		CodeMode:                    codeModeService,
 		ActivityRegistry:            activityRegistry,
 		WorkerClient:                workerClient,
@@ -2464,21 +2481,22 @@ func skillDirChain(root, leaf string) []string {
 	return chain
 }
 
-func connectMCPServers(cfg config.Config, plugins []pluginpkg.Plugin, toolkit *tools.Toolkit) {
+func connectMCPServers(cfg config.Config, plugins []pluginpkg.Plugin, toolkit *tools.Toolkit, oauth *mcp.OAuthManager) {
 	if toolkit == nil {
 		return
 	}
 	toolkit.SetMCPActivityBindings(mcpActivityBindingsFromPlugins(plugins))
-	manager, _ := startMCPManager(cfg, plugins, nil)
+	manager, _ := startMCPManager(cfg, plugins, nil, oauth)
 	toolkit.SetMCPManager(manager)
 }
 
-func startMCPManager(cfg config.Config, plugins []pluginpkg.Plugin, requiredPlugins map[string]bool) (*mcp.Manager, error) {
+func startMCPManager(cfg config.Config, plugins []pluginpkg.Plugin, requiredPlugins map[string]bool, oauth *mcp.OAuthManager) (*mcp.Manager, error) {
 	servers := mcpServersFromConfigAndPlugins(cfg, plugins)
 	if len(servers) == 0 {
 		return nil, nil
 	}
 	mcpMgr := mcp.NewManager()
+	mcpMgr.SetOAuthManager(oauth)
 	serverConfigs := make(map[string]mcp.ServerConfig, len(servers))
 	requiredServers := make(map[string]bool)
 	for _, item := range plugins {

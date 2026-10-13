@@ -99,6 +99,8 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 - Bound skill resource sampling for both selected skills and model tool calls,
   honor request cancellation, and identify incomplete filename hints without
   changing the resource base directory.
+- MCP OAuth credentials and pending sign-ins remain available across plugin
+  reloads, including startup and adding the first MCP server to a running session.
 - Remote MCP notification streams recover after session expiry or credential
   refresh, discard obsolete session messages, and report unrecoverable handshakes
   as connection failures. Concurrent expired calls share one recovery, renewed
