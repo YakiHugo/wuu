@@ -109,6 +109,9 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Keep the programmatic tool entry description stable when MCP or plugin catalogs
+  change, while retaining built-in guidance and on-demand extension discovery.
+
 - Keep iOS conversations visible after sending through long histories, with stable
   latest-message following through keyboard changes and retained reading position
   while replies arrive or older history loads.
