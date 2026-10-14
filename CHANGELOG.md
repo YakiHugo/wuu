@@ -64,6 +64,9 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Changed
 
+- Remove the flying file card and title animation when opening or closing desktop
+  artifact previews; keep the right panel's normal transition.
+
 - Conversation images and image output cards open directly in the full-window
   image viewer. Remove the image side-panel action and automatic image previews.
 

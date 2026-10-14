@@ -3,7 +3,6 @@ import { Archive, ChevronRight, Download, Ellipsis, FileDiff, FileText, Film, Im
 
 import type { ThreadItem, ToolResultContentPart, Turn } from "../shared/protocol";
 import { useImagePreview } from "./ImagePreview";
-import { createArtifactPreviewMotion, type ArtifactPreviewMotion } from "./ArtifactPreviewMotion";
 import { useImagePreviewRegistration } from "./ImagePreviewGallery";
 import { useI18n } from "./i18n";
 import { desktopWorkbenchController } from "./plugins/DesktopPluginRuntime";
@@ -25,7 +24,7 @@ import { hostSupports } from "./HostCapabilities";
 import { ThreadContextMenu } from "./ThreadContextMenu";
 import { showErrorToast } from "./Toast";
 import { TruncatedText } from "./TruncatedText";
-import { ArtifactPreviewContext, ArtifactThreadContext } from "./ArtifactPreviewContext";
+import { ArtifactPreviewContext, ArtifactThreadContext, restoreArtifactPreviewFocus } from "./ArtifactPreviewContext";
 import { VideoPreview } from "./VideoPreview";
 import { videoMimeType } from "../shared/videoMimeType";
 
@@ -134,7 +133,7 @@ function useArtifactPreview(
           : undefined,
       }, origin);
     } else if (panel && threadID) {
-      panel({ threadID, cwd, artifact, ...(origin ? { motion: createArtifactPreviewMotion(origin, artifact.name) } : {}) });
+      panel({ threadID, cwd, artifact, origin: origin ? new WeakRef(origin) : undefined });
     } else {
       fallback(artifact);
     }
@@ -617,7 +616,7 @@ export function ArtifactPreview({
   cwd,
   onClose,
   mode = "overlay",
-  motion, initialPage, pageRequest,
+  origin, initialPage, pageRequest,
 }: {
   artifact: TurnArtifact;
   threadID?: string;
@@ -625,7 +624,7 @@ export function ArtifactPreview({
   cwd?: string;
   onClose: () => void;
   mode?: "overlay" | "panel";
-  motion?: ArtifactPreviewMotion;
+  origin?: WeakRef<HTMLElement>;
   initialPage?: number;
   pageRequest?: string;
 }): JSX.Element {
@@ -638,9 +637,8 @@ export function ArtifactPreview({
   const [downloadError,setDownloadError] = useState("");
   const dialogRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
-    if (mode === "panel" && dialogRef.current) return motion?.attach(dialogRef.current);
-  }, [motion, mode]);
-  useLayoutEffect(() => { if (!active) motion?.close(); }, [active, motion]);
+    if (mode === "panel" && !active) restoreArtifactPreviewFocus(origin);
+  }, [active, mode, origin]);
   useEffect(() => {
     if (mode === "panel") return;
     const previouslyFocused = document.activeElement instanceof HTMLElement

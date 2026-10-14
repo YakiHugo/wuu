@@ -310,68 +310,35 @@ app.whenReady().then(async () => {
   await waitFor(win, () => !document.querySelector('.image-preview-overlay'));
   assert.equal(await evaluate(win, () => document.activeElement === document.querySelectorAll('.turn-artifact-image-preview > button')[1]), true);
 
-  // Recovery contracts: closing during entry, resizing, and changing motion
-  // preferences must leave both the card and the panel usable.
+  // Documents remain usable after closing, resizing, or hiding the panel.
   win.setContentSize(1440, 900);
   await settle(win);
-  const motionIndex = fixtures.length;
+  const reopenIndex = fixtures.length;
   fixtures.push(fixtures[1]);
-  await complete(win, motionIndex);
+  await complete(win, reopenIndex);
   await waitFor(win, () => Boolean(document.querySelector('[data-wuu-component="turn-artifacts"] button')));
   for (let remaining = 8; remaining > 0 && await evaluate(win, () => Boolean(document.querySelector('.artifact-preview-panel'))); remaining -= 1) {
     await evaluate(win, () => [...document.querySelectorAll('.artifact-preview-actions button')].at(-1).click());
     await settle(win);
   }
-  await waitFor(win, () => !document.querySelector('.artifact-preview-flight'));
-  await evaluate(win, () => {
-    document.documentElement.dataset.appearanceMotion = 'full';
-    const opener = document.querySelector('[data-wuu-component="turn-artifacts"] button');
-    opener.scrollIntoView({ block: 'center' });
-  });
+  await evaluate(win, () => document.querySelector('[data-wuu-component="turn-artifacts"] button').scrollIntoView({ block: 'center' }));
   await settle(win);
-  await evaluate(win, () => document.querySelector('[data-wuu-component="turn-artifacts"] button').click());
-  await waitFor(win, () => Boolean(document.querySelector('.artifact-preview-flight')));
-  fs.writeFileSync(path.join(output, 'document-flight.png'), (await win.webContents.capturePage()).toPNG());
-  await evaluate(win, () => [...document.querySelectorAll('.artifact-preview-actions button')].at(-1).click());
-  await waitFor(win, () => !document.querySelector('.artifact-preview-panel') && !document.querySelector('.artifact-preview-flight'));
-  assert.equal(await evaluate(win, () => getComputedStyle(document.querySelector('[data-wuu-component="turn-artifacts"] .turn-edit-summary-overview-title')).visibility), 'visible');
-  await evaluate(win, () => document.querySelector('[data-wuu-component="turn-artifacts"] button').click());
-  await waitFor(win, () => Boolean(document.querySelector('.artifact-preview-flight')));
-  win.setContentSize(1000, 800);
-  await waitFor(win, () => !document.querySelector('.artifact-preview-flight'));
-  assert.equal(await evaluate(win, () => getComputedStyle(document.querySelector('.artifact-preview-toolbar strong')).visibility), 'visible');
-  await evaluate(win, () => [...document.querySelectorAll('.artifact-preview-actions button')].at(-1).click());
-  await waitFor(win, () => !document.querySelector('.artifact-preview-panel') && !document.querySelector('.artifact-preview-flight'));
-  await evaluate(win, () => {
-    document.querySelector('[data-wuu-component="turn-artifacts"] button').scrollIntoView({ block: 'center' });
-    document.documentElement.dataset.appearanceMotion = 'reduce';
-  });
-  await settle(win);
-  await evaluate(win, () => document.querySelector('[data-wuu-component="turn-artifacts"] button').click());
-  await waitFor(win, () => Boolean(document.querySelector('.artifact-preview-toolbar strong')));
-  assert.equal(await evaluate(win, () => Boolean(document.querySelector('.artifact-preview-flight'))), false);
-  await evaluate(win, () => [...document.querySelectorAll('.artifact-preview-actions button')].at(-1).click());
-  await waitFor(win, () => !document.querySelector('.artifact-preview-panel'));
-  await evaluate(win, () => delete document.documentElement.dataset.appearanceMotion);
-  await evaluate(win, () => document.querySelector('[data-wuu-component="turn-artifacts"] button').click());
-  await waitFor(win, () => Boolean(document.querySelector('.artifact-preview-flight')));
-  await evaluate(win, () => document.documentElement.dataset.appearanceMotion = 'reduce');
-  await waitFor(win, () => !document.querySelector('.artifact-preview-flight'));
-  assert.equal(await evaluate(win, () => getComputedStyle(document.querySelector('.artifact-preview-toolbar strong')).visibility), 'visible');
-  await evaluate(win, () => [...document.querySelectorAll('.artifact-preview-actions button')].at(-1).click());
-  await waitFor(win, () => !document.querySelector('.artifact-preview-panel'));
-  await evaluate(win, () => delete document.documentElement.dataset.appearanceMotion);
-  await evaluate(win, () => document.querySelector('[data-wuu-component="turn-artifacts"] button').click());
-  await waitFor(win, () => Boolean(document.querySelector('.artifact-preview-flight')));
-  await evaluate(win, () => document.querySelector('[data-wuu-component="right-sidebar-toggle"][aria-expanded="true"]').click());
-  await waitFor(win, () => document.querySelector('.workspace-right-panel')?.getAttribute('aria-hidden') === 'true' && !document.querySelector('.artifact-preview-flight'));
-  assert.equal(await evaluate(win, () => getComputedStyle(document.querySelector('[data-wuu-component="turn-artifacts"] .turn-edit-summary-overview-title')).visibility), 'visible');
   await evaluate(win, () => document.querySelector('[data-wuu-component="turn-artifacts"] button').click());
   await waitFor(win, () => Boolean(document.querySelector('.artifact-preview-panel')));
-  await waitFor(win, () => !document.querySelector('.artifact-preview-flight'));
+  await evaluate(win, () => [...document.querySelectorAll('.artifact-preview-actions button')].at(-1).click());
+  await waitFor(win, () => !document.querySelector('.artifact-preview-panel'));
+  await evaluate(win, () => document.querySelector('[data-wuu-component="turn-artifacts"] button').click());
+  await waitFor(win, () => Boolean(document.querySelector('.artifact-preview-panel')));
+  win.setContentSize(1000, 800);
+  await settle(win);
+  assert.equal(await evaluate(win, () => getComputedStyle(document.querySelector('.artifact-preview-toolbar strong')).visibility), 'visible');
+  await evaluate(win, () => document.querySelector('[data-wuu-component="right-sidebar-toggle"][aria-expanded="true"]').click());
+  await waitFor(win, () => document.querySelector('.workspace-right-panel')?.getAttribute('aria-hidden') === 'true');
+  await evaluate(win, () => document.querySelector('[data-wuu-component="turn-artifacts"] button').click());
+  await waitFor(win, () => document.querySelector('.workspace-right-panel')?.getAttribute('aria-hidden') === 'false' && Boolean(document.querySelector('.artifact-preview-panel')));
   await evaluate(win, () => document.querySelector('.workspace-tool-tab-close').click());
-  await waitFor(win, () => !document.querySelector('.artifact-preview-panel') && !document.querySelector('.artifact-preview-flight'));
-  fs.writeFileSync(path.join(output, 'motion-evidence.json'), JSON.stringify({ rapidClose: true, resize: true, reducedMotion: true, reducedMotionDuringEntry: true, panelClose: true, tabClose: true }, null, 2));
+  await waitFor(win, () => !document.querySelector('.artifact-preview-panel'));
+  fs.writeFileSync(path.join(output, 'document-reopen-evidence.json'), JSON.stringify({ reopen: true, resize: true, panelClose: true, tabClose: true }, null, 2));
 
   // Real pointer input protects hit testing, including the toolbar's blank margin.
   for (const target of ['stage', 'toolbar']) {
