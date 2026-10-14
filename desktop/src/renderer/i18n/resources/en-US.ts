@@ -27,7 +27,7 @@ export const enUS = {
   "execution.localViews": "Files, Review and Terminal still use the local workspace.",
   "execution.inspectFailed": "Environment status is unavailable.",
   "execution.refreshStatus": "Refresh environment status",
-  "execution.state.not_initialized": "Not initialized",
+  "execution.state.notInitialized": "Not initialized",
   "execution.state.local": "Local execution",
   "execution.state.connecting": "Connecting",
   "execution.state.ready": "Connected",

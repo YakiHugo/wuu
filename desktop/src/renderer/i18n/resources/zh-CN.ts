@@ -25,7 +25,7 @@ export const zhCN = {
   "execution.localViews": "文件、审查和终端仍使用本机工作区。",
   "execution.inspectFailed": "暂时无法读取环境状态。",
   "execution.refreshStatus": "刷新环境状态",
-  "execution.state.not_initialized": "尚未初始化",
+  "execution.state.notInitialized": "尚未初始化",
   "execution.state.local": "本机执行",
   "execution.state.connecting": "正在连接",
   "execution.state.ready": "已连接",

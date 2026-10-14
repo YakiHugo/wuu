@@ -44,7 +44,8 @@ export function SessionEnvironmentStatus({ thread }: { thread: Thread }): JSX.El
       <div className="session-environment-state">
         <span role={current?.error ? "alert" : undefined}>
           {current?.error ? t("execution.inspectFailed") : environment
-            ? t(`execution.state.${environment.state}`) : t("common.loadingEllipsis")}
+            ? t(environment.state === "not_initialized" ? "execution.state.notInitialized" : `execution.state.${environment.state}`)
+            : t("common.loadingEllipsis")}
         </span>
         <Tooltip content={t("execution.refreshStatus")}>
           <button className="icon-button" type="button" disabled={loading}
