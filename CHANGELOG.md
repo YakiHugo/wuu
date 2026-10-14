@@ -129,6 +129,9 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Preserve cancelled worker results when stopping a parent races a pending
+  child-result handoff, without automatically waking the stopped parent.
+
 - Keep parallel file-read tracking synchronized from the first tool call, so
   concurrent reads retain their edit-safety state without racing initialization.
 
