@@ -111,6 +111,10 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Stop all workers without letting cancelled child results wake parked parents
+  before their edges close. Write worker snapshots atomically so concurrent result
+  delivery can read complete history and release results for explicit recovery.
+
 - Automatically hide completed activity previews after 30 seconds while retaining
   browser pages. New work cancels the pending dismissal, and previews can be
   reopened explicitly without being revived by routine state refreshes.
