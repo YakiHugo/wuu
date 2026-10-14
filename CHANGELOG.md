@@ -97,6 +97,9 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Preserve browser viewport and click/scroll coordinates in compact live previews,
+  including cards scaled below 25% and transitions back to the browser panel.
+
 - Background browser activity no longer raises Wuu above another macOS app when its preview first appears. New or hidden previews wait for their Wuu window to regain focus; existing previews remain stable during focus changes.
 
 - Keep iOS pending-message menu actions responsive while a reply streams, so

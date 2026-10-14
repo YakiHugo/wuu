@@ -7,14 +7,13 @@ import {
   type BrowserPiPScreenLayout,
   type PipRect,
 } from "./browserPiPPlacement";
-import { CUANativePiP, resolveCUAFrameHelper, type CUANativePiPEvent } from "./cuaFrameStreams";
+import type { CUANativePiPEvent } from "./cuaFrameStreams";
+import type { ActivityPreviewAppearance } from "../shared/activityPreview";
+import { activityTimestamp } from "../shared/activityTimestamp";
 import type { WindowRegistry } from "./windowRegistry";
+import { activityPreviewIsLive } from "./activityPiPContent";
 
 export type ActivityControlAction = "takeover" | "release" | "stop";
-
-const PIP_WIDTH = 260;
-const PIP_HEIGHT = 170;
-const PIP_INSET = 12;
 
 export function activityControlMethod(action: ActivityControlAction): "activity/takeover" | "activity/release" | "activity/stop" {
   switch (action) {
@@ -30,26 +29,6 @@ export function frameStreamRetryDelay(attempt: number): number {
 
 export function activityVisibleForThread(activityThreadID: string, activeThreadID?: string): boolean {
   return Boolean(activeThreadID && activityThreadID === activeThreadID);
-}
-
-export function nativePiPInitialBounds(mainBounds: Rectangle | undefined, workArea: Rectangle): Rectangle {
-  if (!mainBounds) {
-    return {
-      x: workArea.x + workArea.width - PIP_WIDTH - 24,
-      y: workArea.y + 24,
-      width: PIP_WIDTH,
-      height: PIP_HEIGHT,
-    };
-  }
-  const x = Math.min(
-    workArea.x + workArea.width - PIP_WIDTH - PIP_INSET,
-    Math.max(workArea.x + PIP_INSET, mainBounds.x + mainBounds.width - PIP_WIDTH - PIP_INSET),
-  );
-  const y = Math.min(
-    workArea.y + workArea.height - PIP_HEIGHT - PIP_INSET,
-    Math.max(workArea.y + PIP_INSET, mainBounds.y + PIP_INSET),
-  );
-  return { x, y, width: PIP_WIDTH, height: PIP_HEIGHT };
 }
 
 // Fallback before the conversation column is measured. The live card then
@@ -98,19 +77,22 @@ export function pipVisibleForActivity(activity: ActivitySession, inPanel = false
 
 type ActivitySnapshot = (threadID: string) => Promise<ActivitySession[]>;
 
-// The observation-surface contract shared by the native CUA helper and the
-// Electron browser preview: lifecycle + visibility + pointer animation. The
-// optional hooks let a surface reflect fresh activity state on its chrome
-// (updateActivity) and freeze frame production while the activity is stopped
-// (setLive) — both no-ops on surfaces that do not implement them.
-export type ObservationPiPHandle = Pick<CUANativePiP, "start" | "setVisible" | "animateInteraction" | "stop"> & {
+// The core owns one observation host. Provider adapters only attach content;
+// task control, visibility, theme and interaction feedback stay in this contract.
+export type ObservationPiPHandle = {
+  start(): void;
+  setVisible(visible: boolean): void;
+  animateInteraction(interaction: NonNullable<ActivitySession["interaction"]>): void;
+  stop(onStopped?: () => void): void;
   updateActivity?(activity: ActivitySession): void;
   setLive?(live: boolean): void;
   setTurnCompleted?(completed: boolean): void;
-  setAppearance?(dark: boolean): void;
+  setAppearance?(dark: boolean, preferences?: ActivityPreviewAppearance): void;
+  setControlPending?(pending: boolean): void;
+  suspendContent?(message: string): void;
   setHostLayout?(layout: BrowserPiPScreenLayout | null): void;
   setHostParent?(parent: BrowserPiPHostWindow | null): void;
-  // Browser surfaces can swap tabs without replacing the user's window.
+  // Content changes never replace the shared host window.
   retarget?(activity: ActivitySession, sink: ObservationPiPEventSink): void;
 };
 
@@ -149,7 +131,9 @@ type PiPEntry = {
   pip: ObservationPiPHandle;
   // "preparing" = frosted placeholder shown, no live frame yet.
   // "live" = first real frame presented (native `ready`).
-  phase: "preparing" | "live";
+  phase: "preparing" | "live" | "failed";
+  controlPending?: boolean;
+  retiredExecutions: Set<string>;
 };
 
 /**
@@ -161,7 +145,8 @@ type PiPEntry = {
  */
 export class ObservationCoordinator {
   private readonly observations = new Map<string, ActivitySession>();
-  private readonly dismissedAt = new Map<string, string>();
+  private readonly goneObservations = new Map<string, { key: string; executionID?: string }>();
+  private readonly dismissedThreads = new Set<string>();
   private readonly lastInteractionRevisions = new Map<string, number>();
   private readonly retryAttempts = new Map<string, number>();
   private readonly retryTimers = new Map<string, NodeJS.Timeout>();
@@ -183,6 +168,9 @@ export class ObservationCoordinator {
   private reconcileInFlight = false;
   private activeThreadID: string | undefined;
   private darkAppearance: boolean | undefined;
+  private appearance: ActivityPreviewAppearance | undefined;
+  private autoShow = true;
+  private readonly explicitlyShown = new Set<string>();
   private browserInPanel: ((activity: ActivitySession) => boolean) | undefined;
   private onBrowserExpand: ((activity: ActivitySession) => void) | undefined;
 
@@ -200,7 +188,7 @@ export class ObservationCoordinator {
       return;
     }
     const current = this.current;
-    if (event.kind === "notification" && current?.activity.kind === "browser"
+    if (event.kind === "notification" && current
       && event.workdir === current.activity.workdir) {
       const { method, params } = event.message;
       const turn = params as { thread_id?: string; turn?: { status: string }; awaiting_auto_continuation?: boolean; truncated?: boolean } | undefined;
@@ -208,7 +196,7 @@ export class ObservationCoordinator {
         if (method === "turn/started" || method === "turn/error") {
           current.pip.setTurnCompleted?.(false);
         } else if (method === "turn/completed" && this.pipVisibility(current.activity)
-          && !this.dismissedAt.has(current.threadID)) {
+          && !this.dismissedThreads.has(current.threadID)) {
           // Stopping a browser activity is not evidence that its task succeeded.
           current.pip.setTurnCompleted?.(turn.turn?.status === "completed"
             && !turn.awaiting_auto_continuation && !turn.truncated);
@@ -218,9 +206,23 @@ export class ObservationCoordinator {
     this.scheduleReconcile();
   }
 
-  setAppearance(dark: boolean): void {
+  setAppearance(dark: boolean, preferences?: ActivityPreviewAppearance): void {
     this.darkAppearance = dark;
-    this.current?.pip.setAppearance?.(dark);
+    if (preferences) this.appearance = preferences;
+    this.current?.pip.setAppearance?.(dark, this.appearance);
+  }
+
+  setAutoShow(enabled: boolean): void {
+    this.autoShow = enabled;
+    this.syncActiveObservation();
+  }
+
+  showForThread(threadID: string): void {
+    this.dismissedThreads.delete(threadID);
+    this.goneObservations.delete(threadID);
+    this.explicitlyShown.add(threadID);
+    this.resetRetryBudget(threadID);
+    if (threadID === this.activeThreadID) this.syncActiveObservation();
   }
 
   setBrowserInPanel(check: (activity: ActivitySession) => boolean): void {
@@ -238,6 +240,8 @@ export class ObservationCoordinator {
 
   private pipVisibility(activity: ActivitySession): boolean {
     return activityVisibleForThread(activity.thread_id, this.activeThreadID)
+      && !this.dismissedThreads.has(activity.thread_id)
+      && (this.autoShow || this.explicitlyShown.has(activity.thread_id))
       && pipVisibleForActivity(activity, this.browserInPanel?.(activity) ?? false);
   }
 
@@ -252,19 +256,42 @@ export class ObservationCoordinator {
 
   update(activity: ActivitySession): void {
     if (this.closed) return;
+    const retained = this.current;
+    if (retained?.threadID === activity.thread_id && activity.execution_id
+      && retained.retiredExecutions.has(activity.execution_id)) return;
+    if (retained?.threadID === activity.thread_id && retained.activity.id === activity.id
+      && acceptsActivityUpdate(retained.activity, activity)) {
+      // A hidden or inactive host still owns capture resources. Deliver task
+      // termination/takeover so native staging is restored, without showing or
+      // retargeting the card. An unresolved/new target cannot resume old pixels.
+      if (retained.activity.execution_id !== activity.execution_id) {
+        if (retained.activity.execution_id) retained.retiredExecutions.add(retained.activity.execution_id);
+        retained.controlPending = false;
+        retained.pip.setControlPending?.(false);
+        retained.pip.setTurnCompleted?.(false);
+      }
+      const sameTarget = retained.key === observationKey(activity);
+      const live = sameTarget && isObservableActivity(activity) && activityPreviewIsLive(activity);
+      if (!live) retained.pip.setLive?.(false);
+      retained.pip.updateActivity?.(activity);
+      if (live) retained.pip.setLive?.(true);
+      retained.activity = activity;
+    }
     if (!isObservableActivity(activity)) return;
     if (!activity.target?.trim()) return;
     const current = this.observations.get(activity.thread_id);
-    if (current && (current.updated_at > activity.updated_at || (current.id === activity.id && current.state === "stopped" && activity.state !== "stopped"))) return;
-    if (current && observationKey(current) !== observationKey(activity)) {
-      this.retryAttempts.delete(activity.thread_id);
-      const timer = this.retryTimers.get(activity.thread_id);
-      if (timer) clearTimeout(timer);
-      this.retryTimers.delete(activity.thread_id);
+    if (current && !acceptsActivityUpdate(current, activity)) return;
+    const targetChanged = current && observationKey(current) !== observationKey(activity);
+    if (targetChanged) {
+      // Task-wide stop/takeover also updates inactive providers. Those terminal
+      // notifications must not move the preview back to an earlier target.
+      if (current.execution_id === activity.execution_id && activity.controller !== "agent") return;
+    }
+    if (targetChanged || (current && activity.execution_id && current.execution_id !== activity.execution_id)) {
+      this.resetRetryBudget(activity.thread_id);
     }
     this.observations.set(activity.thread_id, activity);
-    const dismissed = this.dismissedAt.get(activity.thread_id);
-    if (dismissed && dismissed < activity.updated_at && activity.state !== "stopped") this.dismissedAt.delete(activity.thread_id);
+    if (!this.observationIsGone(activity)) this.goneObservations.delete(activity.thread_id);
     if (activity.thread_id === this.activeThreadID) this.syncActiveObservation();
   }
 
@@ -273,7 +300,10 @@ export class ObservationCoordinator {
   // the core that owned the page.
   dropWorkdir(workdir: string): void {
     for (const [threadID, activity] of [...this.observations]) {
-      if (activity.workdir === workdir) this.observations.delete(threadID);
+      if (activity.workdir === workdir) {
+        this.observations.delete(threadID);
+        this.goneObservations.delete(threadID);
+      }
     }
     if (this.replacement?.activity.workdir === workdir) this.replacement = undefined;
     if (this.current?.activity.workdir === workdir) this.stopCurrent();
@@ -284,6 +314,7 @@ export class ObservationCoordinator {
     this.activeThreadID = undefined;
     this.replacement = undefined;
     this.observations.clear();
+    this.goneObservations.clear();
     this.browserHost?.detach();
     this.browserHost = undefined;
     if (this.reconcileTimer) clearTimeout(this.reconcileTimer);
@@ -295,39 +326,56 @@ export class ObservationCoordinator {
 
   private syncActiveObservation(): void {
     const threadID = this.activeThreadID;
-    if (!threadID || this.dismissedAt.has(threadID)) {
+    if (!threadID || this.dismissedThreads.has(threadID) || (!this.autoShow && !this.explicitlyShown.has(threadID))) {
       this.current?.pip.setVisible(false);
       return;
     }
     const activity = this.observations.get(threadID);
-    if (!activity) {
+    if (!activity || this.observationIsGone(activity)) {
       this.current?.pip.setVisible(false);
       return;
     }
     const key = observationKey(activity);
     if (this.current?.key === key) {
+      if (this.current.phase === "failed") {
+        if (this.retryTimers.has(threadID) || (this.retryAttempts.get(threadID) ?? 0) >= 4) return;
+        this.current.phase = "preparing";
+        const entry = this.current;
+        entry.pip.retarget?.(activity, this.eventSink(key));
+        if (this.current !== entry) return;
+      }
+      if (this.current.activity.execution_id !== activity.execution_id) {
+        this.current.controlPending = false;
+        this.current.pip.setControlPending?.(false);
+        this.current.pip.setTurnCompleted?.(false);
+      }
       this.current.activity = activity;
       this.current.pip.setVisible(this.pipVisibility(activity));
-      this.current.pip.setLive?.(activity.state !== "stopped");
+      this.current.pip.setLive?.(activityPreviewIsLive(activity));
       this.current.pip.updateActivity?.(activity);
       this.animateInteractionIfNew(activity, this.current.pip);
       return;
     }
-    if (activity.state === "stopped" || this.retryTimers.has(threadID) || (this.retryAttempts.get(threadID) ?? 0) >= 4) return;
+    if ((activity.state === "stopped" && !this.explicitlyShown.has(threadID)) || this.retryTimers.has(threadID) || (this.retryAttempts.get(threadID) ?? 0) >= 4) return;
     if (this.replacement?.key === key) {
       this.replacement.activity = activity;
       return;
     }
     const current = this.current;
-    if (current?.pip.retarget && current.activity.kind === "browser" && activity.kind === "browser"
-      && current.threadID === activity.thread_id && current.activity.workdir === activity.workdir) {
+    if (current?.pip.retarget) {
+      if (current.threadID !== activity.thread_id) current.retiredExecutions.clear();
+      else if (current.activity.execution_id && current.activity.execution_id !== activity.execution_id) {
+        current.retiredExecutions.add(current.activity.execution_id);
+      }
       current.key = key;
+      current.threadID = activity.thread_id;
+      current.controlPending = false;
       current.activity = activity;
       current.phase = "preparing";
       current.pip.retarget(activity, this.eventSink(key));
       if (this.current !== current) return;
       current.pip.setVisible(this.pipVisibility(activity));
-      current.pip.setLive?.(true);
+      current.pip.setLive?.(activityPreviewIsLive(activity));
       this.animateInteractionIfNew(activity, current.pip);
       return;
     }
@@ -341,12 +389,12 @@ export class ObservationCoordinator {
   private startImmediate(activity: ActivitySession, key: string): void {
     const pip = this.spawnPiP(activity, key);
     if (!pip) return;
-    this.current = { key, threadID: activity.thread_id, activity, pip, phase: "preparing" };
+    this.current = { key, threadID: activity.thread_id, activity, pip, phase: "preparing", retiredExecutions: new Set() };
     pip.start();
-    if (this.darkAppearance !== undefined) pip.setAppearance?.(this.darkAppearance);
+    if (this.darkAppearance !== undefined) pip.setAppearance?.(this.darkAppearance, this.appearance);
     this.pushBrowserHost(pip);
     pip.setVisible(this.pipVisibility(activity));
-    pip.setLive?.(activity.state !== "stopped");
+    pip.setLive?.(activityPreviewIsLive(activity));
     pip.updateActivity?.(activity);
     this.animateInteractionIfNew(activity, pip);
   }
@@ -384,28 +432,14 @@ export class ObservationCoordinator {
     const replacement = this.replacement;
     this.replacement = undefined;
     if (!replacement) return;
-    if (replacement.activity.thread_id !== this.activeThreadID || this.dismissedAt.has(replacement.activity.thread_id)) return;
+    if (replacement.activity.thread_id !== this.activeThreadID || this.dismissedThreads.has(replacement.activity.thread_id)) return;
     this.startImmediate(replacement.activity, replacement.key);
   }
 
   private spawnPiP(activity: ActivitySession, key: string): ObservationPiPHandle | undefined {
     const sink = this.eventSink(key);
-    if (this.pipFactory) return this.pipFactory(activity, key, sink, () => this.initialBounds(activity));
-    // No factory: the historical default is the native CUA helper only.
-    if (activity.kind !== "cua") return undefined;
-    const helper = resolveCUAFrameHelper();
-    const target = activity.target?.trim();
-    if (!helper || !target) return undefined;
-    return new CUANativePiP(
-      helper,
-      activity.thread_id,
-      target,
-      activity.process_id,
-      activity.window_id,
-      this.initialBounds(),
-      sink.onEvent,
-      sink.onFailure,
-    );
+    if (this.pipFactory) return this.pipFactory(activity, key, sink, () => this.initialBounds());
+    return undefined;
   }
 
   private eventSink(key: string): ObservationPiPEventSink {
@@ -427,18 +461,28 @@ export class ObservationCoordinator {
         this.retryAttempts.delete(entry.threadID);
         return;
       case "user_close":
-        this.dismissedAt.set(entry.threadID, new Date().toISOString());
-        if (this.current?.key === key) this.stopCurrent();
+        this.dismissedThreads.add(entry.threadID);
+        this.explicitlyShown.delete(entry.threadID);
+        entry.pip.setVisible(false);
         return;
       case "expand":
         if (entry.activity.kind === "browser") this.onBrowserExpand?.(entry.activity);
         return;
       case "control":
-        if (this.control && (event.action === "takeover" || event.action === "release" || event.action === "stop")) {
+        if (event.execution_id !== undefined && event.execution_id !== (entry.activity.execution_id ?? "")) return;
+        if (this.control && !entry.controlPending && (event.action === "takeover" || event.action === "release" || event.action === "stop")) {
+          const executionID = entry.activity.execution_id;
+          entry.controlPending = true;
+          entry.pip.setControlPending?.(true);
           void this.control(entry.activity, event.action)
             .then((activity) => this.update(activity))
             .catch((error: unknown) => {
-              if (this.current === entry) entry.pip.updateActivity?.({ ...entry.activity, error: error instanceof Error ? error.message : String(error) });
+              if (this.current === entry && entry.key === key && entry.activity.execution_id === executionID) entry.pip.updateActivity?.({ ...entry.activity, error: error instanceof Error ? error.message : String(error) });
+            })
+            .finally(() => {
+              if (this.current !== entry || entry.key !== key || entry.activity.execution_id !== executionID) return;
+              entry.controlPending = false;
+              entry.pip.setControlPending?.(false);
             });
         }
         return;
@@ -448,9 +492,6 @@ export class ObservationCoordinator {
       case "user_input":
         return;
       case "geometry":
-        // The browser card's resting place is a corner of the conversation
-        // column, not the last screen rectangle it occupied while dragging.
-        if (entry.activity.kind === "browser") return;
         if ([event.x, event.y, event.width, event.height].every((value) => typeof value === "number")) {
           this.userBounds = { x: event.x!, y: event.y!, width: event.width!, height: event.height! };
         }
@@ -460,34 +501,52 @@ export class ObservationCoordinator {
     }
   }
 
-  private handlePiPFailure(key: string, _message: string): void {
+  private handlePiPFailure(key: string, message: string): void {
     const entry = this.current?.key === key ? this.current : undefined;
     if (!entry) return;
-    if (this.current?.key === key) this.stopCurrent();
-    if (entry.threadID !== this.activeThreadID || this.dismissedAt.has(entry.threadID)) return;
-    const attempts = (this.retryAttempts.get(entry.threadID) ?? 0) + 1;
-    this.retryAttempts.set(entry.threadID, attempts);
+    if (entry.pip.suspendContent) {
+      entry.phase = "failed";
+      entry.pip.suspendContent(message);
+    } else this.stopCurrent();
+    const threadID = entry.threadID;
+    if (threadID !== this.activeThreadID || this.dismissedThreads.has(threadID)) return;
+    const attempts = (this.retryAttempts.get(threadID) ?? 0) + 1;
+    this.retryAttempts.set(threadID, attempts);
     if (attempts >= 4) return;
     const timer = setTimeout(() => {
-      this.retryTimers.delete(entry.threadID);
-      this.syncActiveObservation();
+      if (this.retryTimers.get(threadID) !== timer) return;
+      this.retryTimers.delete(threadID);
+      if (this.activeThreadID === threadID) this.syncActiveObservation();
     }, frameStreamRetryDelay(attempts));
     timer.unref?.();
-    this.retryTimers.set(entry.threadID, timer);
+    this.retryTimers.set(threadID, timer);
+  }
+
+  private resetRetryBudget(threadID: string): void {
+    this.retryAttempts.delete(threadID);
+    const timer = this.retryTimers.get(threadID);
+    if (timer) clearTimeout(timer);
+    this.retryTimers.delete(threadID);
   }
 
   // The capture target disappeared (tab closed, view crashed, workdir torn
-  // down). Unlike a transient stream failure this is never retried: the
-  // surface comes down and the observation is forgotten so a later reconcile
-  // cannot resurrect a dead target.
+  // down). Retain its metadata as the ordering high-water mark, but fence this
+  // exact source until a different target/execution or an explicit user retry.
+  // A registry snapshot cannot establish that a disappeared target is back.
   private handlePiPGone(key: string): void {
     const entry = this.current?.key === key ? this.current : undefined;
     if (!entry) return;
     const observed = this.observations.get(entry.threadID);
     if (observed && observationKey(observed) === key) {
-      this.observations.delete(entry.threadID);
+      this.goneObservations.set(entry.threadID, { key, executionID: observed.execution_id });
     }
+    this.resetRetryBudget(entry.threadID);
     if (this.current?.key === key) this.stopCurrent();
+  }
+
+  private observationIsGone(activity: ActivitySession): boolean {
+    const gone = this.goneObservations.get(activity.thread_id);
+    return gone?.key === observationKey(activity) && gone.executionID === activity.execution_id;
   }
 
   private animateInteractionIfNew(activity: ActivitySession, pip: ObservationPiPHandle): void {
@@ -599,8 +658,8 @@ export class ObservationCoordinator {
     pip.setHostLayout(this.browserScreenLayout);
   }
 
-  private initialBounds(activity?: ActivitySession): Rectangle {
-    if (activity?.kind !== "browser" && this.userBounds) return this.userBounds;
+  private initialBounds(): Rectangle {
+    if (this.userBounds) return this.userBounds;
     const mainWindow = this.registry.mainWindow();
     const mainBounds = mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()
       ? mainWindow.getContentBounds()
@@ -609,15 +668,14 @@ export class ObservationCoordinator {
     const workArea = mainBounds
       ? screen.getDisplayMatching(mainBounds).workArea
       : screen.getDisplayNearestPoint(cursor).workArea;
-    if (activity?.kind === "browser") return browserPiPInitialBounds(mainBounds, workArea);
-    return nativePiPInitialBounds(mainBounds, workArea);
+    return browserPiPInitialBounds(mainBounds, workArea);
   }
 }
 
 export function observationKey(activity: ActivitySession): string {
-  // Replacement is serialized by stopCurrent; resolved identity changes must
-  // rebind capture instead of silently following the old process/window.
-  return [activity.thread_id, activity.id, activity.target?.trim(),
+  // Execution identity fences controls separately; resolved target changes
+  // retarget content without replacing the user's observation window.
+  return [activity.thread_id, activity.id, activity.kind, activity.target?.trim(),
     ...(activity.kind === "cua" ? [activity.process_id ?? 0, activity.window_id ?? 0] : [])].join(":");
 }
 
@@ -630,4 +688,10 @@ export function observationActivityFromServerEvent(event: ServerEvent): Activity
   const activity = value as Partial<ActivitySession>;
   if ((activity.kind !== "cua" && activity.kind !== "browser") || typeof activity.id !== "string" || typeof activity.thread_id !== "string") return undefined;
   return value as ActivitySession;
+}
+
+function acceptsActivityUpdate(previous: ActivitySession, next: ActivitySession): boolean {
+  return activityTimestamp(previous.updated_at) <= activityTimestamp(next.updated_at)
+    && !(previous.id === next.id && previous.execution_id === next.execution_id
+      && previous.state === "stopped" && next.state !== "stopped");
 }
