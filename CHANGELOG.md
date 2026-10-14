@@ -52,6 +52,11 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Changed
 
+- The agent cursor in browser pages and live previews now travels along a soft
+  arc with the tip leading, a speed glow, a small follow-through, a click
+  ripple and a gentle idle float, in a new blue cursor. Moves still arrive within
+  700 ms, and reduced motion keeps the cursor still.
+
 - iOS history loads settled processing steps as stable summaries. Tap a summary
   to page through its details without changing the conversation reading position;
   published attachments remain in the conversation.
@@ -96,6 +101,8 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
   require omission of the `store` field.
 
 ### Fixed
+
+- Prevent stopping all agents from launching queued tasks as running agents release their slots; queued admissions are cancelled and rolled back first.
 
 - Keep tool diagnostics out of floating activity previews, show concise guidance
   for preview failures, and remove the extra preview button from the conversation
