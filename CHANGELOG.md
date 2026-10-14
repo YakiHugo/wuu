@@ -10,6 +10,11 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Added
 
+- Enable Computer Use in macOS desktop releases with bundled native control and
+  live-preview helpers. Releases require Developer ID signing and notarization;
+  screen capture and desktop control use macOS Screen Recording and Accessibility
+  permissions.
+
 - iOS and Android render Mermaid diagrams offline as replies stream, preserve the
   last valid diagram during partial syntax, and expose source and copy actions.
 
@@ -17,7 +22,7 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
   larger readable history pages, retained reading position, and retry on failure.
   Process details remain available on demand.
 
-- Add opt-in macOS app snapshots: record a shortcut and configure permissions in Settings → General → App snapshot, then capture a single frontmost window directly into the active draft with its image and optional available text. Capturing focuses the composer and preserves existing text without sending. Computer Use remains excluded from release builds.
+- Add opt-in macOS app snapshots: record a shortcut and configure permissions in Settings → General → App snapshot, then capture a single frontmost window directly into the active draft with its image and optional available text. Capturing focuses the composer and preserves existing text without sending.
 
 - Automatically recover unsent text after a renderer reload, with no settings
   toggle. Recovery copies are limited to the current window, 20 drafts, 32K
