@@ -109,6 +109,10 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Keep iOS conversations visible after sending through long histories, with stable
+  latest-message following through keyboard changes and retained reading position
+  while replies arrive or older history loads.
+
 - Tables, Mermaid diagrams and horizontal rules in messages keep the normal
   block gap above them instead of touching the preceding line. Inline code in
   table cells stays whole in narrow windows, and the table scrolls instead of
