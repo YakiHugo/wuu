@@ -123,6 +123,10 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Anthropic requests keep tool continuations and reusable conversation prefixes
+  stable as cache markers advance, preserving reasoning with injected context
+  and tool attachments even when prompt caching is disabled.
+
 - Stop all workers without letting cancelled child results wake parked parents
   before their edges close. Write worker snapshots atomically so concurrent result
   delivery can read complete history and release results for explicit recovery.
