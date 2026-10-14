@@ -64,6 +64,9 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Changed
 
+- Read-only peer discovery can be composed and filtered inside `run_code`,
+  preserving root-session and workspace boundaries. Peer messaging remains direct-only.
+
 - Desktop text uses stronger light-theme contrast and native macOS font smoothing
   by default, with an optional grayscale setting. Content fonts can be selected
   independently for messages, drafts, and Markdown previews; code editors now
