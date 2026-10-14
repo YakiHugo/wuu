@@ -109,6 +109,11 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Preserve subagent dispatch identities through retries and local process
+  recovery, and keep prior results reachable when a follow-up cannot be confirmed.
+  Recovery waits for session-service readiness, survives overlapping plugin
+  generations, and bounds retained task briefs before admitting new work.
+
 - Keep iOS conversations visible after sending through long histories, with stable
   latest-message following through keyboard changes and retained reading position
   while replies arrive or older history loads.
