@@ -102,6 +102,10 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Keep the streaming cursor after the last line of a code block while an answer
+  writes code, instead of drawing it at the card's lower-left corner. Copied and
+  selected code is unchanged.
+
 - Prevent stopping all agents from launching queued tasks as running agents release their slots; queued admissions are cancelled and rolled back first.
 
 - Keep tool diagnostics out of floating activity previews, show concise guidance
