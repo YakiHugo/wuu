@@ -73,6 +73,9 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 - Generated conversation titles focus on one topic, with shorter Chinese and
   English targets and a shared 40-character generation and storage limit.
 
+- Desktop sidebar titles backspace the visible old text before typing the new
+  title, with bounded timing, stable row layout, and reduced-motion support.
+
 - Read-only peer discovery can be composed and filtered inside `run_code`,
   preserving root-session and workspace boundaries. Peer messaging remains direct-only.
 
