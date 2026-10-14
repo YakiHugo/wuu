@@ -64,6 +64,9 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Changed
 
+- Soften desktop composer corners and lighten the surrounding shadow while
+  retaining the fine border and custom theme overrides.
+
 - Remove the flying file card and title animation when opening or closing desktop
   artifact previews; keep the right panel's normal transition.
 
