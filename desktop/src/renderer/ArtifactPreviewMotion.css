@@ -29,10 +29,6 @@
   font-weight: 600;
 }
 
-.artifact-preview-flight img {
-  object-fit: contain;
-}
-
 .artifact-preview-motion-hidden {
   visibility: hidden !important;
 }

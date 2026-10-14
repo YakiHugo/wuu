@@ -2,13 +2,11 @@ import { cubicBezier, motionDurationMs, motionEasing, prefersReducedMotion, subs
 import "./ArtifactPreviewMotion.css";
 
 type Box = { left: number; top: number; width: number; height: number };
-type Frame = { surface: Box; title: Box; image?: Box };
+type Frame = { surface: Box; title: Box };
 
 export type ArtifactPreviewMotion = {
-  origin: WeakRef<HTMLElement>;
   attach: (panel: HTMLElement) => () => void;
   close: () => void;
-  cancel: () => void;
 };
 
 let cancelFlight: (() => void) | undefined;
@@ -38,9 +36,6 @@ function place(element: HTMLElement, box: Box): void {
 /** A per-click handle. Tabs retain only weak references to conversation DOM. */
 export function createArtifactPreviewMotion(origin: HTMLElement, name: string): ArtifactPreviewMotion {
   const source = new WeakRef(origin);
-  const thumbnail = origin instanceof HTMLImageElement ? origin : origin.querySelector<HTMLImageElement>("img");
-  const imageSource = thumbnail?.complete && thumbnail.naturalWidth > 0 ? thumbnail.currentSrc : undefined;
-  const aspect = thumbnail && thumbnail.naturalHeight > 0 ? thumbnail.naturalWidth / thumbnail.naturalHeight : 1;
   const sourceTitle = (): HTMLElement | null => source.deref()?.querySelector(
     ".turn-edit-summary-overview-path, .turn-output-summary-name",
   ) ?? null;
@@ -51,7 +46,6 @@ export function createArtifactPreviewMotion(origin: HTMLElement, name: string): 
     return {
       surface,
       title: sourceTitle()?.getBoundingClientRect() ?? { left: surface.left, top: surface.bottom - 24, width: surface.width, height: 24 },
-      image: imageSource ? (node instanceof HTMLImageElement ? node : node.querySelector("img"))?.getBoundingClientRect() : undefined,
     };
   };
   const initial = sourceFrame();
@@ -64,14 +58,9 @@ export function createArtifactPreviewMotion(origin: HTMLElement, name: string): 
   const panelFrame = (): Frame | undefined => {
     const node = panel?.deref();
     if (!node?.isConnected) return undefined;
-    const body = node.querySelector<HTMLElement>(".artifact-preview-body")!;
-    const bounds = body.getBoundingClientRect();
-    const width = Math.min(bounds.width, bounds.height * aspect);
-    const height = width / aspect;
     return {
       surface: node.getBoundingClientRect(),
       title: node.querySelector(".artifact-preview-toolbar strong")!.getBoundingClientRect(),
-      image: imageSource ? { left: bounds.left + (bounds.width - width) / 2, top: bounds.top + (bounds.height - height) / 2, width, height } : undefined,
     };
   };
 
@@ -92,17 +81,9 @@ export function createArtifactPreviewMotion(origin: HTMLElement, name: string): 
     title.className = "artifact-preview-flight-title";
     title.textContent = name;
     ghost.append(surface, title);
-    const image = imageSource ? document.createElement("img") : undefined;
-    if (image) {
-      image.src = imageSource!;
-      image.alt = "";
-      ghost.append(image);
-    }
     document.body.append(ghost);
     // Only decorative peers disappear; buttons remain available throughout.
-    const sourceNode = source.deref();
-    const hidden = [sourceTitle(), sourceNode instanceof HTMLImageElement ? sourceNode : sourceNode?.querySelector("img"),
-      panel?.deref()?.querySelector(".artifact-preview-image"),
+    const hidden = [sourceTitle(),
       panel?.deref()?.querySelector(".artifact-preview-toolbar strong")].filter((node): node is HTMLElement => node instanceof HTMLElement);
     for (const node of hidden) node.classList.add("artifact-preview-motion-hidden");
     let raf = 0;
@@ -132,14 +113,11 @@ export function createArtifactPreviewMotion(origin: HTMLElement, name: string): 
       current = {
         surface: interpolate(from.surface, target.surface, progress),
         title: interpolate(from.title, target.title, progress),
-        image: from.image && target.image ? interpolate(from.image, target.image, progress) : undefined,
       };
       place(surface, current.surface);
       place(title, current.title);
-      if (image && current.image) place(image, current.image);
       // Reveal live document content as the surface reaches the existing pane.
       surface.style.opacity = String(returning ? 0.8 * (1 - progress) : 1 - progress);
-      title.style.opacity = String(imageSource ? (returning ? 1 - progress : progress) : 1);
       if (elapsed >= 1) { finish(); return; }
       raf = requestAnimationFrame(draw);
     };
@@ -147,8 +125,6 @@ export function createArtifactPreviewMotion(origin: HTMLElement, name: string): 
   };
 
   return {
-    origin: source,
-    cancel() { stop?.(); },
     attach(node) {
       panel = new WeakRef(node);
       closing = false;

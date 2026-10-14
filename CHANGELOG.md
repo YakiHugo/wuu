@@ -64,6 +64,9 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Changed
 
+- Conversation images and image output cards open directly in the full-window
+  image viewer. Remove the image side-panel action and automatic image previews.
+
 - Generated conversation titles focus on one topic, with shorter Chinese and
   English targets and a shared 40-character generation and storage limit.
 
