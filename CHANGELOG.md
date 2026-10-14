@@ -109,6 +109,12 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Preserve structured results, metadata, and rich content from failed tool calls
+  in code mode and durable history, while keeping their failed status.
+  Legacy text-only errors retain their diagnostics through executor wrappers.
+  Session tool policies preserve explicit model views while removing unusable
+  archive recovery references.
+
 - Keep iOS conversations visible after sending through long histories, with stable
   latest-message following through keyboard changes and retained reading position
   while replies arrive or older history loads.
