@@ -123,6 +123,9 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Keep parallel file-read tracking synchronized from the first tool call, so
+  concurrent reads retain their edit-safety state without racing initialization.
+
 - Anthropic requests keep tool continuations and reusable conversation prefixes
   stable as cache markers advance, preserving reasoning with injected context
   and tool attachments even when prompt caching is disabled.
