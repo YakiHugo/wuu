@@ -64,6 +64,9 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Changed
 
+- Generated conversation titles focus on one topic, with shorter Chinese and
+  English targets and a shared 40-character generation and storage limit.
+
 - Read-only peer discovery can be composed and filtered inside `run_code`,
   preserving root-session and workspace boundaries. Peer messaging remains direct-only.
 
