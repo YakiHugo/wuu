@@ -68,6 +68,10 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Changed
 
+- Live activity previews show state through symbols and controls instead of status
+  text: the placeholder icon breathes while frames load and rests when capture is
+  blocked; the conversation explains details.
+
 - Soften desktop composer corners and lighten the surrounding shadow while
   retaining the fine border and custom theme overrides.
 
@@ -141,6 +145,11 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
   require omission of the `store` field.
 
 ### Fixed
+
+- Computer Use on macOS parks concealed and minimized windows on an invisible
+  agent display instead of beyond the screen edge, so no sliver stays visible and
+  live previews show the whole window at the correct scale on multi-display
+  setups with mixed pixel densities.
 
 - Preserve cancelled worker results when stopping a parent races a pending
   child-result handoff, without automatically waking the stopped parent.
