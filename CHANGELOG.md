@@ -179,6 +179,9 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Keep page, sidebar, panel, and card padding consistent when resizing narrow
+  windows, removing the global spacing switch at 560px.
+
 - Computer Use on macOS parks concealed windows on an invisible agent display
   instead of beyond the screen edge, so no sliver stays visible and live previews
   show the whole window at the correct scale on multi-display setups with mixed
