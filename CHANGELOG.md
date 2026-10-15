@@ -181,6 +181,10 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Stop background process and agent-result notifications from restarting failed
+  inference turns indefinitely. Keep undelivered results available for explicit
+  recovery, and preserve the request layer's bounded retries and backoff.
+
 - Keep page, sidebar, panel, and card padding consistent when resizing narrow
   windows, removing the global spacing switch at 560px.
 
