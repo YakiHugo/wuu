@@ -99,6 +99,8 @@ Agent commands also have activity entries and results in the conversation. Long 
 
 ## App snapshots on macOS
 
+App snapshots are disabled in this release. The settings entry is hidden and previously saved shortcuts are inactive. The instructions below apply only to builds that enable the feature.
+
 App snapshots are an opt-in, read-only way to attach one visible app window to a conversation. They require macOS 14 or later and a desktop build with the Wuu App Snapshot helper.
 
 Open **Settings → General → App snapshot**, set a shortcut and enable it. Changes save automatically. Click the shortcut button and press a new key combination to record it; Escape or leaving the button cancels recording. The current capture shortcut is paused while recording. Screen Recording permission is required; optional available window text also needs Accessibility permission. Grant the entry macOS shows for Wuu or Wuu App Snapshot in **System Settings → Privacy & Security**. These permissions do not turn on autonomous Computer Use.

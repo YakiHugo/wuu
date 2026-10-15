@@ -47,7 +47,8 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
   larger readable history pages, retained reading position, and retry on failure.
   Process details remain available on demand.
 
-- Add opt-in macOS app snapshots: record a shortcut in Settings → General → App snapshot and configure access under System permissions, then capture a single frontmost window directly into the active draft with its image and optional available text. Capturing focuses the composer and preserves existing text without sending.
+- Keep macOS app snapshots disabled for this release: hide the settings entry and
+  prevent saved settings from activating the capture shortcut.
 
 - Automatically recover unsent text after a renderer reload, with no settings
   toggle. Recovery copies are limited to the current window, 20 drafts, 32K
