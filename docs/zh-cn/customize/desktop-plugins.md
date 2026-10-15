@@ -103,6 +103,12 @@ Provider 会收到尚未发送的草稿。应明确选择哪些数据可以离�
 
 兼容旧桌面宿主时，注册前先检查 `typeof api.registerComposerInlineCompletionProvider === "function"`。对于已支持注册的旧宿主，通过 `typeof handle.refresh === "function"` 检测刷新和交互能力。context 中的 `contractVersion: 1` 只描述此回调结构，与运行时服务版本、Wuu 产品 CalVer 分开判断。准确的公开类型见 [TypeScript SDK](../../../packages/plugin-sdk/src/index.ts)。
 
+工作区相关 provider 还可读取可选的 `workspaceId`（注册项目 ID）、`workspaceRoot`（宿主事件路由根目录）以及 `attachmentCount`、`queuedCount`、`pendingCount`。计数不包含附件字节或排队草稿正文。旧宿主缺少字段时表示未知，不能当作零。这些值参与请求失效判定，分屏也一样。调用运行时应传入已验证的工作区 ID，不应假定当前活动工作区或会话 ID 全局唯一。
+
+`host.session.history.read` 返回物理审计记录，可能包含已撤回或隐藏的消息，不等于可见对话文本。只使用当前轮次的预测器可从实时成功 `turn/completed` 的 `Turn.items` 中选择真实用户显示文字和完整终结助手回复；不应把审计记录直接拼成可见历史。
+
+监听 `api.onHostEvent` 的连接相关逻辑应在 `kind: "connection-reset"` 时清除待处理临时任务。远程通知标记 `replayed: true` 时，表示事件到达时有序恢复屏障尚未完成，不能用来触发新的实时任务。普通桌面与实时事件省略该标记。连接重置不表示内核失败，也不会丢弃用户草稿。
+
 ## 外观和清理
 
 使用 `api.react` 和 `api.ui`，让控件遵循宿主主题、间距和排版。UI 字号与代码字号应分开。只改外观时优先使用声明式主题 token，公开契约见[界面矩阵](theme-surface-matrix.md)。

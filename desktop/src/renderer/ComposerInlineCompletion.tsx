@@ -36,7 +36,7 @@ type Suggestion = {
 // This lives beside the synchronous textarea value. App's persisted draft and
 // the surrounding composer chrome may still describe an earlier keystroke.
 export function useComposerInlineCompletion({
-  host, inputRef, value, enabled, kind, contextKey, revisionKey, resetKey, threadId, sideThreadId, running, compositionActive, onInsert,
+  host, inputRef, value, enabled, kind, contextKey, revisionKey, resetKey, threadId, sideThreadId, workspaceId, workspaceRoot, attachmentCount, queuedCount, pendingCount, running, compositionActive, onInsert,
 }: {
   host: PluginHost;
   inputRef: RefObject<HTMLTextAreaElement | null>;
@@ -48,6 +48,11 @@ export function useComposerInlineCompletion({
   resetKey: string;
   threadId?: string;
   sideThreadId?: string;
+  workspaceId?: string;
+  workspaceRoot?: string;
+  attachmentCount?: number;
+  queuedCount?: number;
+  pendingCount?: number;
   running: boolean;
   compositionActive: boolean;
   onInsert: (value: string) => void;
@@ -90,7 +95,7 @@ export function useComposerInlineCompletion({
       && windowFocused.current && !composing.current && !menuOpen && !input.closest("[hidden], [inert]")
       && input.selectionStart === input.value.length && input.selectionEnd === input.value.length
       && !parseComposerSlashDraft(input.value);
-    const key = JSON.stringify([composerId, kind, revisionKey, threadId, sideThreadId, running, input.value,
+    const key = JSON.stringify([composerId, kind, revisionKey, threadId, sideThreadId, workspaceId, workspaceRoot, attachmentCount, queuedCount, pendingCount, running, input.value,
       input.selectionStart, input.selectionEnd, focused, windowFocused.current, composing.current, eligible]);
     const previous = observed.current;
     if (previous?.key === key && previous.providers === providers) return previous;
@@ -99,7 +104,10 @@ export function useComposerInlineCompletion({
       key, providers, eligible,
       context: Object.freeze({ contractVersion: 1, kind, composerId, revision: ++revision.current,
         ...(threadId === undefined ? {} : { threadId }),
-        ...(sideThreadId === undefined ? {} : { sideThreadId }), running, draftText: input.value,
+        ...(sideThreadId === undefined ? {} : { sideThreadId }),
+        ...(workspaceId === undefined ? {} : { workspaceId }),
+        ...(workspaceRoot === undefined ? {} : { workspaceRoot }),
+        attachmentCount, queuedCount, pendingCount, running, draftText: input.value,
         selectionStart: input.selectionStart, selectionEnd: input.selectionEnd }),
     };
     observed.current = next;

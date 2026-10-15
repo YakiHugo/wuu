@@ -3418,6 +3418,7 @@ export function App(): JSX.Element {
         }}
         projects={state.projects}
         activeContext={state.activeContext}
+        inlineCompletionWorkspace={activeThread ? resolveThreadRuntimeContext(activeThread, state.projects) : state.activeContext}
         activeWorkspace={activeWorkspace}
         compactDisabledReason={
           !activeThread
@@ -5789,6 +5790,7 @@ export function App(): JSX.Element {
                 {splitConversation && state.thread && state.secondaryThread ? (
                   <ConversationSplitLayoutRenderer
                     state={state}
+                    pendingComposerMessagesForThread={pendingComposerMessagesForActiveThread}
                     primaryThread={state.thread}
                     secondaryThread={state.secondaryThread}
                     splitLeftPercent={splitLeftPercent}

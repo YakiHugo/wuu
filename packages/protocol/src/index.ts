@@ -2552,7 +2552,15 @@ export type ThreadResumeResult = {
 export type ServerEvent = {
   workdir: string;
 } & (
-  | { kind: "notification"; message: AppServerNotification }
+  | {
+      kind: "notification";
+      message: AppServerNotification;
+      /** Received before connection restoration completed; must not trigger new live work. */
+      replayed?: boolean;
+    }
+  // Invalidates connection-bound ephemeral work without treating a brief
+  // transport replacement as an app-server failure.
+  | { kind: "connection-reset" }
   | { kind: "server-request"; message: Required<AppServerRequest> }
   | { kind: "server-error"; message: string }
   | { kind: "server-exit"; code: number | null; message: string }

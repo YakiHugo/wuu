@@ -219,7 +219,7 @@ async function scenario(id, name, body) {
 }
 
 try {
-  const ids = ['todo', 'ask-user', 'memory', 'subagent', 'peers', 'automation', 'goal', 'dream'];
+  const ids = ['todo', 'ask-user', 'memory', 'subagent', 'peers', 'automation', 'goal', 'dream', 'next-message'];
   for (const id of ids.filter(id => !only || id === only)) {
     const bytes = await readFile(join(root, 'internal/plugin/bundled', id, 'runtime.mjs'));
     evidence.artifacts[id] = { sha256: createHash('sha256').update(bytes).digest('hex') };
@@ -549,6 +549,142 @@ try {
     await runtime.capability('agent.turn.completed', { thread_id: 'parent', completed_at: new Date().toISOString(), succeeded: true });
     await runtime.client('dream.get');
     assert.equal(runtime.host.calls.filter(call => call.service === 'host.session.send').length, prior, 'Failed dream remains in backoff across restart');
+    await runtime.shutdown();
+  });
+  await scenario('next-message', 'strict settings persist without starting inference', async () => {
+    const host = new FixtureHost('next-message-settings');
+    let runtime = await launch('next-message', host);
+    assert.deepEqual(runtime.definition.required_services.map(service => service.name).sort(),
+      ['host.model.request', 'host.storage.get', 'host.storage.set']);
+    assert.deepEqual(await runtime.client('next-message.get'), { settings: {} });
+    for (const input of [null, [], { model_alias: 1 }, { model_alias: null }, { model_alias: 'x'.repeat(257) },
+      { model_alias: 'bad\nalias' }, { enabled: true }]) {
+      await assert.rejects(runtime.client('next-message.update', input));
+    }
+    assert.deepEqual(await runtime.client('next-message.update', { model_alias: ' fixture-small ' }),
+      { settings: { model_alias: 'fixture-small' } });
+    host.intercept = call => {
+      if (call.service === 'host.storage.set') throw new Error('Synthetic storage unavailable');
+    };
+    await assert.rejects(runtime.client('next-message.update', { model_alias: 'not-saved' }));
+    assert.deepEqual(await runtime.client('next-message.get'), { settings: { model_alias: 'fixture-small' } });
+    host.intercept = undefined;
+    await runtime.shutdown();
+    runtime = await launch('next-message', host);
+    assert.deepEqual(await runtime.client('next-message.get'), { settings: { model_alias: 'fixture-small' } });
+    assert.deepEqual(await runtime.client('next-message.update', { model_alias: '  ' }), { settings: {} });
+    await assert.rejects(runtime.client('next-message.unknown'));
+    assert(!host.calls.some(call => call.service === 'host.model.request'));
+    await runtime.shutdown();
+    runtime = await launch('next-message', host);
+    assert.deepEqual(await runtime.client('next-message.get'), { settings: {} });
+    await runtime.shutdown();
+    for (const value of ['not JSON', JSON.stringify({ model_alias: 3 })]) {
+      host.storage.set('workspace:next-message.settings.v1', value);
+      runtime = new Runtime('next-message', host);
+      await assert.rejects(runtime.initialize(), /settings/i);
+      await runtime.shutdown();
+    }
+  });
+  await scenario('next-message', 'bounded visible-turn request uses the live execution and optional alias', async () => {
+    const host = new FixtureHost('next-message-request');
+    const input = { threadId: 'private-thread-id', turnId: 'turn-one', userText: '请检查这段代码', assistantText: '已经检查完了。' };
+    host.intercept = call => {
+      if (call.service === 'host.model.request') return { text: '{"suggestion":"修复这个问题"}', provider: 'fixture', model: 'fixture', finish_reason: 'stop', truncated: false };
+    };
+    const runtime = await launch('next-message', host);
+    assert.deepEqual(await runtime.client('next-message.predict', input), { suggestion: '修复这个问题' });
+    const first = await host.waitCall('host.model.request');
+    assert.match(first.execution_id, /^capability-/);
+    assert.equal(first.method, 'call');
+    assert.deepEqual(Object.keys(first.params).sort(), ['max_output_tokens', 'messages', 'timeout_ms']);
+    assert.equal(first.params.timeout_ms, 4000);
+    assert.equal(first.params.max_output_tokens, 128);
+    assert.deepEqual(first.params.messages.map(message => message.role), ['system', 'user']);
+    const context = JSON.parse(first.params.messages[1].content);
+    assert.deepEqual(context, { user: input.userText, assistant: input.assistantText });
+    assert(!JSON.stringify(first.params).includes(input.threadId));
+    assert(first.params.messages.reduce((bytes, message) => bytes + Buffer.byteLength(message.content), 0) <= 8192);
+    await runtime.client('next-message.update', { model_alias: 'fixture-small' });
+    await runtime.client('next-message.predict', { ...input, turnId: 'turn-two' });
+    assert.equal(host.calls.filter(call => call.service === 'host.model.request').at(-1).params.model_alias, 'fixture-small');
+    // The cap includes prompt framing and JSON escaping, not just visible text length.
+    const emptyContext = JSON.stringify({ user: '', assistant: 'a' });
+    const remaining = 8192 - Buffer.byteLength(first.params.messages[0].content) - Buffer.byteLength(emptyContext);
+    assert(remaining > 0);
+    await runtime.client('next-message.predict', { ...input, turnId: 'exact-budget', userText: 'x'.repeat(remaining), assistantText: 'a' });
+    assert.equal(host.calls.filter(call => call.service === 'host.model.request').at(-1).params.messages.reduce((bytes, message) => bytes + Buffer.byteLength(message.content), 0), 8192);
+    const count = host.calls.filter(call => call.service === 'host.model.request').length;
+    for (const invalid of [null, [], {}, { ...input, extra: 'hidden context' }, { ...input, threadId: '' },
+      { ...input, turnId: ' ' }, { ...input, userText: 3 }, { ...input, assistantText: '' },
+      { ...input, userText: 'x'.repeat(remaining + 1), assistantText: 'a' },
+      { ...input, userText: '界'.repeat(3000) }, { ...input, userText: '\\'.repeat(5000) }]) {
+      await assert.rejects(runtime.client('next-message.predict', invalid));
+    }
+    assert.equal(host.calls.filter(call => call.service === 'host.model.request').length, count);
+    assert(host.calls.every(call => ['host.storage.get', 'host.storage.set', 'host.model.request'].includes(call.service)));
+    assert.equal(runtime.stderr, '', 'Conversation text must not be logged');
+    await runtime.shutdown();
+  });
+  await scenario('next-message', 'invalid, ambiguous, truncated and failed model results abstain', async () => {
+    const host = new FixtureHost('next-message-abstention');
+    let response;
+    host.intercept = call => {
+      if (call.service !== 'host.model.request') return;
+      if (response instanceof Error) throw response;
+      return { text: response, provider: 'fixture', model: 'fixture', finish_reason: 'stop', truncated: false };
+    };
+    const runtime = await launch('next-message', host);
+    const predict = turnId => runtime.client('next-message.predict', { threadId: 'parent', turnId, userText: 'Check this', assistantText: 'Checked' });
+    const outputs = ['{"suggestion":null}', 'not JSON', '```json\n{"suggestion":"Continue"}\n```', '{}', 'null', '[]',
+      '{"suggestion":true}', '{"suggestion":"Continue","extra":true}', '{"suggestion":"First","suggestion":"Second"}',
+      '{"suggestion":""}', '{"suggestion":"  "}', JSON.stringify({ suggestion: 'two\nlines' }),
+      JSON.stringify({ suggestion: 'two\rline' }), JSON.stringify({ suggestion: 'two\tparts' }),
+      JSON.stringify({ suggestion: 'two\u2028lines' }), JSON.stringify({ suggestion: 'two\u0085lines' }),
+      JSON.stringify({ suggestion: '😀'.repeat(241) }), new Error('Synthetic provider timeout'),
+      Object.assign(new Error('Synthetic unavailable alias'), { code: 'model_alias_not_found' })];
+    for (const [index, value] of outputs.entries()) {
+      response = value;
+      assert.deepEqual(await predict(`invalid-${index}`), { suggestion: null });
+    }
+    response = JSON.stringify({ suggestion: '😀'.repeat(240) });
+    assert.deepEqual(await predict('unicode-limit'), { suggestion: '😀'.repeat(240) });
+    host.intercept = call => call.service === 'host.model.request'
+      ? { text: '{"suggestion":"Truncated yet valid JSON"}', provider: 'fixture', model: 'fixture', finish_reason: 'length', truncated: true } : undefined;
+    assert.deepEqual(await predict('truncated'), { suggestion: null });
+    assert.equal(runtime.stderr, '', 'Provider errors must not log input or output text');
+    await runtime.shutdown();
+  });
+  await scenario('next-message', 'duplicate and cancelled predictions never retry inference', async () => {
+    const host = new FixtureHost('next-message-dedup');
+    let release;
+    host.intercept = call => call.service === 'host.model.request' ? new Promise(resolve => { release = resolve; }) : undefined;
+    const runtime = await launch('next-message', host);
+    const input = { threadId: 'parent', turnId: 'same-turn', userText: 'Check this', assistantText: 'Checked' };
+    const first = runtime.client('next-message.predict', input);
+    await host.waitCall('host.model.request');
+    const duplicate = runtime.client('next-message.predict', input);
+    release({ text: '{"suggestion":"Fix it"}', provider: 'fixture', model: 'fixture', finish_reason: 'stop', truncated: false });
+    assert.deepEqual(await first, { suggestion: 'Fix it' });
+    assert.deepEqual(await duplicate, { suggestion: null });
+    assert.deepEqual(await runtime.client('next-message.predict', input), { suggestion: null });
+    assert.equal(host.calls.filter(call => call.service === 'host.model.request').length, 1);
+    const before = host.calls.length;
+    const waiting = runtime.request('capability.invoke', { capability: 'plugin.client.request', input: {
+      method: 'next-message.predict', input: { ...input, turnId: 'cancelled-turn' },
+    }, output: {}, execution_id: 'next-message-held-execution' });
+    const rejected = assert.rejects(waiting, /abort|cancel/i);
+    const call = await host.waitCall('host.model.request', () => true, before);
+    assert.equal(call.execution_id, 'next-message-held-execution');
+    runtime.send({ id: 'cancel-next-message', method: 'execution.cancel', params: { execution_id: call.execution_id } });
+    await rejected;
+    release({ text: '{"suggestion":"Late result"}', provider: 'fixture', model: 'fixture', finish_reason: 'stop', truncated: false });
+    assert.deepEqual(await runtime.client('next-message.predict', { ...input, turnId: 'cancelled-turn' }), { suggestion: null });
+    assert.equal(host.calls.filter(call => call.service === 'host.model.request').length, 2);
+    host.intercept = call => { if (call.service === 'host.model.request') throw new Error('Synthetic timeout'); };
+    assert.deepEqual(await runtime.client('next-message.predict', { ...input, turnId: 'failed-turn' }), { suggestion: null });
+    assert.deepEqual(await runtime.client('next-message.predict', { ...input, turnId: 'failed-turn' }), { suggestion: null });
+    assert.equal(host.calls.filter(call => call.service === 'host.model.request').length, 3);
     await runtime.shutdown();
   });
 } catch (error) {
