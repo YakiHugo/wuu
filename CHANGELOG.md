@@ -10,8 +10,10 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Added
 
-- Signed macOS builds check GitHub stable releases for updates, with separate
-  confirmation before downloading and restarting to install.
+- Signed macOS builds check GitHub stable releases for updates. A sidebar
+  indicator beside the account control offers a download action, progress ring,
+  retry after failure, and restart confirmation when ready. Background checks
+  stay quiet; the Wuu menu retains manual update controls.
 
 - Computer Use-enabled macOS builds support background focus and menu tracking,
   formatted paste with clipboard restoration, modifier clicks, cancellable holds,

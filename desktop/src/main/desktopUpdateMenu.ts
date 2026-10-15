@@ -2,11 +2,11 @@ import { app, dialog, Menu } from "electron";
 import updater from "electron-updater";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { createUpdateController } from "./desktopUpdates";
+import { createUpdateController, type UpdateState } from "./desktopUpdates";
 import { mainTranslate as t } from "./i18n";
 import { productionApplicationMenuTemplate } from "./appShellGuards";
 
-export function installDesktopUpdates(shutdown: () => Promise<void>) {
+export function installDesktopUpdates(shutdown: () => Promise<void>, changed: (state: UpdateState) => void) {
   // Development/ad-hoc builds never carry the release update configuration.
   if (!app.isPackaged || process.platform !== "darwin" || !existsSync(join(process.resourcesPath, "app-update.yml"))) return;
   const { autoUpdater } = updater;
@@ -17,9 +17,10 @@ export function installDesktopUpdates(shutdown: () => Promise<void>) {
   autoUpdater.logger = null;
   const refresh = () => {
     const item = Menu.getApplicationMenu()?.getMenuItemById("check-for-updates");
-    if (!item) return;
     const state = controller.state;
-    item.enabled = state.kind === "idle" || state.kind === "ready";
+    changed(state);
+    if (!item) return;
+    item.enabled = state.kind === "idle" || state.kind === "ready" || state.kind === "available" || state.kind === "error";
     item.label = state.kind === "ready" ? t("updateRestart")
       : state.kind === "downloading" ? t("updateProgress", { percent: state.percent })
       : state.kind === "checking" ? t("updateChecking") : t("updateCheck");
@@ -48,6 +49,9 @@ export function installDesktopUpdates(shutdown: () => Promise<void>) {
   initial.unref();
   periodic.unref();
   return {
+    get state() { return controller.state; },
+    download: controller.download,
+    restart: controller.restart,
     refresh,
     stop() { clearTimeout(initial); clearInterval(periodic); controller.stop(); },
   };

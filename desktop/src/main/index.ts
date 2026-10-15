@@ -1793,6 +1793,19 @@ app.whenReady().then(async () => {
       return { shown: true };
     },
   );
+  ipcMain.handle("wuu:desktop-update-state", () => desktopUpdates?.state ?? { kind: "unsupported" });
+  ipcMain.handle("wuu:desktop-update-download", event => {
+    if (!windowRegistry.windowForID(event.sender.id) || event.senderFrame !== event.sender.mainFrame) {
+      throw new Error("Updates are available from Wuu windows only.");
+    }
+    return desktopUpdates?.download();
+  });
+  ipcMain.handle("wuu:desktop-update-restart", event => {
+    if (!windowRegistry.windowForID(event.sender.id) || event.senderFrame !== event.sender.mainFrame) {
+      throw new Error("Updates are available from Wuu windows only.");
+    }
+    return desktopUpdates?.restart();
+  });
   ipcMain.handle("wuu:build-info", (): BuildInfoResult => ({
     core: cachedCoreBuildInfo,
     desktop: DESKTOP_BUILD_INFO,
@@ -2847,7 +2860,7 @@ app.whenReady().then(async () => {
   appContextCapture.start();
   syncNativeThemeSource();
   createWindow();
-  desktopUpdates = installDesktopUpdates(prepareToQuit);
+  desktopUpdates = installDesktopUpdates(prepareToQuit, state => broadcastToAll("wuu:desktop-update-changed", state));
   void phoneAccess.run(() => phoneAccess.restore(projectManager.ensureRuntimeContext().cwd));
 
   app.on("activate", () => {

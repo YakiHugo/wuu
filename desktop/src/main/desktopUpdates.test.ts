@@ -42,20 +42,21 @@ describe("desktop update consent and recovery", () => {
     await Promise.all([controller.check(true), controller.check(true)]);
     expect(updater.checkForUpdates).toHaveBeenCalledTimes(1);
     expect(install).not.toHaveBeenCalled();
-    expect(controller.state.kind).toBe("idle");
+    expect(controller.state.kind).toBe("error");
     await controller.check(true);
     expect(updater.downloadUpdate).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps failed background checks quiet and suppresses repeated version prompts", async () => {
+  it("keeps background checks quiet and leaves available updates for explicit action", async () => {
     const { controller, updater, prompt } = fixture([1, 1]);
     updater.checkForUpdates.mockRejectedValueOnce(new Error("offline"));
     await controller.check(false);
     expect(prompt).not.toHaveBeenCalled();
     await controller.check(false);
     await controller.check(false);
-    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(prompt).not.toHaveBeenCalled();
+    expect(controller.state).toEqual({ kind: "available", version: info.version });
     await controller.check(true);
-    expect(prompt).toHaveBeenCalledTimes(2);
+    expect(prompt).toHaveBeenCalledTimes(1);
   });
 });

@@ -159,9 +159,14 @@ See the [signing reference](../../../desktop/scripts/RELEASE-SIGNING.md).
 Release builds embed an `app-update.yml` GitHub provider for `blueberrycongee/wuu`.
 The desktop uses electron-updater 6 with stable releases only, no downgrades,
 explicit download consent, and explicit restart consent. Development and ad-hoc
-builds do not carry this configuration and never check for updates. The native
-Wuu menu displays download progress and offers manual checks or restart. Restart
-first drains the same child-process cleanup used by ordinary application quit.
+builds do not carry this configuration and never check for updates. Background
+checks start 30 seconds after launch and repeat every six hours while idle. A
+new release appears beside the account control at the bottom of the sidebar;
+click to download, watch the progress ring, then click the ready indicator to
+confirm restart. Failed downloads remain available for retry. Background checks
+do not open dialogs. The native Wuu menu also displays download progress and
+offers manual checks or restart. Restart first drains the same child-process
+cleanup used by ordinary application quit.
 
 The release verifier checks the embedded provider in both archives, and refreshes
 the generated `*-mac.yml` file sizes and SHA-512 hashes after final signing and
