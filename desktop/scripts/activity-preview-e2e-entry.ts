@@ -8,6 +8,10 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { app, BrowserWindow, WebContentsView } from "electron";
 import type { ActivitySession, JsonValue } from "../src/shared/protocol";
+import { registerRenderableFileProtocol, registerRenderableFileScheme } from "../src/main/renderableFileProtocol";
+import { renderableFileURL } from "../src/main/renderableFileURLs";
+import { CodexPetWindowManager } from "../src/main/codexPetWindow";
+import { browserPiPOverlayHTML } from "../src/main/activityPiPChrome";
 import { ActivityPiPSurface } from "../src/main/activityPiPWindow";
 import type { ActivityPiPContentContext } from "../src/main/activityPiPContent";
 import { BrowserPiPContent } from "../src/main/browserPiPWindow";
@@ -22,6 +26,7 @@ const fixture = process.env.WUU_ACTIVITY_PREVIEW_FIXTURE;
 assert(fixture, "Run through activity-preview-e2e.cjs");
 mkdirSync(output, { recursive: true });
 app.setPath("userData", join(fixture, "profile"));
+registerRenderableFileScheme();
 process.env.WUU_ACTIVITY_PREVIEW_FIXTURE_LOG = join(output, "native-transport.jsonl");
 writeFileSync(process.env.WUU_ACTIVITY_PREVIEW_FIXTURE_LOG, "");
 const checks: { name: string; detail?: unknown }[] = [];
@@ -88,11 +93,13 @@ let main: BrowserWindow | undefined;
 const browserViews: WebContentsView[] = [];
 const contexts: { activity: ActivitySession; context: ActivityPiPContentContext }[] = [];
 const helper = join(desktop, "scripts", "activity-preview-native-fixture.cjs");
+let pointer = { x: -100, y: -100 };
 let surfaceCount = 0;
 let reconciliationCount = 0;
 let snapshotActivities: ActivitySession[] = [];
 
 app.whenReady().then(async () => {
+  registerRenderableFileProtocol(fixture!);
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   process.env.WUU_ACTIVITY_PREVIEW_FIXTURE_URL = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
   main = new BrowserWindow({ width: 1000, height: 720, show: false, ...(process.platform === "linux" ? { frame: false, autoHideMenuBar: true } : {}) });
@@ -117,7 +124,7 @@ app.whenReady().then(async () => {
   await open("browser-a", "#dcecff"); await open("browser-b", "#ffe5ca");
   coordinator = new ObservationCoordinator(registry, async () => { reconciliationCount++; return snapshotActivities; }, (next, key, sink, bounds) => {
     surfaceCount++;
-    return new ActivityPiPSurface({ activity: next, bounds: bounds(), sink, isPackaged: false, parent: () => main,
+    return new ActivityPiPSurface({ activity: next, bounds: bounds(), sink, isPackaged: false, parent: () => main, cursorPosition: () => pointer,
       createContent(next, context) {
         const traced = { ...context,
           onEvent(event: Parameters<typeof context.onEvent>[0]) { events.push({ target: next.target, event }); context.onEvent(event); },
@@ -168,6 +175,7 @@ app.whenReady().then(async () => {
   const browser = browserViews[0].webContents;
   const originalDPR = await browserViews[1].webContents.executeJavaScript("devicePixelRatio");
   async function checkBrowserInput(label: string, width = 1280, height = 800) {
+    await waitFor(`${label}: browser viewport settles`, () => browser.executeJavaScript(`innerWidth === ${width} && innerHeight === ${height}`));
     await browser.executeJavaScript("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
     const metrics = await browser.executeJavaScript("({width:innerWidth,height:innerHeight,dpr:devicePixelRatio})");
     check(`${label}: preserves browser layout and device scale`, metrics.width === width && metrics.height === height && metrics.dpr === originalDPR, metrics);
@@ -230,6 +238,103 @@ app.whenReady().then(async () => {
   await waitFor("browser returns to compact preview", () => BrowserWindow.fromWebContents(browser) === pip);
   await checkBrowserInput("remounted compact preview", 950, 620);
   pip.setBounds({ x: 120, y: 140, width: 360, height: 240 });
+  // Exercise the real placement coordinator, preview shell and Wuu pet host.
+  const petManager = new CodexPetWindowManager({ onClose() {}, onJump() {},
+    onSubmit: async () => ({ ok: true }), onShowApp() {},
+    onPreviewHostChanged: () => coordinator!.refreshPetHost(), isPackaged: false });
+  coordinator.setPetHost(() => petManager.previewHost(), active => petManager.setPreviewActive(active));
+  coordinator.setReturnHomeHandler(next => { main!.show(); coordinator!.setActiveThread(next.thread_id); });
+  const face = `data:image/png;base64,${readFileSync(join(desktop, "src/renderer/assets/mascot-face.png")).toString("base64")}`;
+  const sheet = await main.webContents.executeJavaScript(`(async () => {
+    const image = new Image(); image.src = ${JSON.stringify(face)}; await image.decode();
+    const canvas = document.createElement('canvas'); canvas.width = 192 * 8; canvas.height = 208 * 9;
+    const ctx = canvas.getContext('2d');
+    for(let row=0;row<9;row++)for(let col=0;col<8;col++)ctx.drawImage(image,col*192+8,row*208+16,176,176);
+    return canvas.toDataURL();
+  })()`);
+  const sheetPath = join(fixture!, "wuu-pet.png");
+  writeFileSync(sheetPath, Buffer.from(sheet.split(",")[1], "base64"));
+  const petSnapshot = { home: fixture!, enabled: true, selected_id: "wuu-fixture", errors: [], pets: [{
+    id: "wuu-fixture", display_name: "Wuu", description: "Wuu artwork acceptance fixture", manifest_path: "", spritesheet_path: sheetPath, spritesheet_url: renderableFileURL(sheetPath),
+  }] };
+  petManager.sync(petSnapshot);
+  await waitFor("Wuu pet renderer shown", () => petManager.previewHost()?.window.isVisible());
+  coordinator.setBrowserPiPHostLayout(main.webContents.id, main, { host: { x: 0, y: 0, width: 1000, height: 720 }, obstacles: [] });
+  coordinator.setAppearance(false, { reducedMotion: true, fontSize: 15, fontFamily: "system-ui", locale: "en-US", surface: "#f8f8fa", text: "#131314", muted: "#5f5f61" });
+  await settledMotion(pip);
+  await waitFor("home controls updated", () => overlay.webContents.executeJavaScript("!document.getElementById('pet').hidden"));
+  check("home has exactly two icon controls", await overlay.webContents.executeJavaScript("[...document.querySelectorAll('#actions button')].filter(b=>!b.hidden).length===2 && !document.getElementById('close').textContent.trim() && !!document.getElementById('close').querySelector('svg')"));
+  check("live preview chrome stays hidden at rest", await overlay.webContents.executeJavaScript("getComputedStyle(document.getElementById('actions')).opacity==='0'"));
+
+  // These are exact production renderer captures. Linux cannot capture native
+  // sibling-view composition; the review page layers their captured pixels.
+  const review = new BrowserWindow({ show: false, frame: false, autoHideMenuBar: true, width: 360, height: 240 });
+  async function capturePresentation(name: string, placement: "home" | "floating" | "pet", dark: boolean, fontSize: number) {
+    const b = pip.getBounds(); pointer = { x: b.x + 12, y: b.y + 12 };
+    await waitFor("local control backdrop captured", () => overlay.webContents.executeJavaScript("!document.getElementById('control-backdrop').hidden"));
+    await browser.executeJavaScript(`document.body.style.background=${JSON.stringify(dark ? "#253144" : "#dcecff")};document.body.style.color=${JSON.stringify(dark ? "#eef3fb" : "#131314")}`);
+    const content = await browser.capturePage();
+    const chrome = await overlay.webContents.capturePage();
+    writeFileSync(join(output, `${name}-content.png`), content.toPNG());
+    writeFileSync(join(output, `${name}-chrome.png`), chrome.toPNG());
+    review.setBounds({ x: 10, y: 10, width: b.width, height: b.height });
+    await review.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(browserPiPOverlayHTML("Wuu workspace"))}`);
+    await review.webContents.executeJavaScript(`(() => {
+      const underlay=document.createElement('img'); underlay.src=${JSON.stringify(content.toDataURL())};
+      Object.assign(underlay.style,{position:'absolute',inset:'0',width:'100%',height:'100%',objectFit:'contain'});
+      document.body.prepend(underlay);
+      window.wuuPipMount({mounted:true});window.wuuPipState({kind:'browser',state:'active',controller:'agent'});
+      window.wuuPipPlacement({placement:${JSON.stringify(placement)},petAvailable:true});
+      window.wuuPipAppearance({dark:${dark},fontSize:${fontSize},locale:'en-US',surface:${JSON.stringify(dark ? "#242426" : "#f8f8fa")},text:${JSON.stringify(dark ? "#f4f4f5" : "#131314")}});
+      window.wuuPipControlBackdrop({src:${JSON.stringify(content.toDataURL())},rect:{x:0,y:0,width:${b.width},height:${b.height}}});
+      window.wuuPipHover({x:12,y:12});
+      return new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    })()`);
+    await review.webContents.executeJavaScript("Promise.all(document.getAnimations().filter(a=>Number.isFinite(a.effect.getComputedTiming().endTime)).map(a=>a.finished))");
+    writeFileSync(join(output, `${name}-renderer.png`), (await review.webContents.capturePage()).toPNG());
+    pointer = { x: -100, y: -100 };
+    await waitFor("controls hide again", () => overlay.webContents.executeJavaScript("getComputedStyle(document.getElementById('actions')).opacity==='0'"));
+  }
+  await capturePresentation("home-light", "home", false, 15);
+  coordinator.setPresentation(threadID, "floating");
+  await settledMotion(pip);
+  check("floating moves the same shell off the main parent", pip.getParentWindow() === null && pip.id === pipID);
+  coordinator.setActiveThread("different-thread"); main.hide();
+  check("floating remains owned by its task while main is hidden or changes conversation", pip.isVisible() && BrowserWindow.fromWebContents(browser) === pip && current.controller === "agent");
+  await capturePresentation("floating-light", "floating", false, 15);
+  await overlay.webContents.executeJavaScript("document.getElementById('pet').click()");
+  await waitFor("preview attaches to Wuu pet", () => pip.getParentWindow() === petManager.previewHost()?.window);
+  await settledMotion(pip);
+  check("pet has only the return control", await overlay.webContents.executeJavaScript("document.getElementById('pet').hidden && !document.getElementById('close').textContent.trim() && !!document.getElementById('close').querySelector('svg')"));
+  const petWindow = petManager.previewHost()!.window;
+  const beforePetMove = pip.getBounds(), petBounds = petWindow.getBounds();
+  petWindow.setBounds({ ...petBounds, x: petBounds.x - 70, y: petBounds.y - 40 });
+  await waitFor("preview follows the pet geometry", () => pip.getBounds().x === beforePetMove.x - 70 && pip.getBounds().y === beforePetMove.y - 40);
+  check("moving the pet preserves the task and preview identity", pip.id === pipID && current.controller === "agent");
+  const beforeResize = pip.getBounds();
+  for (const [phase, x, y] of [["start", 100, 100], ["move", 150, 135], ["end", 150, 135]] as const) {
+    await overlay.webContents.executeJavaScript(`window.location.href='wuu-pip://resize?phase=${phase}&edge=se&x=${x}&y=${y}'`);
+    await new Promise(resolve => setTimeout(resolve, 30));
+  }
+  check("pet preview can grow without losing its anchor", pip.getBounds().width > beforeResize.width && pip.getParentWindow() === petWindow);
+  coordinator.setAppearance(true, { reducedMotion: true, fontSize: 20, fontFamily: "system-ui", locale: "en-US", surface: "#242426", text: "#f4f4f5", muted: "#b5b5b7" });
+  await capturePresentation("pet-dark-large", "pet", true, 20);
+  await petWindow.webContents.executeJavaScript(`new Promise((resolve,reject)=>{const image=new Image();image.onload=resolve;image.onerror=reject;image.src=${JSON.stringify(renderableFileURL(sheetPath))};})`);
+  writeFileSync(join(output, "wuu-pet-renderer.png"), (await petWindow.webContents.capturePage()).toPNG());
+  petManager.refreshLocale();
+  await waitFor("locale refresh recreates pet without changing placement", () => Boolean(petManager.previewHost()?.window.isVisible()) && pip.getParentWindow() === petManager.previewHost()?.window);
+  check("locale refresh retains pet placement", coordinator.presentationForThread(threadID)?.placement === "pet");
+  await overlay.webContents.executeJavaScript("document.getElementById('close').click()");
+  await waitFor("return control restores owning conversation", () => main!.isVisible() && pip.getParentWindow() === main && coordinator!.presentationForThread(threadID)?.placement === "home");
+  check("returning preview does not revoke task control", current.controller === "agent" && pip.id === pipID);
+  coordinator.setPresentation(threadID, "pet"); coordinator.setActiveThread("different-thread");
+  petManager.sync({ ...petSnapshot, enabled: false });
+  await waitFor("disabling pet cannot expose the wrong conversation", () => !pip.isVisible());
+  check("disabled pet returns placement home without stopping task", coordinator.presentationForThread(threadID)?.placement === "home" && !coordinator.presentationForThread(threadID)?.petAvailable && current.controller === "agent");
+  coordinator.setActiveThread(threadID);
+  await waitFor("home preview restores its owner", () => pip.isVisible());
+  review.destroy(); petManager.destroy();
+  coordinator.setBrowserPiPHostLayout(main.webContents.id, main, { host: { x: 0, y: 0, width: 1000, height: 720 }, obstacles: [] });
   const bounds = pip.getBounds();
   const browserContext = contexts.at(-1)!.context;
   current = activity("cua", "native-a"); coordinator.update(current);
@@ -273,7 +378,7 @@ app.whenReady().then(async () => {
   await waitFor("native delta frame is decoded", () => nativeView.webContents.executeJavaScript("window.fixtureDecodeEntered === true"));
   await emitNative("native-a", { event: "capture_status", status: "error", message: "Synthetic permission denied" });
   await waitFor("capture error clears live presentation", () => overlay.webContents.executeJavaScript("!document.getElementById('ph').classList.contains('gone')"));
-  check("capture failure keeps its symbol and hide control available without raw diagnostics", await overlay.webContents.executeJavaScript("!document.getElementById('ph').classList.contains('gone') && document.getElementById('ph-icon').checkVisibility() && !document.getElementById('close').hidden && document.getElementById('expand').hidden && !document.body.innerText.includes('Synthetic permission denied')"));
+  check("capture failure keeps its symbol and hide control available without raw diagnostics", await overlay.webContents.executeJavaScript("!document.getElementById('ph').classList.contains('gone') && document.getElementById('ph-icon').checkVisibility() && !document.getElementById('close').hidden && document.getElementById('pet').hidden && !document.body.innerText.includes('Synthetic permission denied')"));
   await nativeView.webContents.executeJavaScript("window.fixtureReleaseDecode()");
   await waitFor("invalidated frame is acknowledged after discard", () => readFileSync(process.env.WUU_ACTIVITY_PREVIEW_FIXTURE_LOG!, "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line)).some(entry => entry.target === "native-a" && entry.command?.type === "ack" && entry.command.sequence === 3));
   check("a late decoded frame cannot overwrite pixels after capture failure", JSON.stringify(await nativeView.webContents.executeJavaScript("Array.from(document.querySelector('canvas').getContext('2d').getImageData(0,0,1,1).data)")) === JSON.stringify(firstNativePixel));
@@ -297,8 +402,7 @@ app.whenReady().then(async () => {
   check("a later action cannot undo explicit hide", !pip.isVisible());
   coordinator.setActiveThread("different-thread"); coordinator.setActiveThread(threadID);
   check("conversation switching preserves explicit hide", !pip.isVisible());
-  // A hidden card returns only while its window has focus; another app may
-  // hold focus on a machine in use.
+  // Restore explicitly without changing the task or recreating its surface.
   app.focus({ steal: true }); main.focus();
   await waitFor("main window focused for reopen", () => main!.isFocused());
   coordinator.showForThread(threadID);
@@ -350,7 +454,8 @@ app.whenReady().then(async () => {
   main.blur(); otherWindow.focus();
   await waitFor("other fixture window remains foreground after hide", () => otherWindow.isFocused() && !main!.isFocused());
   coordinator.showForThread(threadID);
-  check("a hidden preview waits while its parent is unfocused", !pip.isVisible() && otherWindow.isFocused(), { mainFocused: main.isFocused(), otherFocused: otherWindow.isFocused(), pipVisible: pip.isVisible(), pipFocused: pip.isFocused() });
+  await waitFor("preview can reappear without focusing its parent", () => pip.isVisible());
+  check("reopening a preview preserves the foreground app", pip.isVisible() && otherWindow.isFocused() && !pip.isFocused(), { mainFocused: main.isFocused(), otherFocused: otherWindow.isFocused(), pipVisible: pip.isVisible(), pipFocused: pip.isFocused() });
   main.focus();
   await waitFor("parent focus restores preview", () => pip.isVisible());
   check("showing a preview preserves parent keyboard focus", main.isFocused() && !pip.isFocused());
@@ -363,7 +468,7 @@ app.whenReady().then(async () => {
   check("closing preview preserves main and browser targets", !main.isDestroyed() && browserViews.every(view => !view.webContents.isDestroyed()));
   coordinator.showForThread(threadID);
   await waitFor("reopen after native close", () => pip.isVisible());
-  const oldContext = contexts.at(-1)!.context;
+  const oldContext = contexts.findLast(entry => entry.activity.thread_id === threadID)!.context;
   current = activity("cua", "native-b"); coordinator.update(current);
   await emitNative("native-b", frame(210, 100, 20));
   await waitFor("second native target shown", () => overlay.webContents.executeJavaScript("document.getElementById('ph').classList.contains('gone')"));
@@ -412,7 +517,7 @@ app.whenReady().then(async () => {
     const received = entry as { target: string; event?: { event: string; status?: string } };
     return received.target === "native-d" && received.event?.event === "capture_status" && received.event.status === "stopped";
   }));
-  check("stopped capture retains its frame and hide control", await controlOverlay.webContents.executeJavaScript("document.getElementById('ph').classList.contains('gone') && !document.getElementById('close').hidden && document.getElementById('expand').hidden"));
+  check("stopped capture retains its frame and hide control", await controlOverlay.webContents.executeJavaScript("document.getElementById('ph').classList.contains('gone') && !document.getElementById('close').hidden && document.getElementById('pet').hidden"));
   check("stopped capture never implies task completion", await controlOverlay.webContents.executeJavaScript("document.getElementById('completion').getAttribute('aria-hidden') === 'true'"));
   current = activity("cua", "native-d", { execution_id: "fixture-run-2", controller: "user", state: "user_controlled" });
   coordinator.update(current);
@@ -427,6 +532,25 @@ app.whenReady().then(async () => {
     params: { thread_id: threadID, turn: { status: "interrupted" } } } });
   await waitFor("authoritative task stop dismisses the preview", () => !finalPip.isVisible());
   check("external task stop preserves the browser page", !browserViews[1].webContents.isDestroyed());
+  // Two genuine live surfaces keep different hosts and owning conversations.
+  coordinator.update(activity("browser", "browser-a", { execution_id: "fixture-multi-a" }));
+  coordinator.setPresentation(threadID, "floating");
+  coordinator.update(activity("browser", "browser-b", { thread_id: "auto-off-thread", execution_id: "fixture-multi-b" }));
+  coordinator.setActiveThread("auto-off-thread"); coordinator.showForThread("auto-off-thread");
+  await waitFor("independent live surfaces are visible", () => finalPip.isVisible() && second.isVisible());
+  check("desktop and home surfaces retain separate parents and targets", finalPip.getParentWindow() === null && second.getParentWindow() === main
+    && BrowserWindow.fromWebContents(browserViews[0].webContents) === finalPip && BrowserWindow.fromWebContents(browserViews[1].webContents) === second);
+  petManager.sync(petSnapshot);
+  await waitFor("pet available for simultaneous previews", () => petManager.previewHost()?.window.isVisible());
+  coordinator.setPresentation(threadID, "pet");
+  await waitFor("pet and home surfaces remain visible", () => finalPip.getParentWindow() === petManager.previewHost()?.window && finalPip.isVisible() && second.isVisible());
+  await settledMotion(finalPip); await settledMotion(second);
+  const homeBefore = second.getBounds(), externalBefore = finalPip.getBounds(), multiPet = petManager.previewHost()!.window;
+  multiPet.setBounds({ ...multiPet.getBounds(), x: multiPet.getBounds().x - 50 });
+  await waitFor("external preview follows only its pet", () => finalPip.getBounds().x === externalBefore.x - 50);
+  check("pet geometry cannot move another conversation's home preview", JSON.stringify(second.getBounds()) === JSON.stringify(homeBefore));
+  petManager.sync({ ...petSnapshot, enabled: false });
+  await waitFor("only the selected home preview remains after pet disable", () => !finalPip.isVisible() && second.isVisible());
   await coordinator.shutdown();
   check("shutdown destroys preview shell", finalPip.isDestroyed());
   host.destroyAll(); main.destroy();
@@ -436,7 +560,11 @@ app.whenReady().then(async () => {
   console.log(`PASS: live activity shell and synthetic native transport (${checks.length} checks); evidence ${output}`);
   app.exit(0);
 }).catch(async error => {
-  writeFileSync(join(output, "failure.json"), JSON.stringify({ error: String(error), checks, events }, null, 2));
+  writeFileSync(join(output, "failure.json"), JSON.stringify({ error: String(error), checks, events,
+    windows: BrowserWindow.getAllWindows().map(win => ({ id: win.id, visible: win.isVisible(), parent: win.getParentWindow()?.id, bounds: win.getBounds() })),
+    presentations: [coordinator?.presentationForThread(threadID), coordinator?.presentationForThread("auto-off-thread")],
+    contexts: contexts.map(entry => ({ thread: entry.activity.thread_id, target: entry.activity.target, epoch: entry.activity.execution_id })),
+  }, null, 2));
   console.error(error);
   await coordinator?.shutdown(); host?.destroyAll(); main?.destroy();
   for (const source of sources.values()) source.end();

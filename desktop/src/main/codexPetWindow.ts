@@ -1219,6 +1219,7 @@ ${resizeHandles}
 
 export type CodexPetWindowOptions = {
   onClose: () => void;
+  onPreviewHostChanged?: () => void;
   // Opens a bubble row's conversation in the main window.
   onJump: (threadID: string) => void;
   // Sends text to Wuu as a reply or as a new conversation.
@@ -1232,6 +1233,8 @@ export type CodexPetWindowOptions = {
 export class CodexPetWindowManager {
   private win: BrowserWindow | undefined;
   private loaded = false;
+  private previewActive = false;
+  private rebuildingWindow = false;
   private pendingView: CodexPetView | undefined;
   private lastViewSignature = "";
   private mood: CodexPetMood = "idle";
@@ -1278,11 +1281,34 @@ export class CodexPetWindowManager {
 
   constructor(private readonly options: CodexPetWindowOptions) {}
 
+  previewHost(): { window: BrowserWindow; anchor: { x: number; y: number }; sprite: { width: number; height: number } } | undefined {
+    const win = this.win;
+    if (!win || win.isDestroyed()) return undefined;
+    return { window: win, anchor: this.anchorFromBounds(win.getBounds(), this.currentLayout),
+      sprite: renderedSprite(this.size, this.appliedScale) };
+  }
+
+  setPreviewActive(active: boolean): void {
+    if (this.previewActive === active) return;
+    this.previewActive = active;
+    this.refresh();
+  }
+
   refreshLocale(): void {
     const pet = selectedCodexPet(this.snapshot);
     if (!pet || !this.win || this.win.isDestroyed()) return;
-    this.destroy();
-    this.createWindow(pet);
+    this.rebuildingWindow = true;
+    try {
+      this.destroy();
+      this.createWindow(pet);
+    } finally {
+      this.rebuildingWindow = false;
+      this.notifyPreviewHost();
+    }
+  }
+
+  private notifyPreviewHost(): void {
+    if (!this.rebuildingWindow) this.options.onPreviewHostChanged?.();
   }
 
   setSize(size: CodexPetSize, commit = true): void {
@@ -1394,6 +1420,7 @@ export class CodexPetWindowManager {
     this.panelWorkspace = undefined;
     this.lookCapable = false;
     this.updateLook();
+    this.notifyPreviewHost();
   }
 
   private refresh(): void {
@@ -1423,6 +1450,7 @@ export class CodexPetWindowManager {
   // has not hidden. The open panel lists every recent conversation, so any
   // of them can be a reply target.
   private visibleHints(): CodexPetHint[] {
+    if (this.previewActive && !this.expanded) return [];
     if (this.expanded) return this.hints;
     return this.hints.filter(
       (hint) => hint.status !== "idle" && this.dismissed.get(hint.thread_id) !== hint.status,
@@ -1491,6 +1519,8 @@ export class CodexPetWindowManager {
     });
     this.win = win;
     this.loaded = false;
+    win.on("move", () => this.notifyPreviewHost());
+    win.on("show", () => this.notifyPreviewHost());
     win.setAlwaysOnTop(true, "floating");
     win.setHasShadow(false);
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
@@ -1555,6 +1585,7 @@ export class CodexPetWindowManager {
       if (this.win === win) this.forgetWindow();
     });
     void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(codexPetWindowHTML(view))}`);
+    this.notifyPreviewHost();
   }
 
   private popupMenu(win: BrowserWindow): void {
@@ -1625,6 +1656,7 @@ export class CodexPetWindowManager {
     const view = this.view(pet, layout);
     this.appliedScale = view.scale;
     this.appliedExpanded = this.expanded;
+    this.notifyPreviewHost();
     const signature = JSON.stringify(view);
     if (signature === this.lastViewSignature && this.loaded) return;
     this.lastViewSignature = signature;

@@ -22,6 +22,9 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Changed
 
+- Live previews keep the picture clear with hover-only controls and a soft local
+  backdrop. Move a preview between Wuu, the desktop, and the selected pet without
+  stopping its task; restore hidden previews from the conversation menu.
 - Desktop downloads use stable product/platform filenames without a version suffix; app versions and automatic update verification are unchanged.
 
 ## [2026.10.15] - 2026-10-15

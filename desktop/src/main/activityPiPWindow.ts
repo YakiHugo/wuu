@@ -1,6 +1,6 @@
 import { BrowserWindow, WebContentsView, screen, systemPreferences, type Rectangle } from "electron";
 import type { ActivitySession } from "../shared/protocol";
-import type { ActivityPreviewAppearance } from "../shared/activityPreview";
+import type { ActivityPreviewPlacement, ActivityPreviewAppearance } from "../shared/activityPreview";
 import { appShellWebPreferences } from "./appShellGuards";
 import { browserPiPOverlayHTML } from "./activityPiPChrome";
 import { activityPreviewIsLive, pipContainRect } from "./activityPiPContent";
@@ -114,6 +114,9 @@ export class ActivityPiPSurface implements ObservationPiPHandle {
   private completionDismissed = false;
   private completionTimer: ReturnType<typeof setTimeout> | undefined;
   private dark = false;
+  private placement: ActivityPreviewPlacement = "home";
+  private petAvailable = false;
+  private controlSnapshotRevision = 0;
   private hoverTimer: ReturnType<typeof setInterval> | undefined;
   private hoverPoint: PipPoint | null | undefined;
   private activity: ActivitySession;
@@ -196,8 +199,8 @@ export class ActivityPiPSurface implements ObservationPiPHandle {
           this.execute("window.wuuPipDragAck?.()");
           return;
         }
-        if (rawURL === "wuu-pip://close") this.deps.sink.onEvent({ event: "user_close" });
-        if (rawURL === "wuu-pip://expand") this.deps.sink.onEvent({ event: "expand" });
+        if (rawURL === "wuu-pip://close") this.deps.sink.onEvent({ event: this.placement === "home" ? "user_close" : "return_home" });
+        if (rawURL === "wuu-pip://pet") this.deps.sink.onEvent({ event: "send_to_pet" });
         if (rawURL === "wuu-pip://retry") this.deps.sink.onEvent({ event: "retry" });
       }
     });
@@ -213,6 +216,7 @@ export class ActivityPiPSurface implements ObservationPiPHandle {
         this.overlayReady = true;
         this.syncOverlayMode();
         this.pushActivityState();
+        this.pushPlacement();
         this.setCaptureStatus(this.captureState);
         this.content?.refresh?.();
         this.setAppearance(this.dark);
@@ -322,15 +326,28 @@ export class ActivityPiPSurface implements ObservationPiPHandle {
     const x = cursor.x - bounds.x, y = cursor.y - bounds.y;
     const point = x >= 0 && y >= 0 && x < bounds.width && y < bounds.height ? { x, y } : null;
     if (this.hoverPoint !== undefined && this.hoverPoint?.x === point?.x && this.hoverPoint?.y === point?.y) return;
+    const entering = Boolean(point) && !this.hoverPoint;
     this.hoverPoint = point;
+    if (entering) this.captureControlBackdrop();
     this.execute(`window.wuuPipHover?.(${JSON.stringify(point)})`);
+  }
+
+  private captureControlBackdrop(): void {
+    const revision = ++this.controlSnapshotRevision;
+    const generation = this.contentGeneration;
+    const content = this.content;
+    void content?.snapshot?.().then(src => {
+      if (revision !== this.controlSnapshotRevision || generation !== this.contentGeneration || !this.hoverPoint || !src) return;
+      this.execute(`window.wuuPipControlBackdrop?.(${JSON.stringify({ src, rect: this.contentRect() })})`);
+    }).catch(() => undefined);
   }
 
   private stopHoverTracking(): void {
     if (this.hoverTimer) clearInterval(this.hoverTimer);
     this.hoverTimer = undefined;
     this.hoverPoint = undefined;
-    this.execute("window.wuuPipHover?.(null)");
+    ++this.controlSnapshotRevision;
+    this.execute("window.wuuPipControlBackdrop?.(null);window.wuuPipHover?.(null)");
   }
 
   // Native adapters stop producing frames; a browser adapter keeps its real
@@ -374,6 +391,25 @@ export class ActivityPiPSurface implements ObservationPiPHandle {
   // is not on screen, so the card hides until it returns. Column changes while
   // the card is resting retarget the committed corner immediately; a drag in
   // progress keeps following the pointer and snaps on release.
+  setPlacement(placement: ActivityPreviewPlacement, petAvailable: boolean): void {
+    const changed = this.placement !== placement;
+    if (!changed && this.petAvailable === petAvailable) return;
+    this.placement = placement;
+    this.petAvailable = petAvailable;
+    if (changed) {
+      this.cancelSnap();
+      this.alignment = "bottom-right";
+      this.screenLayout = undefined;
+    }
+    this.win?.setAlwaysOnTop(placement !== "home", "floating");
+    this.win?.setVisibleOnAllWorkspaces(placement !== "home", { visibleOnFullScreen: true });
+    this.pushPlacement();
+  }
+
+  private pushPlacement(): void {
+    this.execute(`window.wuuPipPlacement?.(${JSON.stringify({ placement: this.placement, petAvailable: this.petAvailable })})`);
+  }
+
   setHostLayout(layout: BrowserPiPScreenLayout | null): void {
     if (!layout) {
       this.screenLayout = null;
@@ -391,6 +427,10 @@ export class ActivityPiPSurface implements ObservationPiPHandle {
     this.detachHostParent?.();
     this.detachHostParent = undefined;
     this.hostParent = parent;
+    // Reparenting hides the native window. Finish any in-flight reveal first
+    // so its animation cannot leave the new host with an invisible card.
+    this.settleTransition();
+    this.endPreparing();
     if (win.isVisible()) win.hide();
     win.setParentWindow?.(parent && !parent.isDestroyed() ? parent : null);
     if (parent && !parent.isDestroyed()) {
@@ -564,6 +604,8 @@ export class ActivityPiPSurface implements ObservationPiPHandle {
 
   private stopContent(): void {
     ++this.contentGeneration;
+    ++this.controlSnapshotRevision;
+    this.execute("window.wuuPipControlBackdrop?.(null)");
     if (this.contentStopping) return;
     const content = this.content;
     this.content = undefined;
@@ -697,12 +739,17 @@ export class ActivityPiPSurface implements ObservationPiPHandle {
       { x: 0, y: 0 },
     );
     if (nearest) this.alignment = nearest.alignment;
+    if (this.placement === "pet") {
+      this.alignment = "bottom-right";
+      this.deps.sink.onEvent({ event: "geometry", ...settled });
+    }
   }
 
   // The card may occupy the column inside the same margin the corners use.
   private resizeFrame(): PipRect | undefined {
     const layout = this.screenLayout;
     if (!layout) return undefined;
+    if (this.placement === "pet") return layout.visibleFrame;
     const innerW = Math.max(1, layout.host.width - PIP_ANCHOR_MARGIN * 2);
     const innerH = Math.max(1, layout.host.height - PIP_ANCHOR_MARGIN * 2);
     return {
