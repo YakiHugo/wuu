@@ -8,6 +8,12 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ## [Unreleased]
 
+### Fixed
+
+- Match settings navigation, account controls, and sidebar drag-and-drop surfaces
+  to the shared sidebar row corners, keeping keyboard focus rings visible in
+  scrollable navigation.
+
 ## [2026.10.16] - 2026-10-16
 
 ### Contributors
