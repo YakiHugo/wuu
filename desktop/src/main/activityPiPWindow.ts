@@ -7,7 +7,7 @@ import { activityPreviewIsLive, pipContainRect } from "./activityPiPContent";
 import {
   browserPiPAnchors, browserPiPCardSize, browserPiPClampOrigin, browserPiPDragCommand,
   browserPiPFitCard, browserPiPNearestAnchor, browserPiPOrigin, browserPiPResizeCommand,
-  browserPiPResizeRect, browserPiPSizeForAspect, PIP_ANCHOR_MARGIN, PIP_MIN_SIZE,
+  browserPiPResizeRect, browserPiPSizeForAspect, PIP_ANCHOR_MARGIN, PIP_MIN_SIZE, PIP_WINDOW_MIN_SIZE,
   type BrowserPiPScreenLayout, type PipAlignment, type PipPoint, type PipRect, type PipResizeEdge,
 } from "./browserPiPPlacement";
 import type { BrowserInteractionHint, BrowserParentWindowHandle, BrowserViewHandle } from "./browserHostWindows";
@@ -643,9 +643,13 @@ export class ActivityPiPSurface implements ObservationPiPHandle {
     // A trailing card rests relative to its lead, never at a corner of its own.
     if (!layout || !win || win.isDestroyed() || this.stackIndex > 0) return;
     this.cancelSnap();
-    const card = this.userSize
+    const preferred = this.userSize
       ? browserPiPFitCard(layout.host, this.userSize)
       : browserPiPCardSize(layout.host, browserPiPSizeForAspect(this.initialAspect ?? 4 / 3));
+    // Match Electron's native floor before choosing an origin or reporting
+    // geometry; otherwise a clamped frame can recursively request itself.
+    const card = { width: Math.max(PIP_WINDOW_MIN_SIZE.width, preferred.width),
+      height: Math.max(PIP_WINDOW_MIN_SIZE.height, preferred.height) };
     const anchor = browserPiPAnchors(layout.host, layout.obstacles, card)
       .find((item) => item.alignment === this.alignment);
     if (!anchor) return;
@@ -1068,7 +1072,9 @@ export class ActivityPiPSurface implements ObservationPiPHandle {
     if (!lead || !win || win.isDestroyed()) return;
     this.alignment = lead.alignment;
     const resting = this.restingFrame();
-    const card = { width: resting.width, height: resting.height };
+    const safe = this.screenLayout?.stackBounds;
+    const card = { width: Math.min(resting.width, safe?.width ?? resting.width),
+      height: Math.min(resting.height, safe?.height ?? resting.height) };
     const offset = STACK_OFFSET * Math.min(index, STACK_DEPTH);
     const right = lead.alignment.endsWith("right");
     const bottom = lead.alignment.startsWith("bottom");
@@ -1076,6 +1082,10 @@ export class ActivityPiPSurface implements ObservationPiPHandle {
       x: right ? lead.frame.x + lead.frame.width - card.width : lead.frame.x,
       y: bottom ? lead.frame.y + lead.frame.height - card.height - offset : lead.frame.y + offset,
     };
+    if (safe) {
+      origin.x = Math.max(safe.x, Math.min(origin.x, safe.x + safe.width - card.width));
+      origin.y = Math.max(safe.y, Math.min(origin.y, safe.y + safe.height - card.height));
+    }
     if (!win.isVisible() || this.transition) {
       this.applyBounds({ ...origin, ...card });
       return;
@@ -1126,8 +1136,8 @@ export class ActivityPiPSurface implements ObservationPiPHandle {
     const next = {
       x: Math.round(bounds.x),
       y: Math.round(bounds.y),
-      width: Math.max(1, Math.round(bounds.width)),
-      height: Math.max(1, Math.round(bounds.height)),
+      width: Math.max(PIP_WINDOW_MIN_SIZE.width, Math.round(bounds.width)),
+      height: Math.max(PIP_WINDOW_MIN_SIZE.height, Math.round(bounds.height)),
     };
     // A layout change during an appearance moves its resting frame; the next
     // animation frame scales about the new corner.
@@ -1217,8 +1227,8 @@ export class ActivityPiPSurface implements ObservationPiPHandle {
       acceptFirstMouse: true,
       show: false,
       type: "panel",
-      minWidth: 80,
-      minHeight: 64,
+      minWidth: PIP_WINDOW_MIN_SIZE.width,
+      minHeight: PIP_WINDOW_MIN_SIZE.height,
       webPreferences: {
         contextIsolation: true,
         nodeIntegration: false,

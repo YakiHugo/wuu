@@ -4,6 +4,7 @@ import {
   browserPiPScreenRect,
   PIP_ANCHOR_MARGIN,
   PIP_CARD_SIZE,
+  PIP_WINDOW_MIN_SIZE,
   type BrowserPiPScreenLayout,
   type PipRect,
 } from "./browserPiPPlacement";
@@ -171,7 +172,10 @@ export class ObservationCoordinator {
   private readonly placements = new Map<string, ActivityPreviewPlacement>();
   private readonly presentationSignatures = new Map<string, string>();
   private presentationListener: ((state: ActivityPreviewState) => void) | undefined;
-  private petHost: (() => { window: BrowserPiPHostWindow; anchor: { x: number; y: number }; sprite: { width: number; height: number } } | undefined) | undefined;
+  private petHost: (() => { window: BrowserPiPHostWindow; anchor: { x: number; y: number }; sprite: { width: number; height: number }; ready: boolean; occupiedBounds: Rectangle } | undefined) | undefined;
+  private readonly pendingPetThreads = new Set<string>();
+  private requestingPetHost = false;
+  private requestPetHost: (() => void) | undefined;
   private petPreviewActive: ((active: boolean) => void) | undefined;
   private onReturnHome: ((activity: ActivitySession) => void) | undefined;
 
@@ -240,7 +244,8 @@ export class ObservationCoordinator {
     this.presentationListener = listener;
   }
 
-  setPetHost(provider: NonNullable<ObservationCoordinator["petHost"]>, active: (active: boolean) => void): void {
+  setPetHost(provider: NonNullable<ObservationCoordinator["petHost"]>, active: (active: boolean) => void, request?: () => void): void {
+    this.requestPetHost = request;
     this.petHost = provider;
     this.petPreviewActive = active;
   }
@@ -251,29 +256,45 @@ export class ObservationCoordinator {
     const activity = this.observations.get(threadID);
     if (!activity) return null;
     return { threadID, workdir: activity.workdir, visible: this.wantsCard(threadID) && !this.observationIsGone(activity),
-      placement: this.placements.get(threadID) ?? "home", petAvailable: Boolean(this.petHost?.()) };
+      placement: this.placements.get(threadID) ?? "home", petAvailable: Boolean(this.requestPetHost || this.petHost?.()?.ready) };
   }
 
   setPresentation(threadID: string, action: ActivityPreviewAction): ActivityPreviewState | null {
     if (this.closed || !this.observations.has(threadID)) return null;
+    if (action !== "show") this.pendingPetThreads.delete(threadID);
     if (action === "hide") {
       this.dismissedThreads.add(threadID);
       this.explicitlyShown.delete(threadID);
       this.syncThread(threadID);
     } else {
-      if (action === "pet" && !this.petHost?.()) return this.presentationForThread(threadID);
+      if (action === "pet" && !this.petHost?.()?.ready) {
+        if (!this.requestPetHost) return this.presentationForThread(threadID);
+        // Keep the current owner until the requested desktop host can receive
+        // the existing content. A second action cancels this pending intent.
+        this.pendingPetThreads.add(threadID);
+        this.requestingPetHost = true;
+        try { this.showForThread(threadID); this.requestPetHost(); }
+        finally { this.requestingPetHost = false; this.refreshPetHost(); }
+        return this.presentationForThread(threadID);
+      }
       if (action !== "show") this.placements.set(threadID, action);
-      this.showForThread(threadID);
       this.pushBrowserHost(this.entries.get(threadID));
+      this.showForThread(threadID);
     }
     this.publishPresentation(threadID);
     return this.presentationForThread(threadID);
   }
 
   refreshPetHost(): void {
-    if (this.closed) return;
-    const available = Boolean(this.petHost?.());
-    if (!available) {
+    if (this.closed || this.requestingPetHost) return;
+    const host = this.petHost?.();
+    if (host?.ready) {
+      for (const threadID of this.pendingPetThreads) {
+        if (this.wantsCard(threadID) && this.observations.has(threadID)) this.placements.set(threadID, "pet");
+      }
+      this.pendingPetThreads.clear();
+    } else if (!host) this.pendingPetThreads.clear();
+    if (!host) {
       for (const [threadID, placement] of this.placements) {
         if (placement === "pet") this.placements.set(threadID, "home");
       }
@@ -377,6 +398,7 @@ export class ObservationCoordinator {
         this.observations.delete(threadID);
         this.goneObservations.delete(threadID);
         this.placements.delete(threadID);
+        this.pendingPetThreads.delete(threadID);
         this.presentationSignatures.delete(threadID);
         if (state) this.presentationListener?.({ ...state, visible: false });
       }
@@ -388,6 +410,7 @@ export class ObservationCoordinator {
 
   shutdown(): Promise<void> {
     this.closed = true;
+    this.pendingPetThreads.clear();
     this.petPreviewActive?.(false);
     this.activeThreadID = undefined;
     this.observations.clear();
@@ -412,6 +435,7 @@ export class ObservationCoordinator {
     const entry = this.entries.get(threadID);
     const activity = this.observations.get(threadID);
     if (!this.wantsCard(threadID) || !activity || this.observationIsGone(activity)) {
+      this.pendingPetThreads.delete(threadID);
       entry?.pip.setVisible(false);
       if (restack) this.restack();
       return;
@@ -481,6 +505,7 @@ export class ObservationCoordinator {
   private stopEntry(entry: PiPEntry): void {
     if (this.entries.get(entry.threadID) !== entry) return;
     this.entries.delete(entry.threadID);
+    this.pendingPetThreads.delete(entry.threadID);
     this.stackOrder = this.stackOrder.filter((id) => id !== entry.threadID);
     const stopped = new Promise<void>((resolve) => entry.pip.stop(resolve));
     this.pendingStops.add(stopped);
@@ -498,7 +523,10 @@ export class ObservationCoordinator {
   private restack(): void {
     if (this.closed) return;
     const visible = this.visibleStack();
-    this.petPreviewActive?.(visible.some(entry => this.placements.get(entry.threadID) === "pet"));
+    // Browser-panel takeover temporarily hides pixels, not the user's desktop
+    // ownership. Explicit hide, completion and target loss release that intent.
+    this.petPreviewActive?.(this.pendingPetThreads.size > 0 || [...this.entries.values()].some(entry =>
+      this.placements.get(entry.threadID) === "pet" && this.wantsCard(entry.threadID) && !this.observationIsGone(entry.activity)));
     this.layoutStack(visible);
     const signature = visible.map((entry) => entry.key).join("\n");
     if (signature === this.stackSignature) return;
@@ -591,7 +619,7 @@ export class ObservationCoordinator {
         if ([event.x, event.y, event.width, event.height].every((value) => typeof value === "number")) {
           this.userBounds = { x: event.x!, y: event.y!, width: event.width!, height: event.height! };
         }
-        if (this.placements.get(entry.threadID) === "pet") this.pushBrowserHost(entry);
+        if (this.placements.get(entry.threadID) === "pet") this.pushBrowserHostToAll();
         this.layoutStack();
         return;
       case "capture_status":
@@ -763,19 +791,40 @@ export class ObservationCoordinator {
     const pip = entry.pip;
     const placement = this.placements.get(entry.threadID) ?? "home";
     const pet = this.petHost?.();
-    pip.setPlacement?.(placement, Boolean(pet));
+    pip.setPlacement?.(placement, Boolean(this.requestPetHost || pet?.ready));
     if (placement === "pet" && pet) {
-      const frame = screen.getDisplayNearestPoint(pet.anchor).workArea;
-      const size = pip.stackLead?.()?.frame ?? PIP_CARD_SIZE;
-      const gap = PIP_ANCHOR_MARGIN;
-      // Keep the whole card above the sprite when possible, otherwise below.
-      const above = pet.anchor.y - pet.sprite.height - 8 - size.height;
-      const y = above >= frame.y ? above : pet.anchor.y + 8;
-      const x = Math.max(frame.x, Math.min(pet.anchor.x + pet.sprite.width / 2 - size.width, frame.x + frame.width - size.width));
-      const top = Math.max(frame.y, Math.min(y, frame.y + frame.height - size.height));
       pip.setHostParent?.(pet.window);
-      pip.setHostLayout?.({ host: { x: x - gap, y: top - gap, width: size.width + gap * 2, height: size.height + gap * 2 },
-        obstacles: [], visibleFrame: frame });
+      // A loading replacement retains ownership, but has no usable pixels yet.
+      if (!pet.ready) { pip.setHostLayout?.(null); return; }
+      const frame = screen.getDisplayNearestPoint(pet.anchor).workArea;
+      const lead = this.visibleStack().find(candidate => this.placements.get(candidate.threadID) === "pet");
+      const wanted = lead?.pip.stackLead?.()?.frame ?? pip.stackLead?.()?.frame ?? PIP_CARD_SIZE;
+      const occupied = pet.occupiedBounds;
+      const gap = 8;
+      const right = frame.x + frame.width, bottom = frame.y + frame.height;
+      // Reserve the whole Pet panel, including its dock and expanded cards.
+      // Prefer above/below, then the sides; shrink into available screen space
+      // rather than carrying an oversized frame onto a smaller display.
+      const regions = [
+        { side: "above", x: frame.x, y: frame.y, width: frame.width, height: Math.max(0, Math.min(bottom, occupied.y - gap) - frame.y) },
+        { side: "below", x: frame.x, y: Math.max(frame.y, occupied.y + occupied.height + gap), width: frame.width, height: Math.max(0, bottom - Math.max(frame.y, occupied.y + occupied.height + gap)) },
+        { side: "left", x: frame.x, y: frame.y, width: Math.max(0, Math.min(right, occupied.x - gap) - frame.x), height: frame.height },
+        { side: "right", x: Math.max(frame.x, occupied.x + occupied.width + gap), y: frame.y, width: Math.max(0, right - Math.max(frame.x, occupied.x + occupied.width + gap)), height: frame.height },
+      ].filter(region => region.width >= PIP_WINDOW_MIN_SIZE.width && region.height >= PIP_WINDOW_MIN_SIZE.height);
+      const region = regions.sort((a, b) =>
+        Math.min(wanted.width, b.width) * Math.min(wanted.height, b.height)
+        - Math.min(wanted.width, a.width) * Math.min(wanted.height, a.height))[0];
+      if (!region) { pip.setHostLayout?.(null); return; }
+      const size = { width: Math.min(wanted.width, region.width), height: Math.min(wanted.height, region.height) };
+      const x = region.side === "left" ? region.x + region.width - size.width
+        : region.side === "right" ? region.x
+          : Math.max(region.x, Math.min(pet.anchor.x + pet.sprite.width / 2 - size.width, region.x + region.width - size.width));
+      const y = region.side === "above" ? region.y + region.height - size.height
+        : region.side === "below" ? region.y
+          : Math.max(region.y, Math.min(pet.anchor.y - pet.sprite.height / 2 - size.height / 2, region.y + region.height - size.height));
+      pip.setHostLayout?.({ host: { x: x - PIP_ANCHOR_MARGIN, y: y - PIP_ANCHOR_MARGIN,
+        width: size.width + PIP_ANCHOR_MARGIN * 2, height: size.height + PIP_ANCHOR_MARGIN * 2 },
+        obstacles: [], visibleFrame: frame, stackBounds: region });
       return;
     }
     if (placement === "floating") {

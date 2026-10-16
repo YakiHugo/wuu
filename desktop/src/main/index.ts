@@ -415,6 +415,7 @@ const codexPetWindowManager = new CodexPetWindowManager({
 observationCoordinator.setPetHost(
   () => codexPetWindowManager.previewHost(),
   (active) => codexPetWindowManager.setPreviewActive(active),
+  () => codexPetWindowManager.requestPreviewHost(),
 );
 observationCoordinator.setReturnHomeHandler((activity) => {
   revealMainWindow();
