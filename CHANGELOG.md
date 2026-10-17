@@ -20,6 +20,7 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Preserve the composer's focus appearance when Tab inserts a next-message suggestion.
 - Keep workspace and branch names aligned with their icons in narrow composers.
 - Refresh external agent discovery after installing a CLI while the desktop is
   running, including login-shell paths and runtime registration. Preserve newer
