@@ -10,6 +10,10 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Added
 
+- Add default-off experimental HTTP request gzip for explicitly opted-in model
+  endpoints. Compress large JSON bodies only when smaller, preserve request
+  content and token accounting, and restrict compressed redirects to opted-in
+  endpoints without adding an automatic resend.
 - Add an opt-in next-message plugin that suggests a short draft from recent visible
   conversation turns after a successful reply. It supports main and side chats,
   conversations outside projects, and Codex models. Choose its model and reasoning
@@ -29,6 +33,9 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Reuse streaming HTTP connection pools across model turns, including Codex,
+  Grok Build and SuperGrok credential adapters, instead of rebuilding a pool for
+  every request.
 - Refresh DeepSeek Flash 1017 metadata, exact output limits, and peak API prices.
   Stop advertising retired Flash models while preserving saved compatibility
   aliases, and avoid unsupported forced tool choice in Chat Completions thinking mode.

@@ -116,6 +116,57 @@ wuu exec --provider openai --permission-mode read_only "Read this project and ex
 
 `--provider` selects a configured identifier, and `--model` overrides the model for this run. See [configuration](../reference/configuration.md) for precedence and the limits on project-level settings.
 
+## Streaming latency
+
+Wuu's built-in HTTP model clients reuse a streaming connection pool across turns.
+The pool survives Codex credential reloads; each request still uses the current
+credentials. Connect, response-header and stream-idle deadlines remain separate,
+so connection reuse does not impose a total timeout on a long answer.
+
+Codex defaults to `stream_transport: "auto"`. In eligible built-in sessions,
+thread creation, resume and model changes can prewarm its WebSocket before the
+next send, without submitting an inference request. A compatible continuation
+on the same connection sends `previous_response_id` plus new input. Reconnection,
+changed request options or incompatible history require full context again.
+Prewarming removes setup from the send path only when that connection survives
+until use; it does not remove provider queueing or model computation.
+
+An unavailable WebSocket can fall back to HTTP before submission. Once a request
+may have been submitted, normal recovery accounting governs any further attempt.
+HTTP gzip is a separate upload optimization and does not compress WebSocket
+messages. Keep the configured transport when testing it: forcing SSE can lose
+existing connection and context reuse. See the [latency evaluation workflow](../project/development.md#provider-latency-evaluation)
+for measurements and correctness checks.
+
+## Experimental HTTP request compression
+
+HTTP request gzip is disabled by default. To test an endpoint whose operator has
+confirmed it accepts `Content-Encoding: gzip`, set
+`WUU_EXPERIMENTAL_REQUEST_GZIP_ENDPOINTS` in the process that launches Wuu. Use a
+comma-separated list of exact, complete request URLs, for example:
+
+```bash
+export WUU_EXPERIMENTAL_REQUEST_GZIP_ENDPOINTS="https://gateway.example/v1/responses"
+```
+
+This example is a placeholder, not a claim of endpoint support. Include the full
+`/responses`, `/chat/completions`, or `/v1/messages` path as applicable. Matching
+includes the query string; host-only values, wildcards, URL userinfo and fragments
+are not supported. Redirect destinations must also be explicitly listed.
+API-format compatibility does not imply request-compression support.
+
+The experiment uses fast gzip for serialized JSON bodies of at least 64 KiB,
+only when it reduces bytes. The cutoff is experimental. Existing
+`Content-Encoding` headers disable automatic compression for that request.
+JSON content, token accounting, response streaming and WebSocket behavior stay
+unchanged. Compression adds local CPU and memory work; fewer uploaded bytes do
+not establish lower time to first token or lower model charges.
+
+No extra retry or uncompressed resend is added for rejected gzip or connection
+failures. Existing recovery rules still apply. If the endpoint rejects the
+encoding, unset the variable and restart Wuu before retrying deliberately.
+This setting applies to Wuu's HTTP model clients, not external agent engines.
+
 ## Turn completion and extra requests
 
 Wuu follows the selected API's completion signals. A normal stop ends the turn even if the response is empty; it does not prove that the task is complete. Empty text or a commentary message alone does not trigger another billable request.
