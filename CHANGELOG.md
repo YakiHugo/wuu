@@ -10,6 +10,8 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Restore next-message suggestions after clearing or undoing a Tab-accepted draft,
+  allowing repeated acceptance without another model request.
 - Use the same quiet gray for completed tool summaries, running tool summaries,
   and composer placeholder text.
 
