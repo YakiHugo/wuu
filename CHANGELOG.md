@@ -8,6 +8,11 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ## [Unreleased]
 
+### Changed
+
+- Remove the next-message prompt restriction against inventing facts, decisions,
+  commitments, files, commands, or goals.
+
 ### Removed
 
 - Remove the built-in suggestions from Automations so the page focuses on existing
