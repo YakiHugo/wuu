@@ -10,6 +10,9 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Match settings navigation, account controls, and sidebar drag-and-drop surfaces
+  to the shared sidebar row corners, keeping keyboard focus rings visible in
+  scrollable navigation.
 - Show iOS message images and file attachments above the text, including long-press previews and pending message details.
 
 ## [2026.10.16] - 2026-10-16
