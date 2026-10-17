@@ -8,6 +8,14 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ## [Unreleased]
 
+### Changed
+
+- Frame desktop conversations in a rounded canvas with matching outer
+  insets and a lower input box. Keep the sidebar resize
+  target aligned with the visible canvas edge. Join the conversation and right
+  panel into one canvas with aligned header rules, shared outer corners, and
+  matching insets when the panel opens or expands.
+
 ### Fixed
 
 - Enable Computer Use by default in macOS development launches, with an explicit
