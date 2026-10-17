@@ -8,6 +8,10 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ## [Unreleased]
 
+### Added
+
+- Connect ChatGPT from model services even before a provider exists. Sign in with the installed official Codex CLI using a cancellable device-code flow, or reuse an existing local login.
+
 ### Removed
 
 - Remove the workspace new page's Continue viewing section, which duplicated

@@ -1135,12 +1135,22 @@ export type RuntimeConnectionUpdate = {
   auth_token?: string;
   // Optional provider protocol type used when creating a new provider.
   // Supported values: "openai", "openai-compatible", "anthropic", "claude",
-  // "anthropic-official", "xai-subscription". Omitted or empty keeps the
-  // default of "openai-compatible". OAuth-managed Codex types are
-  // intentionally not listed because they require a separate connection flow.
+  // "anthropic-official", "xai-subscription", "openai-codex". Omitted or empty
+  // keeps "openai-compatible". Codex requires explicit credential reuse consent.
   type?: string;
   create_provider?: boolean;
   reuse_codex_credentials?: boolean;
+};
+
+// Success reports CLI completion; provider creation validates readable credentials.
+export type AuthCodexLoginResult = {
+  login_id: string;
+  status: "pending" | "success" | "failed" | "expired" | "cancelled";
+  verification_uri?: string;
+  user_code?: string;
+  interval_ms: number;
+  expires_in: number;
+  error?: string;
 };
 
 export type AuthXAILoginStartResult = {
@@ -3074,6 +3084,9 @@ export type WuuDesktopApi = {
   getMCPAuthStatus: (name: string) => Promise<MCPAuthStatusResult>;
   finishMCPAuth: (name: string, state: string, code: string) => Promise<MCPAuthFinishResult>;
   removeMCPAuth: (name: string) => Promise<MCPAuthRemoveResult>;
+  startCodexLogin: () => Promise<AuthCodexLoginResult>;
+  pollCodexLogin: (loginId: string) => Promise<AuthCodexLoginResult>;
+  cancelCodexLogin: (loginId: string) => Promise<{ ok: boolean }>;
   startXAILogin: () => Promise<AuthXAILoginStartResult>;
   pollXAILogin: (loginId: string) => Promise<AuthXAILoginPollResult>;
   cancelXAILogin: (loginId: string) => Promise<{ ok: boolean }>;

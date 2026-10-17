@@ -152,6 +152,7 @@ import type {
   SideThreadSendResult,
 } from "../shared/protocol";
 import { AppServerClientPool, configurePackagedCUA } from "./appServerClients";
+import { CodexLoginCoordinator } from "./codexLogin";
 import { visibleMainTurns, visibleSideTurns } from "./pluginVisibleHistory";
 import { RendererServerEventBatcher } from "./rendererServerEventBatcher";
 import { ObservationCoordinator, observationActivityFromServerEvent } from "./cuaActivityWindows";
@@ -2209,6 +2210,18 @@ app.whenReady().then(async () => {
   );
   ipcMain.handle("wuu:mcp-auth-finish", (event, name: string, state: string, code: string) =>
     appServerRequest<MCPAuthFinishResult>(event, "mcp/auth/finish", { name, state, code }),
+  );
+  const codexLogin = new CodexLoginCoordinator((context, method, params) =>
+    appServerClientPool.requestInContext(context, method, params),
+  );
+  ipcMain.handle("wuu:auth-codex-login-start", (event) =>
+    codexLogin.start(event.sender, runtimeContextForEvent(event)),
+  );
+  ipcMain.handle("wuu:auth-codex-login-poll", (event, loginId: string) =>
+    codexLogin.poll(event.sender.id, loginId),
+  );
+  ipcMain.handle("wuu:auth-codex-login-cancel", (event, loginId: string) =>
+    codexLogin.cancel(event.sender.id, loginId),
   );
   ipcMain.handle("wuu:auth-xai-login-start", (event) =>
     appServerRequest<AuthXAILoginStartResult>(event, "auth/xai/login/start"),

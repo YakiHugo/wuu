@@ -58,6 +58,9 @@ const (
 	MethodUserQuestionHold                = "user-question/hold"
 	MethodConfigCodexCredentials          = "config/codex/credentials"
 	MethodConfigCodexModels               = "config/codex/models"
+	MethodAuthCodexLoginStart             = "auth/codex/login/start"
+	MethodAuthCodexLoginPoll              = "auth/codex/login/poll"
+	MethodAuthCodexLoginCancel            = "auth/codex/login/cancel"
 	MethodAuthXAILoginStart               = "auth/xai/login/start"
 	MethodAuthXAILoginPoll                = "auth/xai/login/poll"
 	MethodAuthXAILoginCancel              = "auth/xai/login/cancel"
@@ -1092,6 +1095,22 @@ type ConfigModelUpdateParams struct {
 	// the local Codex CLI auth store. An explicit false is persisted so
 	// legacy defaults cannot re-enable reuse after the user declined it.
 	ReuseCodexCredentials *bool `json:"reuse_codex_credentials,omitempty"`
+}
+
+type AuthCodexLoginParams struct {
+	LoginID string `json:"login_id"`
+}
+
+// Success means the official CLI completed; connection creation separately
+// validates that Wuu can read the resulting ChatGPT credentials.
+type AuthCodexLoginResult struct {
+	LoginID          string `json:"login_id"`
+	Status           string `json:"status"`
+	VerificationURI  string `json:"verification_uri,omitempty"`
+	UserCode         string `json:"user_code,omitempty"`
+	IntervalMS       int    `json:"interval_ms"`
+	ExpiresInSeconds int    `json:"expires_in"`
+	Error            string `json:"error,omitempty"`
 }
 
 type AuthXAILoginStartResult struct {

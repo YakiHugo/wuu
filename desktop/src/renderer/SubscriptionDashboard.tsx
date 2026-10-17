@@ -20,7 +20,9 @@ export function SubscriptionDashboard({
   inventory,
   providers,
   onSelectBuiltinModel,
+  onAddService,
 }: {
+  onAddService?: () => void;
   inventory?: EngineListResult;
   providers?: readonly ProviderSummary[];
   onSelectBuiltinModel: (provider: string, model: string) => Promise<void>;
@@ -137,11 +139,12 @@ export function SubscriptionDashboard({
     <section className="settings-section settings-subscriptions" data-testid="settings-subscriptions" aria-busy={refreshing}>
       <SettingsPageHeader
         title={t("settings.subscriptions")}
-        actions={
+        actions={<>
+          {onAddService ? <button type="button" className="settings-button" onClick={onAddService}>{t("provider.connectTitle", { name: "ChatGPT" })}</button> : null}
           <button type="button" className="settings-button settings-button-ghost settings-icon-button" disabled={refreshing} onClick={() => setRefreshVersion((value) => value + 1)} aria-label={t(refreshing ? "settings.subscriptionRefreshing" : "settings.subscriptionRefresh")} title={t("settings.subscriptionRefresh")}>
             <RefreshCw className={refreshing ? "icon settings-spin" : "icon"} aria-hidden="true" />
           </button>
-        }
+        </>}
       />
       {sources.length === 0 ? (
         inventory || loadedInventory ? <p className="settings-muted-line">{t("settings.subscriptionsEmpty")}</p>

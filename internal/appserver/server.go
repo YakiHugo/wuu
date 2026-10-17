@@ -264,6 +264,8 @@ type Server struct {
 	engineModelCatalogMu     sync.Mutex
 	engineModelCatalogCache  map[string]*engineModelCatalogCacheEntry
 
+	codexLogins codexLoginHub
+
 	xaiLoginMu sync.Mutex
 	xaiLogins  *xaisub.LoginHub
 
@@ -707,6 +709,7 @@ func (s *Server) Close() {
 	}
 	s.closeOnce.Do(func() {
 		s.closed.Store(true)
+		s.codexLogins.close()
 		if s.nativeHistoryCancel != nil {
 			s.nativeHistoryCancel()
 		}
@@ -1080,6 +1083,12 @@ func (s *Server) handleLine(ctx context.Context, raw []byte) error {
 			return s.writeResponse(req.ID, nil, errServerClosed)
 		}
 		return nil
+	case MethodAuthCodexLoginStart:
+		return s.handleAuthCodexLoginStart(ctx, req)
+	case MethodAuthCodexLoginPoll:
+		return s.handleAuthCodexLoginPoll(req)
+	case MethodAuthCodexLoginCancel:
+		return s.handleAuthCodexLoginCancel(req)
 	case MethodAuthXAILoginStart:
 		return s.handleAuthXAILoginStart(ctx, req)
 	case MethodAuthXAILoginPoll:

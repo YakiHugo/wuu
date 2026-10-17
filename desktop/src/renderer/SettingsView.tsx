@@ -794,6 +794,7 @@ export function SettingsView({
                 </>
               ) : activePage === "subscriptions" && ENABLE_SUBSCRIPTIONS ? (
                 <SubscriptionDashboard
+                  onAddService={() => setActivePage("providers")}
                   inventory={engineInventory}
                   providers={providers}
                   onSelectBuiltinModel={(provider, model) => onSave(provider, model)}

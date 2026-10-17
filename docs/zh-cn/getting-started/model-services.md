@@ -55,7 +55,7 @@ DeepSeek 的 Chat Completions 思考模式不接受强制工具选择。Wuu 对�
 
 | 连接方式 | 设置方法 |
 |---|---|
-| Codex 订阅 | 先在 Codex CLI 登录，再在首次设置中选择复用检测到的登录。手动配置时，使用 `openai-codex` 服务并启用 `reuse_codex_credentials`。Wuu 桌面端不会自行发起 OpenAI OAuth 登录。在“设置 → 订阅”中打开对应账号的 **…** 菜单，点击“使用本机 Codex 登录”即可优先使用本机登录，不改变模型选择；“重新检查登录”通过拉取模型列表验证认证。Wuu 每次请求都会读取本机登录，凭据刷新后无需重启。 |
+| ChatGPT / Codex 订阅 | 打开**设置 → 模型服务 → ChatGPT**，或在首次设置中选择 ChatGPT。**连接**复用已有 Codex CLI 登录；**使用 ChatGPT 登录**启动已安装的官方 CLI 设备码登录，显示本次验证码，并提供打开官方登录页的按钮。未安装时先安装 Codex CLI；设备码登录可能需要你在 ChatGPT 安全设置中启用。取消或关闭对话框即可停止等待中的登录。CLI 登录成功后，Wuu 检查本地 OAuth 凭据可用才保存连接；这项本地检查不代表已在线验证认证或模型访问权限。模型服务目前仅支持文件形式的 Codex 凭据；若登录仅存于系统钥匙串，请选择原生 Codex Agent，Wuu 不会更改你的存储设置。OAuth 和凭据存储由官方 CLI 处理，Wuu 不自行实现 OpenAI OAuth 客户端。在**设置 → 订阅**对应账号的 **…** 菜单中，可选择**使用本机 Codex 登录**或**重新检查登录**；后者通过拉取模型列表验证认证。Wuu 每次请求都会读取本机登录，凭据刷新后无需重启。 |
 | xAI SuperGrok | 添加 **xAI SuperGrok** 服务，按提示在浏览器登录。CLI 使用 `wuu login xai`，运行时选择 `--provider xai-subscription`。 |
 | Grok Build | 先运行 `grok login`，再在 Wuu 中选择检测到的服务，或传入 `--provider grok-build`。登录过期后重新在 Grok CLI 登录；Wuu 不刷新或修改这类凭据。 |
 

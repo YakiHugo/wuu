@@ -28,6 +28,7 @@ import {
   Search,
   Trash2,
 } from "./WuuIcons";
+import { CodexSubscriptionLogin } from "./CodexSubscriptionLogin";
 import { CatalogSearchField } from "./CatalogSearchField";
 import { EngineIcon } from "./EngineIcons";
 import { hostSupports } from "./HostCapabilities";
@@ -74,7 +75,7 @@ export type ModelServicesPageProps = {
 type ConnectTarget =
   | { kind: "catalog"; provider: CatalogProviderSummary }
   | { kind: "custom" }
-  | { kind: "subscription"; type: "xai-subscription" | "grok-build" };
+  | { kind: "subscription"; type: "openai-codex" | "xai-subscription" | "grok-build" };
 
 // Catalog names are English and regional ("Moonshot AI (China)"); these are
 // the names people use for the services, localized where they differ.
@@ -348,6 +349,7 @@ export function ServiceConnector({
   defaultOn,
   onSave,
   onConnected,
+  onOpenExisting,
 }: {
   providers: readonly ProviderSummary[];
   running: boolean;
@@ -355,6 +357,7 @@ export function ServiceConnector({
   defaultOn: boolean;
   onSave: SaveProvider;
   onConnected: (name: string) => void;
+  onOpenExisting?: (name: string) => void;
 }): JSX.Element {
   const { t, locale } = useI18n();
   const [connectTarget, setConnectTarget] = useState<ConnectTarget | null>(null);
@@ -367,7 +370,10 @@ export function ServiceConnector({
 
   function startConnect(target: ConnectTarget): void {
     setBrowsing(false);
-    setConnectTarget(target);
+    const existing = target.kind === "subscription" && target.type === "openai-codex"
+      ? providers.find((provider) => isCodexType(provider.type)) : undefined;
+    if (existing && onOpenExisting) onOpenExisting(existing.name);
+    else setConnectTarget(target);
   }
 
   return (
@@ -529,6 +535,7 @@ function ServicesOverview({
           defaultOn={defaultOn}
           onSave={onSave}
           onConnected={onOpenService}
+          onOpenExisting={onOpenService}
         />
       </SettingsSection>
     </>
@@ -891,6 +898,7 @@ function ConnectionRows({
   onRun: (action: () => Promise<void>) => Promise<boolean>;
 }): JSX.Element {
   const { t } = useI18n();
+  const [codexSigningIn, setCodexSigningIn] = useState(false);
   if (isXAISubscriptionType(provider.type)) {
     return (
       <>
@@ -917,6 +925,16 @@ function ConnectionRows({
             okLabel={t(provider.codex_credential_source === "explicit" ? "settings.codexSourceExplicit" : provider.reuse_codex_credentials ? "settings.codexSourceLocal" : "settings.codexSourceSaved")}
             missingLabel={identity.attention ?? ""}
           />
+        </SettingsRow>
+        <CodexSubscriptionLogin disabled={disabled} onBusyChange={setCodexSigningIn} onAuthenticated={() => void onRun(async () => {
+          await window.wuu.useCodexCredentials(provider.name);
+          await onSave({});
+        })} />
+        <SettingsRow title={t("settings.codexUseLocal")}>
+          <button type="button" className="settings-button" disabled={disabled || codexSigningIn} onClick={() => void onRun(async () => {
+            await window.wuu.useCodexCredentials(provider.name);
+            await onSave({});
+          })}>{t("settings.codexUseLocal")}</button>
         </SettingsRow>
         <SettingsRow title={t("settings.baseURL")}>
           <span className="settings-row-control-value model-service-value">{provider.base_url || t("provider.oauthManaged")}</span>
@@ -1365,11 +1383,11 @@ function CatalogServiceGroups({
     ambiguous: names.indexOf(names[index]) !== names.lastIndexOf(names[index]),
     connected: providers.filter((item) => item.catalog_id === provider.id),
   })).filter((entry) => !normalized || `${entry.name} ${entry.provider.name} ${entry.provider.id} ${entry.host}`.toLocaleLowerCase().includes(normalized));
-  const subscriptions = isTouchWebShell() ? [] : (["xai-subscription", "grok-build"] as const)
+  const subscriptions = isTouchWebShell() ? [] : (["openai-codex", "xai-subscription", "grok-build"] as const)
     .map((type) => ({
       type,
-      name: type === "grok-build" ? t("provider.grokBuild") : t("provider.xaiSubscription"),
-      connected: providers.filter((provider) => type === "grok-build" ? isGrokBuildType(provider.type) : isXAISubscriptionType(provider.type)),
+      name: type === "openai-codex" ? "ChatGPT" : type === "grok-build" ? t("provider.grokBuild") : t("provider.xaiSubscription"),
+      connected: providers.filter((provider) => type === "openai-codex" ? isCodexType(provider.type) : type === "grok-build" ? isGrokBuildType(provider.type) : isXAISubscriptionType(provider.type)),
     }))
     .filter((entry) => !normalized || `${entry.name} ${entry.type}`.toLocaleLowerCase().includes(normalized));
   const groups = [
@@ -1397,7 +1415,7 @@ function CatalogServiceGroups({
       disabled={disabled}
       onClick={() => onConnect({ kind: "subscription", type: entry.type })}
     >
-      <span className="provider-mark" aria-hidden="true"><EngineIcon engine="grok" className="provider-mark-engine" /></span>
+      {entry.type === "openai-codex" ? <ProviderMark id="openai" label="ChatGPT" /> : <span className="provider-mark" aria-hidden="true"><EngineIcon engine="grok" className="provider-mark-engine" /></span>}
       <span className="model-catalog-name-line"><span className="model-service-tile-name">{entry.name}</span>{connectionState(entry.connected)}</span>
     </button>
   ));
@@ -1511,9 +1529,10 @@ function ConnectServiceDialog({
   const fieldID = useId();
   const catalogProvider = target.kind === "catalog" ? target.provider : undefined;
   const subscriptionType = target.kind === "subscription" ? target.type : undefined;
+  const existingCodex = subscriptionType === "openai-codex" ? providers.find((provider) => isCodexType(provider.type)) : undefined;
   const title = catalogProvider
     ? catalogServiceName(catalogProvider.id, catalogProvider.name, t)
-    : subscriptionType === "grok-build"
+    : subscriptionType === "openai-codex" ? "ChatGPT" : subscriptionType === "grok-build"
       ? t("provider.grokBuild")
       : subscriptionType
         ? t("provider.xaiSubscription")
@@ -1521,13 +1540,14 @@ function ConnectServiceDialog({
   const heading = target.kind === "custom" ? t("provider.connectCustomTitle") : t("provider.connectTitle", { name: title });
   const [models, setModels] = useState<CatalogModelSummary[] | undefined>(undefined);
   const [apiKey, setAPIKey] = useState("");
-  const [model, setModel] = useState(catalogProvider?.default_model ?? (subscriptionType === "grok-build" ? "grok-4.5" : subscriptionType ? "grok-4.7" : ""));
+  const [model, setModel] = useState(existingCodex?.model ?? catalogProvider?.default_model ?? (subscriptionType === "openai-codex" ? "gpt-6-astra" : subscriptionType === "grok-build" ? "grok-4.5" : subscriptionType ? "grok-4.7" : ""));
   const [baseURL, setBaseURL] = useState(catalogProvider?.base_url ?? "");
   const [protocol, setProtocol] = useState(catalogProvider?.type ?? "openai-compatible");
-  const [name, setName] = useState(() => uniqueProviderName(catalogProvider?.id ?? subscriptionType ?? "custom", providers));
+  const [name, setName] = useState(() => existingCodex?.name ?? uniqueProviderName(catalogProvider?.id ?? subscriptionType ?? "custom", providers));
   const [makeDefault, setMakeDefault] = useState(defaultOn);
   const [pending, setPending] = useState(false);
   const [loginCode, setLoginCode] = useState("");
+  const [codexSigningIn, setCodexSigningIn] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -1540,7 +1560,7 @@ function ConnectServiceDialog({
     return () => { active = false; };
   }, [catalogProvider]);
 
-  const nameTaken = providers.some((provider) => provider.name === name.trim());
+  const nameTaken = providers.some((provider) => provider.name === name.trim() && provider.name !== existingCodex?.name);
   const needsKey = !subscriptionType;
   const canSubmit = !pending && !running && !nameTaken && Boolean(name.trim()) && Boolean(model.trim()) &&
     (!needsKey || Boolean(apiKey.trim())) && (Boolean(subscriptionType) || Boolean(baseURL.trim()));
@@ -1559,12 +1579,13 @@ function ConnectServiceDialog({
     try {
       if (subscriptionType === "xai-subscription") await runXAILogin(setLoginCode, t);
       const connection: RuntimeConnectionUpdate = {
-        type: subscriptionType ?? protocol,
-        create_provider: true,
+        ...(existingCodex ? {} : { type: subscriptionType ?? protocol, create_provider: true }),
         keep_selection: !makeDefault,
         ...(subscriptionType ? {} : { base_url: baseURL.trim() }),
         ...(needsKey ? { api_key: apiKey.trim() } : {}),
+        ...(subscriptionType === "openai-codex" ? { reuse_codex_credentials: true } : {}),
       };
+      if (existingCodex) await window.wuu.useCodexCredentials(existingCodex.name);
       await onSave(name.trim(), model.trim(), undefined, connection);
       onConnected(name.trim());
     } catch (saveError) {
@@ -1579,7 +1600,7 @@ function ConnectServiceDialog({
     <Modal
       ariaLabel={heading}
       icon={catalogProvider ? <ProviderMark id={catalogProvider.id} label={title} />
-        : subscriptionType ? <span className="provider-mark" aria-hidden="true"><EngineIcon engine="grok" className="provider-mark-engine" /></span>
+        : subscriptionType === "openai-codex" ? <ProviderMark id="openai" label="ChatGPT" /> : subscriptionType ? <span className="provider-mark" aria-hidden="true"><EngineIcon engine="grok" className="provider-mark-engine" /></span>
           : <span className="provider-mark is-quiet" aria-hidden="true"><Code2 className="icon" /></span>}
       title={heading}
       subtitle={loginCode ? t("provider.xaiLoginCode", { code: loginCode }) : undefined}
@@ -1592,12 +1613,13 @@ function ConnectServiceDialog({
         <button type="button" className="settings-button settings-button-ghost" disabled={pending} onClick={onClose}>
           {t("common.cancel")}
         </button>
-        <button type="submit" className="settings-button settings-button-primary" data-testid="settings-provider-connect" disabled={!canSubmit}>
+        <button type="submit" className="settings-button settings-button-primary" data-testid="settings-provider-connect" disabled={!canSubmit || codexSigningIn}>
           {pending ? t("provider.connecting") : t("provider.connectAction")}
         </button>
       </>}
     >
       <div className="model-connect-body">
+        {subscriptionType === "openai-codex" ? <CodexSubscriptionLogin disabled={pending || running || nameTaken} onBusyChange={setCodexSigningIn} onAuthenticated={() => void submit()} /> : null}
         {target.kind === "custom" ? (
           <div className="model-connect-field">
             <span>{t("provider.protocol")}</span>
@@ -1698,6 +1720,7 @@ function ConnectServiceDialog({
               className="settings-input"
               data-testid="settings-provider-connect-name"
               value={name}
+              disabled={Boolean(existingCodex)}
               spellCheck={false}
               aria-invalid={nameTaken || undefined}
               onChange={(event) => setName(event.currentTarget.value)}

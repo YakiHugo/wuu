@@ -1284,7 +1284,7 @@ func (s *Server) handleConfigModelUpdate(req Request) error {
 				if requested != "" {
 					providerTypeValue = requested
 				}
-			case "anthropic", "claude", "anthropic-official":
+			case "openai-codex", "anthropic", "claude", "anthropic-official":
 				providerTypeValue = requested
 			case "xai-subscription", "xai-oauth", "grok-subscription", "supergrok":
 				providerTypeValue = requested
@@ -1293,6 +1293,15 @@ func (s *Server) handleConfigModelUpdate(req Request) error {
 			default:
 				return s.writeResponse(req.ID, nil, fmt.Errorf("unsupported provider type %q", requested))
 			}
+		}
+		if isCodexProviderType(providerTypeValue) {
+			if params.ReuseCodexCredentials == nil || !*params.ReuseCodexCredentials {
+				return s.writeResponse(req.ID, nil, errors.New("creating an openai-codex provider requires reuse_codex_credentials"))
+			}
+			if params.BaseURL != nil || apiKey != "" || authToken != "" {
+				return s.writeResponse(req.ID, nil, errors.New("connection settings are managed by OpenAI OAuth for this provider"))
+			}
+			baseURL = codex.DefaultBaseURL
 		}
 		if baseURL == "" && config.IsXAISubscriptionProvider(providerTypeValue) {
 			baseURL = xaisub.DefaultBaseURL
@@ -1303,7 +1312,7 @@ func (s *Server) handleConfigModelUpdate(req Request) error {
 		if baseURL == "" {
 			return s.writeResponse(req.ID, nil, errors.New("base_url is required"))
 		}
-		if apiKey == "" && authToken == "" && !config.IsXAISubscriptionProvider(providerTypeValue) && !config.IsGrokBuildProvider(providerTypeValue) {
+		if apiKey == "" && authToken == "" && !isCodexProviderType(providerTypeValue) && !config.IsXAISubscriptionProvider(providerTypeValue) && !config.IsGrokBuildProvider(providerTypeValue) {
 			return s.writeResponse(req.ID, nil, errors.New("api_key or auth_token is required"))
 		}
 		providerCfg = config.ProviderConfig{
@@ -1382,6 +1391,11 @@ func (s *Server) handleConfigModelUpdate(req Request) error {
 	if params.ReuseCodexCredentials != nil {
 		if !isCodexProviderType(providerCfg.Type) {
 			return s.writeResponse(req.ID, nil, errors.New("reuse_codex_credentials is only valid for openai-codex providers"))
+		}
+		if *params.ReuseCodexCredentials {
+			if _, err := codex.LocalOAuthStatus(os.Getenv("HOME"), true); err != nil {
+				return s.writeResponse(req.ID, nil, err)
+			}
 		}
 		if providerCfg.ReuseCodexCredentials != *params.ReuseCodexCredentials {
 			connectionChanged = true
@@ -1773,6 +1787,9 @@ func (s *Server) currentConfigModelUpdateResult() ConfigModelUpdateResult {
 func (s *Server) handleConfigCodexCredentials(req Request) error {
 	var params ConfigCodexModelsParams
 	if err := decodeParams(req.Params, &params); err != nil {
+		return s.writeResponse(req.ID, nil, err)
+	}
+	if _, err := codex.LocalOAuthStatus(os.Getenv("HOME"), true); err != nil {
 		return s.writeResponse(req.ID, nil, err)
 	}
 	if err := config.UseCodexCredentials(s.rt.ConfigPath, strings.TrimSpace(params.Provider)); err != nil {
