@@ -10,6 +10,10 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Offer detected Codex and Grok logins together during first-run setup, connecting
+  either only when selected, and keep other connection options visible alongside
+  existing connections. Locked connection fields no longer imply a valid login;
+  authenticated discovered connections remain usable from the composer.
 - Hand long foreground commands to the background process manager after ten
   seconds so independent tools can proceed, while preserving output and completion
   notifications. Keep the requested foreground wait in side conversations.
