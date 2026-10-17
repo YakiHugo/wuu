@@ -8,6 +8,13 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ## [Unreleased]
 
+### Added
+
+- Add an opt-in next-message plugin that suggests a short draft from recent visible
+  conversation turns after a successful reply. It supports main and side chats,
+  conversations outside projects, and Codex models. Choose its model and reasoning
+  level independently; Tab inserts the suggestion without sending.
+
 ### Changed
 
 - Frame desktop conversations in a rounded canvas with matching outer
