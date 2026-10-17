@@ -10,8 +10,8 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Changed
 
-- Remove the next-message prompt restriction against inventing facts, decisions,
-  commitments, files, commands, or goals.
+- Simplify the next-message prompt to predict a natural continuation in the user's
+  language, tone, and intent.
 
 ### Removed
 
