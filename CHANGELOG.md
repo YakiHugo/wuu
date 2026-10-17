@@ -8,6 +8,10 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ## [Unreleased]
 
+### Added
+
+- Open named subagents and completion notifications from the conversation in a right-side panel with active/finished tasks and paged saved work records.
+
 ### Changed
 
 - Simplify the next-message prompt to predict a natural continuation in the user's
