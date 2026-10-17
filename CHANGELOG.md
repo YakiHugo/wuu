@@ -10,6 +10,8 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Keep the context compaction ring on the process summary line when a long
+  activity summary must truncate, instead of wrapping the ring onto its own row.
 - Keep the macOS permission guide clear of System Settings authentication dialogs and file pickers, and make it follow window movement continuously instead of jumping between slow permission checks.
 
 ## [2026.10.17] - 2026-10-17
