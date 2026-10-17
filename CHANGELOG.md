@@ -15,6 +15,11 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Refresh external agent discovery after installing a CLI while the desktop is
+  running, including login-shell paths and runtime registration. Preserve newer
+  engine settings and concurrent thread creation during refresh. Detect standard
+  user installs in the onboarding preview, and preserve terminal PATH and explicit
+  engine binary overrides when launching macOS source development builds.
 - Offer detected Codex and Grok logins together during first-run setup, connecting
   either only when selected, and keep other connection options visible alongside
   existing connections. Locked connection fields no longer imply a valid login;
