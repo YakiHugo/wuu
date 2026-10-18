@@ -1,4 +1,4 @@
-import { type FormEvent, type ReactNode, useEffect, useId, useRef } from "react";
+import { type FormEvent, type ReactNode, useLayoutEffect, useId, useRef } from "react";
 import { ArrowLeft } from "./WuuIcons";
 import { useI18n } from "./i18n";
 
@@ -35,7 +35,13 @@ export function ConnectionPage({
   const { t } = useI18n();
   const titleId = useId();
   const heading = useRef<HTMLHeadingElement>(null);
-  useEffect(() => { heading.current?.focus(); }, []);
+  useLayoutEffect(() => {
+    // Inline navigation shares the settings scrollport. Start the new page at
+    // its Back control before focusing its heading, without browser scrolling.
+    const scrollport = heading.current?.closest<HTMLElement>(".settings-scroll");
+    if (scrollport) scrollport.scrollTop = 0;
+    heading.current?.focus({ preventScroll: true });
+  }, []);
   const content = <>
     <button
       type="button"
@@ -63,6 +69,7 @@ export function ConnectionPage({
     aria-label={ariaLabel}
     aria-labelledby={ariaLabel ? undefined : titleId}
   >
+    {icon ? <div className="connection-page-watermark" aria-hidden="true">{icon}</div> : null}
     {asForm ? <form className="connection-page-form" onSubmit={event => {
       event.preventDefault();
       onSubmit?.(event);

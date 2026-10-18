@@ -166,8 +166,21 @@ async function capture(win, name) {
   captures.push({ name, crop, zoom, pixelRatio, pixelSize });
 }
 async function refresh(win) {
+  const before = requests.length;
   await click(win, '[data-testid="settings-subscriptions"] .settings-section-actions button');
+  const until = Date.now() + 30000;
+  while (requests.length === before && Date.now() < until) await delay(25);
+  assert.ok(requests.length > before, 'Explicit quota refresh starts a real account read.');
   await waitFor(win, () => document.querySelector('[data-testid="settings-subscriptions"]')?.getAttribute('aria-busy') === 'false');
+}
+async function openProviderDetail(win, name) {
+  if (await evaluate(win, () => Boolean(document.querySelector('[data-testid="settings-provider-back"]')))) {
+    await click(win, '[data-testid="settings-provider-back"]');
+  }
+  await waitFor(win, name => Boolean(document.querySelector(`[data-testid="settings-provider-card"][data-provider="${name}"]`)), name);
+  await click(win, `[data-testid="settings-provider-card"][data-provider="${name}"]`);
+  await waitFor(win, name => Boolean(document.querySelector(`[data-testid="subscription-builtin-${name}"]`))
+    && document.querySelector('[data-testid="settings-subscriptions"]')?.getAttribute('aria-busy') === 'false', name);
 }
 let main;
 app.on('browser-window-created', (_event, win) => { main ||= win; });
@@ -204,7 +217,11 @@ async function run() {
   await click(main, '.sidebar-account-trigger');
   await waitFor(main, () => document.querySelector('[data-settings-page="providers"]'));
   await click(main, '[data-settings-page="providers"]');
-  await waitFor(main, () => document.querySelector('[data-testid="settings-subscriptions"]')?.getAttribute('aria-busy') === 'false');
+  await waitFor(main, () => document.querySelector('[data-provider="personal"] .connection-usage-summary meter'));
+  assert.deepEqual(await evaluate(main, () => [...document.querySelectorAll('[data-provider="personal"] meter')].map(meter => meter.value)), [37, 100], 'Overview meters show consumed usage.');
+  assert.equal(await evaluate(main, () => document.querySelector('[data-provider="team"] meter') === null), true, 'Unknown usage must not become an empty or full meter.');
+  await capture(main, '00-connection-overview.png');
+  await openProviderDetail(main, 'personal');
   const fresh = await snapshot(main);
   const first = findQuota(fresh, 'personal'), second = findQuota(fresh, 'team');
   assert.equal(first.status, 'available');
@@ -216,17 +233,25 @@ async function run() {
   assert.deepEqual(findQuota(fresh, 'kimi').windows.map(window => window.used_percent), [15, 25]);
   assert.equal(findQuota(fresh, 'unknown').status, 'unsupported');
   assert.deepEqual(await evaluate(main, selector => [...document.querySelectorAll(`${selector} meter`)].map(meter => meter.value), card('personal')), [63, 0]);
-  assert.equal(await evaluate(main, selector => document.querySelector(`${selector} meter`) === null, card('team')), true);
   assert.equal(await evaluate(main, () => {
     const personal = document.querySelector('[data-testid="subscription-builtin-personal"]');
-    const team = document.querySelector('[data-testid="subscription-builtin-team"]');
-    return personal.closest('article') === team.closest('article')
-      && personal.textContent.includes('personal@example.test')
+    return personal.textContent.includes('personal@example.test')
       && !personal.textContent.includes('team-with-a-long-account-name@example.test')
-      && team.textContent.includes('team-with-a-long-account-name@example.test')
-      && !team.textContent.includes('personal@example.test');
-  }), true, 'A shared service card must retain each account and its independent allowance.');
+      && !document.querySelector('[data-testid="subscription-builtin-team"]');
+  }), true, 'Personal connection detail must expose only its account and allowance.');
+  await openProviderDetail(main, 'team');
+  assert.equal(await evaluate(main, () => {
+    const team = document.querySelector('[data-testid="subscription-builtin-team"]');
+    return team.textContent.includes('team-with-a-long-account-name@example.test')
+      && !team.textContent.includes('personal@example.test')
+      && !document.querySelector('[data-testid="subscription-builtin-personal"]')
+      && !team.querySelector('meter');
+  }), true, 'Team connection keeps its own unknown allowance without borrowing personal usage.');
+  await capture(main, '01-team-account-light.png');
+  await openProviderDetail(main, 'deepseek');
   assert.equal(await evaluate(main, selector => Boolean(document.querySelector(`${selector} .select-menu`)), card('deepseek')), false);
+  assert.equal(await evaluate(main, selector => document.querySelector(selector).textContent.includes('12.3400 USD'), card('deepseek')), true, 'The observed balance remains visible in connection detail.');
+  await openProviderDetail(main, 'personal');
   const resetTimes = await evaluate(main, selector => [...document.querySelectorAll(`${selector} .settings-subscription-reset time`)].map(time => ({
     datetime: time.dateTime, exact: time.getAttribute('aria-label'), title: time.title,
   })), card('personal'));
@@ -268,6 +293,17 @@ async function run() {
     assert.deepEqual(problems, [], `${theme}, ${size}px, ${width}px`);
     layouts.push({ theme, size, width, allowances: await verifyQuotaWindowLayout(main) });
     await capture(main, `02-${theme}-${size}-${width}.png`);
+    await openProviderDetail(main, 'team');
+    const teamProblems = await evaluate(main, () => {
+      const page = document.querySelector('.settings-page').getBoundingClientRect();
+      return [...document.querySelectorAll('.settings-subscription-name, .settings-subscription-account, .settings-subscription-usage, .settings-subscription-reset')]
+        .filter(node => { const rect = node.getBoundingClientRect(); return rect.right > page.right + 1 || rect.left < page.left - 1 || node.scrollWidth > node.clientWidth + 1; })
+        .map(node => node.textContent);
+    });
+    assert.deepEqual(teamProblems, [], `team ${theme}, ${size}px, ${width}px`);
+    await verifyQuotaWindowLayout(main);
+    await capture(main, `02-team-${theme}-${size}-${width}.png`);
+    await openProviderDetail(main, 'personal');
   }
   main.setSize(1280, 1000);
   await evaluate(main, () => { document.documentElement.setAttribute('data-theme', 'light'); document.documentElement.style.setProperty('--conversation-message-font-size', '14px'); document.documentElement.style.setProperty('--appearance-scale', '1'); });
@@ -288,6 +324,10 @@ async function run() {
   firstStatus = 200; firstUsage = 52;
   await refresh(main);
   assert.deepEqual(await evaluate(main, selector => [...document.querySelectorAll(`${selector} meter`)].map(meter => meter.value), card('personal')), [48, 0]);
+  await click(main, '[data-testid="settings-provider-back"]');
+  await waitFor(main, () => document.querySelector('[data-provider="personal"] meter')?.value === 52);
+  assert.deepEqual(await evaluate(main, () => [...document.querySelectorAll('[data-provider="personal"] meter')].map(meter => meter.value)), [52, 100], 'Returning from refreshed detail shows the latest consumed allowance.');
+  await openProviderDetail(main, 'personal');
   firstStatus = 401;
   await refresh(main);
   assert.equal(findQuota(await snapshot(main), 'personal').status, 'sign_in');

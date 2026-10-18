@@ -126,6 +126,23 @@ const layoutProblems = win => evaluate(win, () => {
     if (rect.left < page.left - 1 || rect.right > page.right + 1) problems.push(`outside settings column: ${label}`);
     if (rect.left < -1 || rect.right > innerWidth + 1) problems.push(`outside viewport: ${label} (${rect.left}..${rect.right})`);
   }
+  for (const row of document.querySelectorAll('.connection-summary-row')) {
+    const icon = row.querySelector('.connection-summary-icon')?.getBoundingClientRect();
+    const copy = row.querySelector('.connection-summary-copy')?.getBoundingClientRect();
+    const chevron = row.querySelector(':scope > .settings-disclosure-chevron, :scope > .icon')?.getBoundingClientRect();
+    const rect = row.getBoundingClientRect();
+    if (!icon || !copy || !chevron) { problems.push('connection row content missing'); continue; }
+    if (icon.right > copy.left + 1 || copy.right > chevron.left + 1) problems.push('connection icon, text or chevron overlaps');
+    if (Math.abs(icon.top + icon.height / 2 - chevron.top - chevron.height / 2) > 1) problems.push('connection icon and chevron centers misaligned');
+    if (copy.width <= 0 || rect.height < icon.height) problems.push('connection row content clipped');
+    const viewport = row.closest('.settings-scroll').getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    if (y >= Math.max(0, viewport.top) && y < Math.min(innerHeight, viewport.bottom)) {
+      const hit = document.elementFromPoint(x, y);
+      if (!hit || !row.contains(hit)) problems.push('connection row click target obscured');
+    }
+  }
   const actions = document.querySelectorAll('.settings-page-actions button');
   if (!actions.length) problems.push('settings page actions missing');
   for (const node of actions) {
@@ -167,7 +184,7 @@ async function run() {
   await click(main, '.sidebar-account-trigger');
   await waitFor(main, () => document.querySelector('[data-settings-page="providers"]'));
   await click(main, '[data-settings-page="providers"]');
-  await waitFor(main, () => document.querySelector('[data-provider="fixture"] .model-service-badge') && document.querySelector('[data-testid="settings-connection-add"]'));
+  await waitFor(main, () => document.querySelector('[data-provider="fixture"][data-default]') && document.querySelector('[data-testid="settings-connection-add"]'));
   assert.equal(await evaluate(main, () => Boolean(document.querySelector('[data-catalog]'))), false, 'Inactive catalog is hidden until explicitly opened.');
   assert.equal(await evaluate(main, () => Boolean(document.querySelector('[data-testid="settings-engine-codex-status"]'))), false, 'Uninstalled inactive engines are hidden.');
   await capture(main, '01-overview.png');
@@ -305,8 +322,8 @@ async function run() {
   assert.ok(!readConfig().providers.gateway.models['fixture-b'].disabled);
 
   await click(main, '[data-testid="settings-provider-back"]');
-  await waitFor(main, () => document.querySelector('[data-provider="gateway"] .model-service-badge'));
-  const cards = await evaluate(main, () => [...document.querySelectorAll('[data-testid="settings-provider-card"]')].map(card => ({ name: card.dataset.provider, label: card.getAttribute('aria-label'), isDefault: Boolean(card.querySelector('.model-service-badge')) })));
+  await waitFor(main, () => document.querySelector('[data-provider="gateway"][data-default]'));
+  const cards = await evaluate(main, () => [...document.querySelectorAll('[data-testid="settings-provider-card"]')].map(card => ({ name: card.dataset.provider, label: card.getAttribute('aria-label'), isDefault: card.hasAttribute('data-default') })));
   assert.deepEqual(cards.filter(card => card.isDefault).map(card => card.name), ['gateway']);
   await capture(main, '06-overview-after.png');
 
@@ -329,9 +346,28 @@ async function run() {
       await capture(main, `07-overview-${theme}-${size}-${width}.png`);
     }
   }
-  // Keep detail controls reachable at large text sizes in narrow windows.
-  await click(main, '[data-provider="gateway"]');
+  // Detail entry from a scrolled overview must expose Back on its first paint.
+  await evaluate(main, () => {
+    const scroll = document.querySelector('.settings-scroll');
+    scroll.scrollTop = scroll.scrollHeight;
+    document.querySelector('[data-provider="gateway"]').click();
+  });
   await waitFor(main, () => document.querySelector('[data-testid="settings-provider-back"]'));
+  const entry = await evaluate(main, () => {
+    const back = document.querySelector('[data-testid="settings-provider-back"]');
+    const page = back.closest('.connection-page');
+    const scroll = page.closest('.settings-scroll');
+    const viewport = scroll.getBoundingClientRect();
+    const rect = back.getBoundingClientRect();
+    const heading = page.querySelector('.connection-page-title');
+    return {
+      scrollTop: scroll.scrollTop,
+      backVisible: rect.top >= viewport.top && rect.bottom <= viewport.bottom,
+      headingFocused: document.activeElement === heading,
+    };
+  });
+  assert.deepEqual(entry, { scrollTop: 0, backVisible: true, headingFocused: true }, 'Detail entry reveals Back without delayed scroll correction.');
+  // Keep detail controls reachable at large text sizes in narrow windows.
   for (const theme of ['light', 'dark']) for (const width of [1280, 760]) {
     await setAppearance(main, { theme, size: 20, width });
     await settle(main);
@@ -352,6 +388,15 @@ async function run() {
           const hit = document.elementFromPoint(x, y);
           if (!hit || !node.contains(hit)) controls.push(`obscured: ${label}`);
         }
+      }
+      for (const text of panel.querySelectorAll('.model-choice-name, .model-choice-id')) {
+        const bounds = text.getBoundingClientRect();
+        if (!bounds.width || !bounds.height) continue;
+        const button = text.closest('.model-choice-main');
+        if (!button) continue;
+        const content = button.getBoundingClientRect();
+        if (text.scrollWidth > text.clientWidth + 1 || text.scrollHeight > text.clientHeight + 1) controls.push(`truncated model text: ${text.textContent}`);
+        if (bounds.left < content.left - 1 || bounds.right > content.right + 1 || bounds.top < content.top - 1 || bounds.bottom > content.bottom + 1) controls.push(`model text outside control: ${text.textContent}`);
       }
       return { horizontal: panel.scrollWidth > panel.clientWidth + 1, outside: rect.left < -1 || rect.right > innerWidth + 1, controls };
     });

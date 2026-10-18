@@ -234,13 +234,16 @@ describe("EngineSettingsSection", () => {
       engines: [{ id: "codex", enabled: true, binary_ok: true, binary_path: "/first/codex" }],
       settings: { codex: { binary_path: "/first/codex" } },
     };
+    const observedAt = Date.now();
     window.wuu.listEngines = vi.fn().mockResolvedValue({ engines: [
       { ...active.engines[0], quota: { status: "available", kind: "subscription",
-        account: { id: "first-account", label: "First account" } } },
+        account: { id: "first-account", label: "First account" },
+        observed_at: new Date(observedAt).toISOString(), checked_at: new Date(observedAt).toISOString(),
+        windows: [{ id: "weekly", label: "Weekly", used_percent: 25, window_minutes: 10080 }] } },
       { id: "claude", enabled: true, binary_ok: true, quota: { status: "available", kind: "subscription",
         account: { id: "other-account", label: "Other account" } } },
     ] });
-    const props = { embedded: true, onUpdate: vi.fn(), onRefresh: vi.fn(), onSelectEngine: vi.fn(), onCloseEngine: vi.fn() };
+    const props = { embedded: true, showAll: true, onUpdate: vi.fn(), onRefresh: vi.fn(), onSelectEngine: vi.fn(), onCloseEngine: vi.fn() };
     await act(async () => root.render(<EngineSettingsSection {...props} result={active} selectedEngineID="codex" />));
     expect(container.textContent).toContain("First account");
     expect(container.textContent).not.toContain("Other account");
@@ -249,6 +252,24 @@ describe("EngineSettingsSection", () => {
       settings: { codex: { enabled: false, binary_path: "/first/codex" } },
     };
     act(() => root.render(<EngineSettingsSection {...props} result={disabled} />));
+    expect(container.querySelector<HTMLMeterElement>('[data-testid="settings-engine-codex-status"] meter')?.value).toBe(25);
+    act(() => root.render(<EngineSettingsSection {...props} result={disabled} quotaFailed />));
+    expect(container.querySelector('[data-testid="settings-engine-codex-status"] meter')).toBeNull();
+    expect(container.querySelector('[data-testid="settings-engine-codex-status"]')?.textContent).toContain("25");
+    const overview: EngineListResult = { ...disabled, engines: [{ ...disabled.engines[0], quota: {
+      status: "available", kind: "subscription", observed_at: new Date(observedAt - 60_000).toISOString(),
+      checked_at: new Date(observedAt - 60_000).toISOString(),
+      windows: [{ id: "weekly", label: "Weekly", used_percent: 10, window_minutes: 10080 }],
+    } }] };
+    act(() => root.render(<EngineSettingsSection {...props} result={overview} />));
+    expect(container.querySelector<HTMLMeterElement>('[data-testid="settings-engine-codex-status"] meter')?.value).toBe(25);
+    overview.engines[0].quota!.observed_at = undefined;
+    overview.engines[0].quota!.checked_at = "";
+    act(() => root.render(<EngineSettingsSection {...props} result={{ ...overview }} />));
+    expect(container.querySelector<HTMLMeterElement>('[data-testid="settings-engine-codex-status"] meter')?.value).toBe(25);
+    overview.engines[0].quota!.observed_at = new Date(observedAt + 60_000).toISOString();
+    act(() => root.render(<EngineSettingsSection {...props} result={{ ...overview }} />));
+    expect(container.querySelector<HTMLMeterElement>('[data-testid="settings-engine-codex-status"] meter')?.value).toBe(10);
     await act(async () => root.render(<EngineSettingsSection {...props} result={disabled} selectedEngineID="codex" />));
     expect(container.textContent).toContain("First account");
     expect(window.wuu.listEngines).toHaveBeenCalledOnce();
@@ -256,6 +277,8 @@ describe("EngineSettingsSection", () => {
       engines: [{ ...disabled.engines[0], binary_path: "/second/codex" }],
       settings: { codex: { enabled: false, binary_path: "/second/codex" } },
     };
+    act(() => root.render(<EngineSettingsSection {...props} result={changed} />));
+    expect(container.querySelector('[data-testid="settings-engine-codex-status"] meter')).toBeNull();
     await act(async () => root.render(<EngineSettingsSection {...props} result={changed} selectedEngineID="codex" />));
     expect(container.textContent).not.toContain("First account");
     expect(window.wuu.listEngines).toHaveBeenCalledOnce();

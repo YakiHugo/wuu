@@ -552,6 +552,122 @@ describe("SettingsView model services", () => {
     expect(initialized).toEqual(beforeBrowsing);
   });
 
+  it("loads one allowance snapshot without replacing live connection configuration", async () => {
+    const api = installServicesStub();
+    const initialized = servicesInitialized();
+    const inventory = readyEngineInventory();
+    const observedAt = new Date().toISOString();
+    const quota = { status: "available" as const, checked_at: observedAt,
+      windows: [{ id: "short", window_minutes: 300, used_percent: 25 }] };
+    vi.mocked(api.listEngines).mockResolvedValue({
+      engines: [{ id: "codex", enabled: false, binary_ok: false, quota }],
+      subscription_providers: [{ ...initialized.providers![0], api_key_configured: false, model: "obsolete-model", quota }],
+    });
+    renderSettings({ initialized, engineInventory: inventory, initialPage: "providers", locale: "en-US" });
+    await flush();
+    expect(api.listEngines).toHaveBeenCalledTimes(1);
+    expect(api.listEngines).toHaveBeenCalledWith({ include_quota: true });
+    const provider = document.querySelector('[data-provider="openai-codex"]')!;
+    expect(provider.querySelector("meter")?.value).toBe(25);
+    const engine = document.querySelector('[data-testid="settings-engine-codex-status"]')!;
+    expect(engine.querySelector("meter")?.value).toBe(25);
+    click(engine);
+    await flush();
+    expect(document.querySelector('[data-testid="settings-engine-codex-enabled"]')?.getAttribute("aria-checked")).toBe("true");
+    expect(initialized.providers![0].api_key_configured).toBe(true);
+    expect(initialized.providers![0].model).toBe("gpt-6-astra");
+    expect(inventory.engines.find(item => item.id === "codex")?.enabled).toBe(true);
+  });
+
+  it("keeps a plain API account balance available when opening its connection details", async () => {
+    const api = installServicesStub();
+    const initialized = servicesInitialized();
+    const provider = { name: "balance-api", type: "openai", model: "model", api_key_configured: true, base_url: "https://api.deepseek.com" };
+    initialized.providers = [provider];
+    vi.mocked(api.listEngines).mockResolvedValue({ engines: [], subscription_providers: [{ ...provider,
+      quota: { status: "available", checked_at: new Date().toISOString(), balances: [{ currency: "USD", amount: "12.3400" }] },
+    }] });
+    renderSettings({ initialized, initialPage: "providers", locale: "en-US" });
+    await flush();
+    click(document.querySelector('[data-provider="balance-api"]'));
+    await flush();
+    expect(document.querySelector('[data-testid="settings-subscriptions"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="subscription-builtin-balance-api"]')?.textContent).toContain("12.3400");
+    expect(initialized.providers[0]).not.toHaveProperty("quota");
+  });
+
+  it("does not attach an allowance from a different configured engine executable", async () => {
+    const api = installServicesStub();
+    const inventory = readyEngineInventory();
+    inventory.settings = { default_engine: "wuu", codex: { binary_path: "/new/codex" } };
+    vi.mocked(api.listEngines).mockResolvedValue({
+      engines: [{ id: "codex", enabled: true, binary_ok: true,
+        quota: { status: "available", checked_at: new Date().toISOString(), windows: [{ id: "short", used_percent: 25 }] } }],
+      settings: { default_engine: "wuu", codex: { binary_path: "/old/codex" } },
+    });
+    renderSettings({ initialized: servicesInitialized(), engineInventory: inventory, initialPage: "providers" });
+    await flush();
+    expect(document.querySelector('[data-testid="settings-engine-codex-status"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="settings-engine-codex-status"] meter')).toBeNull();
+  });
+
+  it.each([
+    { type: "openai-compatible" },
+    { base_url: "https://different.example.test/v1" },
+    { chatgpt_account_id: "different-account" },
+  ])("does not attach another provider identity's allowance (%j)", async changedIdentity => {
+    const api = installServicesStub();
+    const initialized = servicesInitialized();
+    vi.mocked(api.listEngines).mockResolvedValue({
+      engines: [], subscription_providers: [{ ...initialized.providers![0], ...changedIdentity,
+        quota: { status: "available", checked_at: new Date().toISOString(), windows: [{ id: "short", used_percent: 25 }] },
+      }],
+    });
+    renderSettings({ initialized, initialPage: "providers" });
+    await flush();
+    expect(document.querySelector('[data-provider="openai-codex"]')).not.toBeNull();
+    expect(document.querySelector('[data-provider="openai-codex"] meter')).toBeNull();
+  });
+
+  it("stops presenting cached allowance as live after a failed refresh", async () => {
+    const api = installServicesStub();
+    const initialized = servicesInitialized();
+    vi.mocked(api.listEngines).mockResolvedValueOnce({
+      engines: [], subscription_providers: [{ ...initialized.providers![0],
+        quota: { status: "available", checked_at: new Date().toISOString(), windows: [{ id: "short", used_percent: 25 }] },
+      }],
+    }).mockRejectedValueOnce(new Error("quota request failed"));
+    renderSettings({ initialized, initialPage: "providers" });
+    await flush();
+    expect(document.querySelector('[data-provider="openai-codex"] meter')).not.toBeNull();
+    click(document.querySelector('[data-testid="settings-model-catalog-refresh"]'));
+    await flush();
+    expect(api.listEngines).toHaveBeenCalledTimes(2);
+    expect(document.querySelector('[data-provider="openai-codex"] meter')).toBeNull();
+    expect(document.querySelector('[data-provider="openai-codex"]')?.textContent).toContain("25");
+  });
+
+  it("shows one authentication warning instead of ready or default for a rejected quota login", async () => {
+    const api = installServicesStub();
+    const initialized = servicesInitialized();
+    vi.mocked(api.listEngines).mockResolvedValue({
+      engines: [], subscription_providers: [{ ...initialized.providers![0],
+        quota: { status: "sign_in", checked_at: new Date().toISOString() },
+      }],
+    });
+    renderSettings({ initialized, initialPage: "providers", locale: "en-US" });
+    await flush();
+    const row = document.querySelector('[data-provider="openai-codex"]')!;
+    const warnings = row.querySelectorAll('[data-attention]');
+    expect(warnings).toHaveLength(1);
+    const warning = warnings[0].textContent!;
+    expect(warning.length).toBeGreaterThan(0);
+    // The row has only its service name and one actionable authentication
+    // state, rather than a default/ready badge or duplicate usage warning.
+    expect(row.textContent).toBe(`${row.getAttribute("aria-label")}${warning}`);
+    expect(row.querySelector("meter")).toBeNull();
+  });
+
   it("keeps configured connections with broken authentication visible without opening the catalog", async () => {
     installServicesStub();
     const initialized = servicesInitialized();

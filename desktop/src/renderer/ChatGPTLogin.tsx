@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ProviderSummary } from "../shared/protocol";
+import { hostSupports } from "./HostCapabilities";
 import { useI18n } from "./i18n";
 
 /** Authorization is owned by the host; tokens and authorization URLs never enter this view. */
@@ -37,7 +38,7 @@ export function ChatGPTLogin({ onAuthenticated, onBusyChange, disabled = false, 
   }
 
   async function start(): Promise<void> {
-    if (operation.current || busy || disabled) return;
+    if (!hostSupports("startChatGPTLogin") || operation.current || busy || disabled) return;
     const current: { id?: string; timer?: number } = {};
     operation.current = current;
     setError("");
@@ -95,6 +96,8 @@ export function ChatGPTLogin({ onAuthenticated, onBusyChange, disabled = false, 
     }
     // A start still awaiting admission cancels its returned ID before finishing.
   }
+
+  if (!hostSupports("startChatGPTLogin")) return <p className="settings-muted-line" role="status">{t("provider.chatgptDesktopLoginRequired")}</p>;
 
   return <div className="settings-engine-auth" aria-busy={busy}>
     <p className="settings-muted-line">{t("provider.chatgptDirectHint")}</p>

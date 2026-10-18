@@ -15,9 +15,11 @@ import type {
   InitializeResult,
   EngineListResult,
   EngineUpdateParams,
+  EngineBinarySettings,
   ProviderModelSummary,
   ProviderSummary,
   RuntimeConnectionUpdate,
+  SubscriptionQuota,
 } from "../shared/protocol";
 import {
   AlertTriangle,
@@ -42,6 +44,7 @@ import { hostSupports } from "./HostCapabilities";
 import { isTouchWebShell } from "./ComposerFocus";
 import { Modal } from "./Modal";
 import { ConnectionPage } from "./ConnectionPage";
+import { ConnectionUsageSummary } from "./ConnectionUsageSummary";
 import { ProviderMark } from "./ProviderMarks";
 import {
   chatGPTConnectionModels,
@@ -171,16 +174,6 @@ function hostFromBaseURL(baseURL?: string): string {
   } catch {
     return "";
   }
-}
-
-export function connectionMethod(provider: ProviderSummary, t: Translate): string {
-  if (isCodexType(provider.type)) return t("provider.methodLocalCodex");
-  if (isChatGPTProvider(provider)) return t("provider.methodChatGPT");
-  if (isGrokBuildType(provider.type)) return t("provider.grokBuild");
-  if (isXAISubscriptionType(provider.type)) return t("provider.methodAccount");
-  const host = hostFromBaseURL(provider.base_url);
-  if (["localhost", "127.0.0.1", "[::1]"].includes(host)) return t("provider.localService");
-  return t("provider.apiKey");
 }
 
 type ServiceIdentity = {
@@ -317,6 +310,39 @@ export function ModelServicesPage({
   const addButtonRef = useRef<HTMLButtonElement>(null);
   const providers = initialized?.providers ?? [];
   const labels = useMemo(() => serviceLabels(providers, t), [providers, t]);
+  const [quotaSnapshot, setQuotaSnapshot] = useState<EngineListResult>();
+  const [quotaLoading, setQuotaLoading] = useState(false);
+  const [quotaFailed, setQuotaFailed] = useState(false);
+  const [quotaVersion, setQuotaVersion] = useState(0);
+  const [quotaNow, setQuotaNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = window.setInterval(() => setQuotaNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  useEffect(() => {
+    if (!ENABLE_SUBSCRIPTIONS || !hostSupports("listEngines")) return;
+    let active = true;
+    setQuotaLoading(true);
+    void window.wuu.listEngines({ include_quota: true }).then(snapshot => {
+      if (active) { setQuotaSnapshot(snapshot); setQuotaFailed(false); setQuotaNow(Date.now()); }
+    }, () => { if (active) setQuotaFailed(true); })
+      .finally(() => { if (active) setQuotaLoading(false); });
+    return () => { active = false; };
+  }, [quotaVersion]);
+  const observedQuota = (quota: SubscriptionQuota | undefined): SubscriptionQuota | undefined =>
+    quotaFailed && quota?.status === "available" ? { ...quota, status: "stale" } : quota;
+  const overviewProviders = providers.map(provider => {
+    const snapshot = quotaSnapshot?.subscription_providers?.find(item => item.name === provider.name
+      && item.type === provider.type && item.chatgpt_account_id === provider.chatgpt_account_id
+      && item.base_url === provider.base_url);
+    return { ...provider, quota: observedQuota(snapshot?.quota ?? provider.quota) };
+  });
+  const overviewInventory = inventory ? { ...inventory, engines: inventory.engines.map(engine => {
+    const snapshot = quotaSnapshot?.engines.find(item => item.id === engine.id && item.binary_path === engine.binary_path);
+    const currentPath = (inventory.settings as Record<string, EngineBinarySettings | undefined> | undefined)?.[engine.id]?.binary_path ?? "";
+    const observedPath = (quotaSnapshot?.settings as Record<string, EngineBinarySettings | undefined> | undefined)?.[engine.id]?.binary_path ?? "";
+    return { ...engine, quota: observedQuota(currentPath === observedPath ? snapshot?.quota ?? engine.quota : engine.quota) };
+  }) } : inventory;
   const [openService, setOpenService] = useState("");
   const [adding, setAdding] = useState(false);
   const [selectedEngine, setSelectedEngine] = useState<string>();
@@ -347,10 +373,8 @@ export function ModelServicesPage({
   }, [openService, adding]);
   const [catalogVersion, setCatalogVersion] = useState(0);
   const [catalogRefreshing, setCatalogRefreshing] = useState(false);
-  // Fixture hosts that only render settings do not expose engine inventory.
-  const subscriptionsAvailable = typeof window.wuu?.listEngines === "function";
   const catalog = useCatalogProviders(catalogVersion);
-  const detailProvider = providers.find((provider) => provider.name === openService);
+  const detailProvider = overviewProviders.find((provider) => provider.name === openService);
 
   // A removed or renamed service returns the page to the overview.
   useEffect(() => {
@@ -365,6 +389,7 @@ export function ModelServicesPage({
     try {
       await onRefreshModelCatalog();
       setCatalogVersion((value) => value + 1);
+      setQuotaVersion(value => value + 1);
     } finally {
       setCatalogRefreshing(false);
     }
@@ -372,26 +397,21 @@ export function ModelServicesPage({
 
   return (
     <div className="model-services" data-testid="settings-providers">
-      <SettingsPageHeader
-        title={t("settings.providers")}
-        actions={!adding && !detailProvider && !selectedEngine ? <>
+      <SettingsPageHeader title={t("settings.providers")} />
+      {!adding && !detailProvider && !selectedEngine ? <div className="settings-page-actions connection-list-actions">
           <button type="button" className="settings-button settings-button-ghost settings-icon-button"
             data-testid="settings-model-catalog-refresh" aria-label={t("settings.modelCatalogUpdate")}
             title={t("settings.modelCatalogUpdate")} aria-busy={catalogRefreshing} disabled={catalogRefreshing}
             onClick={() => void refreshCatalog()}><RefreshCw className={`icon${catalogRefreshing ? " settings-spin" : ""}`} aria-hidden="true" /></button>
           <button type="button" className="settings-button" data-testid="settings-connection-add" ref={addButtonRef} disabled={running}
-            onClick={() => setAdding(true)}><Plus className="icon" aria-hidden="true" /><span className="settings-action-label">{t("provider.addConnection")}</span></button>
-        </> : undefined}
-      />
-      {!adding && !detailProvider && !selectedEngine ? <ServicesOverview providers={providers} labels={labels} initialized={initialized}
+            onClick={() => setAdding(true)}><Plus className="icon" aria-hidden="true" />{t("provider.addConnection")}</button>
+      </div> : null}
+      {!adding && !detailProvider && !selectedEngine ? <ServicesOverview providers={overviewProviders} labels={labels} initialized={initialized} quotaLoading={quotaLoading} now={quotaNow}
         onOpenService={setOpenService} /> : null}
       {onRefreshEngines && onUpdateEngines && !detailProvider && (!adding || selectedEngine) ? <EngineSettingsSection embedded
-        result={inventory} loadError={inventoryError} onRefresh={onRefreshEngines} onUpdate={onUpdateEngines}
+        result={overviewInventory} quotaFailed={quotaFailed} quotaLoading={quotaLoading} quotaNow={quotaNow} loadError={inventoryError} onRefresh={onRefreshEngines} onUpdate={onUpdateEngines}
         selectedEngineID={selectedEngine} onSelectEngine={setSelectedEngine}
         onCloseEngine={() => { focusEngine.current = selectedEngine ?? ""; setSelectedEngine(undefined); }} /> : null}
-      {!adding && !detailProvider && !selectedEngine && ENABLE_SUBSCRIPTIONS && subscriptionsAvailable ? <SubscriptionDashboard
-        inventory={inventory} providers={providers}
-        onSelectBuiltinModel={(provider, model) => onSave(provider, model)} /> : null}
       {adding ? <div hidden={!!selectedEngine || !!detailProvider}>
         <ServiceConnector providers={providers} running={running} catalog={catalog}
           defaultOn={!defaultUsable} onSave={onSave} onProvidersChanged={onProvidersChanged} catalogDialog inline
@@ -412,6 +432,7 @@ export function ModelServicesPage({
           </SettingsSection> : null; }} />
       </div> : null}
       {detailProvider ? <ServiceDetail key={detailProvider.name} provider={detailProvider}
+        onQuotaLoaded={snapshot => { setQuotaSnapshot(snapshot); setQuotaFailed(false); setQuotaNow(Date.now()); }}
         onProvidersChanged={onProvidersChanged} onProviderModelsChanged={onProviderModelsChanged}
         label={labels.get(detailProvider.name) ?? detailProvider.name} initialized={initialized} running={running}
         inUse={runningProviderNames.has(detailProvider.name)} onBack={closeService} onSave={onSave}
@@ -562,13 +583,18 @@ function ServicesOverview({
   labels,
   initialized,
   onOpenService,
+  quotaLoading,
+  now,
 }: {
   providers: readonly ProviderSummary[];
   labels: ReadonlyMap<string, string>;
   initialized?: InitializeResult;
   onOpenService: (name: string) => void;
+  quotaLoading: boolean;
+  now: number;
 }): JSX.Element {
   const { t } = useI18n();
+  const summaryID = useId();
 
   return (
     <>
@@ -580,27 +606,28 @@ function ServicesOverview({
               const identity = serviceIdentity(provider, t);
               const label = labels.get(provider.name) ?? identity.label;
               const isDefault = provider.name === initialized?.provider;
-              const count = providerModels(provider).length;
-              const meta = identity.attention ?? t("provider.modelCount", { count });
+              const attention = identity.attention ?? (provider.quota?.status === "sign_in" ? t("settings.subscriptionSignIn") : undefined);
+              const status = attention ?? t(isDefault ? "provider.defaultBadge" : "settings.engineReady");
               return (
                 <div role="listitem" key={provider.name}>
                   <button
                     type="button"
-                    className="model-service-card"
+                    className="model-service-card connection-summary-row"
                     data-testid="settings-provider-card"
                     data-provider={provider.name}
+                    data-default={isDefault ? "" : undefined}
                     aria-label={label}
+                    aria-describedby={`${summaryID}-${encodeURIComponent(provider.name)}`}
                     onClick={() => onOpenService(provider.name)}
                   >
-                    <ServiceMark identity={identity} />
-                    <span className="model-service-card-copy">
-                      <span className="model-service-card-title">{label}</span>
-                      <span className="model-service-card-meta" data-attention={identity.attention ? "" : undefined}>
-                        {identity.attention ? <AlertTriangle className="icon-sm" aria-hidden="true" /> : null}
-                        {meta}
+                    <span className="connection-summary-icon"><ServiceMark identity={identity} /></span>
+                    <span id={`${summaryID}-${encodeURIComponent(provider.name)}`} className="model-service-card-copy connection-summary-copy">
+                      <span className="connection-summary-heading">
+                        <span className="model-service-card-title">{label}</span>
+                        <span className="connection-summary-status" data-attention={attention ? "" : undefined}>{status}</span>
                       </span>
+                      {(provider.quota || identity.subscription) && !attention ? <ConnectionUsageSummary quota={provider.quota} loading={quotaLoading} now={now} /> : null}
                     </span>
-                    {isDefault ? <span className="model-service-badge">{t("provider.defaultBadge")}</span> : null}
                     <ChevronRight className="icon settings-disclosure-chevron" aria-hidden="true" />
                   </button>
                 </div>
@@ -746,6 +773,7 @@ function ServiceDetail({
   provider: configuredProvider,
   onProvidersChanged,
   onProviderModelsChanged,
+  onQuotaLoaded,
   label,
   initialized,
   running,
@@ -757,6 +785,7 @@ function ServiceDetail({
   provider: ProviderSummary;
   onProvidersChanged?: (providers: ProviderSummary[]) => void;
   onProviderModelsChanged?: (name: string, accountId: string, models: ProviderModelSummary[]) => void;
+  onQuotaLoaded: (snapshot: EngineListResult) => void;
   label: string;
   initialized?: InitializeResult;
   running: boolean;
@@ -883,21 +912,20 @@ function ServiceDetail({
 
       {error && !confirmingRemove ? <p className="settings-error" role="alert">{error}</p> : null}
 
-      <SettingsSection title={t("provider.connectionSection")}>
-        <SettingsGroup>
-          <SettingsRow title={t("provider.connectionMethod")}><span className="settings-row-control-value">{connectionMethod(provider, t)}</span></SettingsRow>
+      {!isGrokBuildType(provider.type) ? <SettingsSection title={t("provider.connectionSection")}>
+        <div className="connection-fields">
           {direct ? <Suspense fallback={<p className="settings-muted-line" role="status">{t("settings.loading")}</p>}>
             <ChatGPTAccountRows provider={provider} disabled={disabled} onProvidersChanged={onProvidersChanged} onRefresh={() => setCatalogRevision(value => value + 1)} />
           </Suspense> : <ConnectionRows provider={provider} identity={identity} disabled={disabled} onSave={saveConnection} onRun={run} />}
-        </SettingsGroup>
-      </SettingsSection>
+        </div>
+      </SettingsSection> : null}
 
-      {ENABLE_SUBSCRIPTIONS && (provider.quota || hasBuiltInSubscriptionControls(provider)) ? <SubscriptionDashboard scope={{ kind: "provider", name: provider.name }} providers={[provider]} onSelectBuiltinModel={(name, model) => onSave(name, model)} /> : null}
+      {ENABLE_SUBSCRIPTIONS && (provider.quota || hasBuiltInSubscriptionControls(provider)) ? <SubscriptionDashboard scope={{ kind: "provider", name: provider.name }} providers={[provider]} onProvidersChanged={onProvidersChanged} onInventoryLoaded={onQuotaLoaded} onSelectBuiltinModel={(name, model) => onSave(name, model)} /> : null}
 
       <ModelChoices
         provider={provider}
         serviceModel={serviceModel}
-        disabled={disabled || modelsLoading || !!identity.attention}
+        disabled={disabled || modelsLoading || (direct && !!identity.attention)}
         error={error}
         onChoose={chooseModel}
         onRemove={removeModel}
@@ -1017,12 +1045,12 @@ function ConnectionRows({
             missingLabel={identity.attention ?? ""}
           />
         </SettingsRow>
-        <SettingsRow title={t("settings.codexUseLocal")}>
+        {!ENABLE_SUBSCRIPTIONS ? <SettingsRow title={t("settings.codexUseLocal")}>
           <button type="button" className="settings-button" disabled={disabled} onClick={() => void onRun(async () => {
             await window.wuu.useCodexCredentials(provider.name);
             await onSave({});
           })}>{t("settings.codexUseLocal")}</button>
-        </SettingsRow>
+        </SettingsRow> : null}
         <SettingsRow title={t("settings.baseURL")}>
           <span className="settings-row-control-value model-service-value">{provider.base_url || t("provider.oauthManaged")}</span>
         </SettingsRow>

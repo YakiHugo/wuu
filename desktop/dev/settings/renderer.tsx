@@ -83,6 +83,37 @@ const engines: EngineListResult = {
   ],
 };
 
+// Opt-in allowance samples for visual review only; never contact an account.
+if (!empty && params.get("connections") === "quota") {
+  const now = Date.now();
+  const checked_at = new Date(now).toISOString();
+  const future = (hours: number) => new Date(now + hours * 3_600_000).toISOString();
+  providers[0].quota = {
+    status: "available", checked_at, expires_at: future(1),
+    windows: [
+      { id: "short", window_minutes: 300, used_percent: 25, resets_at: future(2) },
+      { id: "weekly", window_minutes: 10080, used_percent: 80, resets_at: future(72) },
+    ],
+  };
+  providers[1].quota = { status: "unavailable", checked_at };
+  providers[2].quota = {
+    status: "stale", checked_at, observed_at: new Date(now - 7_200_000).toISOString(),
+    windows: [{ id: "daily", window_minutes: 1440, used_percent: 42, resets_at: future(4) }],
+  };
+  engines.engines[0].quota = {
+    status: "available", checked_at, expires_at: future(1),
+    windows: [
+      { id: "short", window_minutes: 300, used_percent: 0, resets_at: future(3) },
+      { id: "weekly", window_minutes: 10080, used_percent: 100, resets_at: future(48) },
+    ],
+  };
+  engines.engines[2].quota = {
+    status: "available", checked_at,
+    windows: [{ id: "unknown", window_minutes: 300, resets_at: future(2) }],
+  };
+  engines.subscription_providers = providers;
+}
+
 const mcpServers: MCPServerStatus[] = empty ? [] : [
   { name: "github", state: "connected", connected: true, tool_count: 26, auth_status: "oauth" },
   { name: "linear", state: "needs_auth", connected: false, tool_count: 0, auth_status: "not_logged_in" },

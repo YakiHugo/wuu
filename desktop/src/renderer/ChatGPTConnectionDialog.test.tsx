@@ -1,6 +1,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
+import { translateCurrent } from "./i18n";
 import { ChatGPTConnectionDialog } from "./ChatGPTConnectionDialog";
 
 let root: Root | undefined;
@@ -85,4 +86,24 @@ it("locks inline navigation during a save and restores it with the error if savi
   expect(back.disabled).toBe(false);
   expect(connect.disabled).toBe(false);
   expect(connected).not.toHaveBeenCalled();
+});
+
+it("keeps existing web accounts usable without instructions for an unavailable login button", async () => {
+  const save = vi.fn().mockResolvedValue(undefined);
+  const start = vi.fn();
+  vi.stubGlobal("wuu", {
+    unsupportedMethods: ["startChatGPTLogin", "pollChatGPTLogin", "cancelChatGPTLogin"],
+    startChatGPTLogin: start,
+    listChatGPTAccounts: vi.fn().mockResolvedValue({ accounts: [{ id: "account-web", status: "connected" }] }),
+    listChatGPTModels: vi.fn().mockResolvedValue({ models: [{ id: "web-model", name: "Fixture model" }] }),
+  });
+  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  await act(async () => root!.render(<ChatGPTConnectionDialog inline providers={[]} running={false} defaultOn={false} onSave={save} onClose={vi.fn()} onConnected={vi.fn()} />));
+  expect(container.querySelector('[data-testid="chatgpt-login-start"]')).toBeNull();
+  expect(container.textContent).not.toContain(translateCurrent("provider.chatgptAddAccountHint"));
+  const connect = container.querySelector<HTMLButtonElement>('[data-testid="settings-provider-connect"]')!;
+  expect(connect.disabled).toBe(false);
+  await act(async () => connect.click());
+  expect(save).toHaveBeenCalledWith("chatgpt", "web-model", undefined, expect.objectContaining({ chatgpt_account_id: "account-web" }));
+  expect(start).not.toHaveBeenCalled();
 });

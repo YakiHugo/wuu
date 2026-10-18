@@ -90,3 +90,14 @@ it("retains a successful-login advisory in the owner when the account control re
   expect(container.textContent).toContain("Account connected; catalog temporarily unavailable");
   expect(button("chatgpt-login-start").disabled).toBe(false);
 });
+
+it("does not offer host-local login when the browser adapter excludes it", async () => {
+  vi.stubGlobal("wuu", { startChatGPTLogin: start, pollChatGPTLogin: poll, cancelChatGPTLogin: cancel,
+    unsupportedMethods: ["startChatGPTLogin", "pollChatGPTLogin", "cancelChatGPTLogin"] });
+  act(() => root!.render(<ChatGPTLogin onAuthenticated={authenticated} />));
+  expect(container.querySelector('[data-testid="chatgpt-login-start"]')).toBeNull();
+  expect(container.querySelector('[role="status"]')).not.toBeNull();
+  expect(start).not.toHaveBeenCalled();
+  expect(poll).not.toHaveBeenCalled();
+  expect(cancel).not.toHaveBeenCalled();
+});

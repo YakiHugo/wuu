@@ -249,9 +249,7 @@
   min-height: 0;
   /* Titlebar actions must not impose their min-content width on the page. */
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(var(--canvas-titlebar-height), auto) minmax(0, 1fr);
-  container-name: settings-content;
-  container-type: inline-size;
+  grid-template-rows: var(--canvas-titlebar-height) minmax(0, 1fr);
   position: relative;
   overflow: hidden;
   margin: 0 0 var(--conversation-pane-inset) var(--conversation-pane-inset);
@@ -276,7 +274,7 @@
 .settings-titlebar {
   display: flex;
   min-width: 0;
-  height: auto;
+  height: var(--canvas-titlebar-height);
   min-height: var(--canvas-titlebar-height);
   align-items: center;
   /* Right side clears the Windows controls overlay; a no-op elsewhere
@@ -413,46 +411,6 @@
   min-height: 0;
   margin: 0 0 0 auto;
   -webkit-app-region: no-drag;
-}
-
-/* The titlebar lives outside settings-page, so it needs the content pane's
- * own width query. Keep actions on the title row at ordinary widths: their
- * fixed footprint and the shared axis must survive a narrow desktop window.
- * Text actions collapse to their icon before the row can wrap. */
-@container settings-content (max-width: 34em) {
-  .settings-titlebar-slot > .settings-page-actions .settings-action-label {
-    display: none;
-  }
-
-  .settings-titlebar-slot > .settings-page-actions .settings-button:has(> .settings-action-label) {
-    width: var(--control-field-height);
-    flex: 0 0 auto;
-    padding: 0;
-  }
-}
-
-/* Below a phone-width canvas even icon actions cannot share the row. Wrapping
- * there keeps every control reachable instead of letting the row clip. */
-@container settings-content (max-width: 26em) {
-  .settings-titlebar {
-    flex-wrap: wrap;
-  }
-
-  .settings-titlebar-slot {
-    display: contents;
-  }
-
-  .settings-titlebar-slot > .settings-page-title {
-    flex: 1 1 0;
-  }
-
-  .settings-titlebar-slot > .settings-page-actions {
-    min-width: 0;
-    flex: 1 0 100%;
-    flex-wrap: wrap;
-    margin: 0;
-    padding-bottom: var(--space-2);
-  }
 }
 
 /* --- Page header ----------------------------------------------------------

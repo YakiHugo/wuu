@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ProviderSummary } from "../shared/protocol";
 import { ChatGPTLogin } from "./ChatGPTLogin";
 import { ConnectionPage } from "./ConnectionPage";
+import { hostSupports } from "./HostCapabilities";
 import { Modal } from "./Modal";
 import { ProviderMark } from "./ProviderMarks";
 import { SelectMenu } from "./SelectMenu";
@@ -83,7 +84,7 @@ export function ChatGPTConnectionDialog({ providers, running, defaultOn, onSave,
       <ChatGPTLogin key={account?.status === "connected" ? "new-account" : accountId} accountId={account?.status !== "connected" ? accountId || undefined : undefined}
         onAdvisory={setAuthNotice} onProvidersChanged={onProvidersChanged} enablePlanUsage={account?.status === "permission_required"}
         disabled={busy || running} onBusyChange={setSigningIn} onAuthenticated={authenticated} />
-      {account?.status === "connected" ? <p className="settings-muted-line">{t("provider.chatgptAddAccountHint")}</p> : null}
+      {account?.status === "connected" && hostSupports("startChatGPTLogin") ? <p className="settings-muted-line">{t("provider.chatgptAddAccountHint")}</p> : null}
       <div className="model-connect-field"><span>{t("provider.modelLabel")}</span><SelectMenu value={model} disabled={!models.length || loading || busy || signingIn}
         ariaLabel={t("provider.modelLabel")} dataTestid="settings-provider-connect-model" options={models.map(item => ({ value: item.id, label: item.name || item.id }))} onChange={setModel}
         placeholder={t(loading ? "settings.loading" : "provider.chatgptNoModels")} /></div>

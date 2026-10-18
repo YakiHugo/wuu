@@ -360,7 +360,7 @@ describe("SubscriptionDashboard", () => {
   });
 });
 
-it("switches the Codex credential source without changing the model selection and checks authentication", async () => {
+it.each([false, true])("switches the Codex credential source without changing the model selection and checks authentication (provider detail: %s)", async (scoped) => {
  const provider: ProviderSummary = { name: "codex-login", type: "openai-codex", model: "test-model", codex_credential_source: "wuu-auth-store" };
  const updated = { ...provider, reuse_codex_credentials: true, codex_credential_source: "codex-cli" };
  const useLogin = vi.fn().mockResolvedValue({ providers: [updated] });
@@ -368,7 +368,8 @@ it("switches the Codex credential source without changing the model selection an
  window.wuu.useCodexCredentials = useLogin;
  window.wuu.loadCodexModels = check;
  const select = vi.fn();
- await act(async () => root.render(<SubscriptionDashboard providers={[provider]} inventory={inventory} onSelectBuiltinModel={select} />));
+ const providersChanged = vi.fn();
+ await act(async () => root.render(<SubscriptionDashboard onProvidersChanged={providersChanged} scope={scoped ? { kind: "provider", name: provider.name } : undefined} providers={[provider]} inventory={inventory} onSelectBuiltinModel={select} />));
  const source = container.querySelector('[data-testid="subscription-builtin-codex-login"]')!;
  const openActions = async () => act(async () => source.querySelector<HTMLButtonElement>('[data-testid="subscription-account-actions"]')!.click());
  await openActions();
@@ -376,6 +377,7 @@ it("switches the Codex credential source without changing the model selection an
  expect(check).not.toHaveBeenCalled();
  await act(async () => document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')[0]!.click());
  expect(useLogin).toHaveBeenCalledWith("codex-login");
+ expect(providersChanged).toHaveBeenCalledExactlyOnceWith([updated]);
  expect(select).not.toHaveBeenCalled();
  expect(check).toHaveBeenCalledWith("codex-login");
  expect(container.querySelector('[role="alert"]')?.textContent).toBeTruthy();
@@ -385,7 +387,21 @@ it("switches the Codex credential source without changing the model selection an
  await openActions();
  await act(async () => document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')[1]!.click());
  expect(check).toHaveBeenCalledTimes(2);
+ expect(providersChanged).toHaveBeenCalledTimes(2);
+ expect(providersChanged).toHaveBeenLastCalledWith([updated]);
  expect(useLogin).toHaveBeenCalledTimes(1);
  expect(container.querySelector('[role="alert"]')).toBeNull();
  expect(window.wuu.listEngines).toHaveBeenCalledTimes(3);
+ if (scoped) {
+   await act(async () => root.render(<SubscriptionDashboard onProvidersChanged={providersChanged} scope={{ kind: "provider", name: provider.name }} providers={[updated]} inventory={inventory} onSelectBuiltinModel={select} />));
+   expect(source.querySelector('[role="status"]')).not.toBeNull();
+   const credentialAttribution = source.querySelector('.sr-only')?.textContent;
+   expect(credentialAttribution).toBeTruthy();
+   const observed = { ...updated, quota: quota({ account: undefined, windows: [{ id: "updated", used_percent: 52 }] }) };
+   await act(async () => root.render(<SubscriptionDashboard onProvidersChanged={providersChanged} scope={{ kind: "provider", name: provider.name }} providers={[observed]} inventory={inventory} onSelectBuiltinModel={select} />));
+   expect(source.querySelector('[role="status"]')).not.toBeNull();
+   expect(source.querySelector('.sr-only')?.textContent).toBe(credentialAttribution);
+   await act(async () => root.render(<SubscriptionDashboard onProvidersChanged={providersChanged} scope={{ kind: "provider", name: provider.name }} providers={[{ ...observed, codex_credential_source: "changed-auth-store", api_key_configured: true }]} inventory={inventory} onSelectBuiltinModel={select} />));
+   expect(source.querySelector('[role="status"]')).toBeNull();
+ }
 });

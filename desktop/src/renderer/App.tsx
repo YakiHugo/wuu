@@ -8,6 +8,7 @@ import { forgetLocalTurnTiming } from "./LocalTurnTiming";
 import { subscribeServerEvents } from "./ServerEvents";
 import { AccountScreen } from "./AccountScreen";
 import { hostSupports } from "./HostCapabilities";
+import { isCodexSubscription } from "./SubscriptionSources";
 import { focusComposerTextarea, isTouchWebShell } from "./ComposerFocus";
 import { readThreadReadState, writeThreadReadState } from "./ThreadReadState";
 import { FileSelectionProvider, type FileSelectionPart } from "./FileSelectionContext";
@@ -3590,12 +3591,24 @@ export function App(): JSX.Element {
     setSettingsOpen(true);
   }
 
-  function updateChatGPTProviders(providers: NonNullable<InitializeResult["providers"]>): void {
+  function updateConnectionProviders(providers: NonNullable<InitializeResult["providers"]>): void {
     setState(current => current.initialized ? {
       ...current,
       initialized: {
         ...current.initialized,
         providers: current.initialized.providers?.map(provider => {
+          if (isCodexSubscription(provider.type)) {
+            const snapshot = providers.find(item => item.name === provider.name
+              && item.type === provider.type && item.base_url === provider.base_url);
+            return snapshot ? {
+              ...provider,
+              auth_status: snapshot.auth_status,
+              api_key_configured: snapshot.api_key_configured,
+              codex_credential_source: snapshot.codex_credential_source,
+              reuse_codex_credentials: snapshot.reuse_codex_credentials,
+              models: snapshot.models ?? provider.models,
+            } : provider;
+          }
           if (!provider.chatgpt_account_id || provider.type !== "chatgpt") return provider;
           const snapshot = providers.find(item => item.type === "chatgpt" && item.name === provider.name && item.chatgpt_account_id === provider.chatgpt_account_id);
           return snapshot ? {
@@ -4753,7 +4766,25 @@ export function App(): JSX.Element {
         removePendingComposerMessageByID(pendingKey(), message.id, "queue");
         return !stillPending;
       }
-      const targetContext = resolveThreadRuntimeContext(targetThread, currentState.projects);
+      return await submitQueuedComposerMessage(message, targetThread, () =>
+        lane.stopVersion !== stopVersion || Boolean(admission?.stopRequested),
+      );
+    } finally {
+      release();
+      if (lane.tail === tail) {
+        queueLanesRef.current.delete(queueKey);
+        if (admission?.thread) queueLanesRef.current.delete(admission.thread.id);
+      }
+    }
+  }
+
+  async function submitQueuedComposerMessage(
+    message: QueuedComposerMessage,
+    targetThread: Thread,
+    shouldHold: () => boolean,
+  ): Promise<boolean> {
+    const targetContext = resolveThreadRuntimeContext(targetThread, appStateRef.current.projects);
+    try {
       const [encodedImages, encodedFiles] = await Promise.all([
         awaitComposerImages(message.images), awaitComposerFiles(message.files),
       ]);
@@ -4776,7 +4807,7 @@ export function App(): JSX.Element {
       const images = inputImagesFromComposer(encodedImages);
       const result = await window.wuu.queueTurn(
         targetThread.id,
-        text,
+        message.text.trim(),
         images,
         message.id,
         files,
@@ -4784,7 +4815,7 @@ export function App(): JSX.Element {
         message.activeDocument,
         message.contentParts,
         targetContext,
-        lane.stopVersion !== stopVersion || Boolean(admission?.stopRequested),
+        shouldHold(),
       );
       updateThreadPendingComposerMessages(targetThread.id, (previous) => ({
         ...previous,
@@ -4803,22 +4834,16 @@ export function App(): JSX.Element {
       return true;
     } catch (error) {
       const stillPending = Boolean(
-        pendingComposerMessagesByThreadRef.current[pendingKey()]?.queued.some(
+        pendingComposerMessagesByThreadRef.current[targetThread.id]?.queued.some(
           (candidate) => candidate.id === message.id,
         ),
       );
-      removePendingComposerMessageByID(pendingKey(), message.id, "queue");
+      removePendingComposerMessageByID(targetThread.id, message.id, "queue");
       if (stillPending) discardSubmittedMessage(message.id);
       if (stillPending) {
         showActionErrorToast(error, t("app.queueFailed"));
       }
       return !stillPending;
-    } finally {
-      release();
-      if (lane.tail === tail) {
-        queueLanesRef.current.delete(queueKey);
-        if (admission?.thread) queueLanesRef.current.delete(admission.thread.id);
-      }
     }
   }
 
@@ -5174,7 +5199,6 @@ export function App(): JSX.Element {
         await interruptAcceptedThread(thread.id);
       }
     } catch (error) {
-      admission.stopRequested = true;
       const rawMessage = rawErrorMessage(error, t("composer.sendFailed"));
       const errorMessage = statusMessageForError(rawMessage, t("composer.sendFailed"));
       const noModelConfigured = isNoModelConfiguredError(rawMessage);
@@ -5190,6 +5214,28 @@ export function App(): JSX.Element {
         optimisticTurnID,
         previousTurnIDs,
       );
+      // Only a definite admission rejection may become a queued send. Timeouts
+      // can follow acceptance and must not replay the same input. Keep the
+      // admission unresolved until this message is queued so later sends cannot
+      // overtake it through their queue lane.
+      const busyMessage = `thread ${JSON.stringify(optimisticThreadID)} already has a running turn`;
+      const admissionBusy = rawMessage.endsWith(busyMessage)
+        || rawMessage.endsWith(`${busyMessage} in another app-server: thread execution is owned by another app-server`);
+      if (!interrupted && !alreadyAccepted && admission.sent && admission.thread && admissionBusy) {
+        const thread = admission.thread;
+        const deferSend = (current: AppState) => {
+          const next = updateThreadByID(current, thread.id,
+            (value) => dropOptimisticTurn(value, optimisticTurnID));
+          return activeThreadIDForState(next) === thread.id
+            ? { ...next, running: isThreadRunning(threadForTab(next, thread.id)) }
+            : next;
+        };
+        appStateRef.current = deferSend(appStateRef.current);
+        setState(deferSend);
+        enqueueComposerMessage(thread.id, { ...message, operationState: "preparing" });
+        return await submitQueuedComposerMessage(message, thread, () => admission.stopRequested);
+      }
+      admission.stopRequested = true;
       const keepAcceptedTurn = alreadyAccepted && !interrupted;
       if (!interrupted && !keepAcceptedTurn) discardSubmittedMessage(optimisticTurn.items[0].id);
       const settle = (current: AppState): AppState => {
@@ -5393,7 +5439,7 @@ export function App(): JSX.Element {
           onSave={updateProviderSettings}
           onRemoveProvider={removeProvider}
           onRefreshModelCatalog={refreshModelCatalog}
-          onProvidersChanged={updateChatGPTProviders}
+          onProvidersChanged={updateConnectionProviders}
           onProviderModelsChanged={(name, accountId, models) => setState(current => current.initialized ? {
             ...current,
             initialized: { ...current.initialized, providers: current.initialized.providers?.map(provider =>
@@ -5433,7 +5479,7 @@ export function App(): JSX.Element {
     return (
       <WuuMascotRuntimeProvider>
         <FirstRunOnboarding
-          onProvidersChanged={updateChatGPTProviders}
+          onProvidersChanged={updateConnectionProviders}
           inventory={state.initialized?.extension_inventory}
           providers={state.initialized?.providers}
           engines={engineInventory}

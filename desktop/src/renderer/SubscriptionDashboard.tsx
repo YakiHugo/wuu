@@ -24,12 +24,14 @@ export function SubscriptionDashboard({
   scope,
   initialInventory,
   onInventoryLoaded,
+  onProvidersChanged,
 }: {
   onAddService?: () => void;
   scope?: { kind: "provider"; name: string } | { kind: "engine"; id: string };
   inventory?: EngineListResult;
   initialInventory?: EngineListResult;
   onInventoryLoaded?: (inventory: EngineListResult) => void;
+  onProvidersChanged?: (providers: ProviderSummary[]) => void;
   providers?: readonly ProviderSummary[];
   onSelectBuiltinModel: (provider: string, model: string) => Promise<void>;
 }): JSX.Element {
@@ -51,7 +53,16 @@ export function SubscriptionDashboard({
   const [refreshing, setRefreshing] = useState(true);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [now, setNow] = useState(Date.now);
-  useEffect(() => { setAuthProviders([]); setCheckedProvider(""); }, [providers]);
+  const authConfiguration = JSON.stringify(providers?.map(providerAuthConfiguration));
+  useEffect(() => {
+    // A parent may echo the explicit credential result back into this detail.
+    // Quota-only observations and that same verified result preserve the check.
+    const matchesVerified = providers?.length && providers.every(provider => {
+      const verified = authProviders.find(candidate => candidate.name === provider.name);
+      return verified && providerAuthConfiguration(verified) === providerAuthConfiguration(provider);
+    });
+    if (!matchesVerified) { setAuthProviders([]); setCheckedProvider(""); }
+  }, [authConfiguration]);
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 60_000);
     return () => window.clearInterval(timer);
@@ -143,9 +154,11 @@ export function SubscriptionDashboard({
       if (useLocal) {
         const result = await window.wuu.useCodexCredentials(source.id);
         setAuthProviders(result.providers);
+        onProvidersChanged?.(result.providers);
       }
       const result = await window.wuu.loadCodexModels(source.id);
       setAuthProviders(result.providers);
+      onProvidersChanged?.(result.providers);
       setCheckedProvider(source.id);
     } catch {
       setAuthError(true);
@@ -228,7 +241,7 @@ export function SubscriptionDashboard({
                       options={source.models.map((model) => ({ value: model.id, label: model.label }))}
                       flip
                     /> : null}
-                    {scope?.kind !== "provider" && isCodexSubscription(source.provider?.type) ? <button
+                    {isCodexSubscription(source.provider?.type) ? <button
                       type="button"
                       className="settings-button settings-button-ghost settings-icon-button settings-subscription-more"
                       data-testid="subscription-account-actions"
@@ -250,7 +263,7 @@ export function SubscriptionDashboard({
                       <h2 className="settings-subscription-name">{identity?.label ?? first.label}</h2>
                       {accounts.length === 1 ? controls : null}
                     </div> : null}
-                    {scope?.kind === "engine" ? controls : null}
+                    {scope && (scope.kind === "engine" || isCodexSubscription(source.provider?.type)) ? controls : null}
                     {accountName || (observed && source.quota?.plan) || accounts.length > 1 ? <div className="settings-subscription-account" title={attribution}>
                       <span className="settings-subscription-account-name">{accountName || sourceLabel}</span>
 
@@ -376,4 +389,12 @@ function formatAge(observedAt: number, now: number, t: (key: "settings.subscript
   const hours = Math.floor(minutes / 60);
   if (hours < 48) return t("settings.subscriptionAgeHours", { count: hours });
   return t("settings.subscriptionAgeDays", { count: Math.floor(hours / 24) });
+}
+
+function providerAuthConfiguration(provider: ProviderSummary): string {
+  return JSON.stringify([
+    provider.name, provider.type, provider.base_url, provider.chatgpt_account_id,
+    provider.codex_credential_source, provider.reuse_codex_credentials,
+    provider.api_key_configured, provider.auth_status,
+  ]);
 }
