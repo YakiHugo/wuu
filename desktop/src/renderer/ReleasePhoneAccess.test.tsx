@@ -90,11 +90,12 @@ describe.each([undefined, "true"])("production phone access (build override: %s)
     ));
     const navigation = container.querySelector('[data-wuu-component="settings-navigation"]')!;
     expect(navigation.textContent).not.toContain(t("settings.remote"));
-    expect(navigation.textContent).toContain(t("settings.subscriptions"));
-    expect(container.querySelector('[data-testid="settings-subscriptions"]') !== null).toBe(initialPage === "subscriptions");
-    expect(listEngines.mock.calls.some(([options]) => options?.include_quota === true)).toBe(initialPage === "subscriptions");
+    expect(navigation.textContent).not.toContain(t("settings.subscriptions"));
+    expect(container.querySelector('[data-testid="settings-providers"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="settings-subscriptions"]') !== null).toBe(true);
+    expect(listEngines.mock.calls.some(([options]) => options?.include_quota === true)).toBe(true);
     expect(container.querySelector('[data-testid="settings-remote-page"]')).toBeNull();
-    expect(container.querySelector(".settings-nav-item.active")?.textContent).toBe(t(initialPage === "subscriptions" ? "settings.subscriptions" : "settings.providers"));
+    expect(container.querySelector(".settings-nav-item.active")?.textContent).toBe(t("settings.providers"));
     expect(getRemoteControlSnapshot).not.toHaveBeenCalled();
     expect(onRemoteControlEvent).not.toHaveBeenCalled();
   });

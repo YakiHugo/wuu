@@ -1,3 +1,4 @@
+import { chatGPTConnectionModels, isChatGPTProvider } from "./RuntimeHelpers";
 import { hostSupports } from "./HostCapabilities";
 import {
   Bug,
@@ -1039,7 +1040,7 @@ export function RuntimeModelMenu({
     .filter((item): item is RuntimeModelOption => Boolean(item));
   const additionalModels = providers.flatMap((provider) =>
     runtimeModelsForProvider(provider, state)
-      .filter((model) => model.id !== provider.model)
+      .filter((model) => isChatGPTProvider(provider) || model.id !== provider.model)
       .map((model) => ({ provider, model }))
   );
 
@@ -1475,7 +1476,7 @@ function configuredRuntimeModelForProvider(
   provider: ProviderSummary,
   state: CodexModelLoadState
 ): ProviderModelSummary | undefined {
-  if (!provider.model) {
+  if (!provider.model || isChatGPTProvider(provider)) {
     return undefined;
   }
   return (
@@ -1485,6 +1486,7 @@ function configuredRuntimeModelForProvider(
 }
 
 function runtimeModelsForProvider(provider: ProviderSummary, _state: CodexModelLoadState): ProviderModelSummary[] {
+  if (isChatGPTProvider(provider)) return chatGPTConnectionModels(provider);
   if (provider.models?.length) {
     return provider.models;
   }

@@ -77,7 +77,7 @@ export type ArchivedSessionView = {
   archive_project_id?: string;
   archive_project_name?: string;
 };
-import { ENABLE_REMOTE_CONTROL, ENABLE_SUBSCRIPTIONS } from "./FeatureFlags";
+import { ENABLE_REMOTE_CONTROL } from "./FeatureFlags";
 import { AppearanceTypography } from "./AppearanceTypography";
 import { BackgroundSettings } from "./background/BackgroundSettings";
 import { DefaultEnvironmentRow, ExecutionEnvironmentSettings } from "./ExecutionEnvironmentSettings";
@@ -91,7 +91,6 @@ import { toastErrorMessage } from "./Toast";
 import type { ArchiveDeletionState } from "./useArchiveDeletion";
 import { DefaultEngineRow, EngineSettingsSection } from "./EngineSettingsSection";
 import { DefaultModelRows, ModelServicesPage } from "./ModelServicesPage";
-import { SubscriptionDashboard } from "./SubscriptionDashboard";
 import { SettingsRemotePage } from "./SettingsRemotePage";
 import { ThemePreferenceControl } from "./ThemePreferenceSection";
 import { LanguagePreferenceControl } from "./LanguagePreferenceSection";
@@ -165,7 +164,6 @@ function nativeSettingsPages(): NativeSettingsPage[] {
     "general",
     ...(remoteControlAvailable() ? ["remote" as const] : []),
     "usage",
-    ...(ENABLE_SUBSCRIPTIONS ? ["subscriptions" as const] : []),
     "archive",
   ];
 }
@@ -176,7 +174,7 @@ const COPY_RESET_MS = 1500;
 
 function availableSettingsPage(page: SettingsPage | undefined): SettingsPage {
   const next = page ?? "providers";
-  if (next === "subscriptions" && !ENABLE_SUBSCRIPTIONS) {
+  if (next === "subscriptions") {
     return "providers";
   }
   if (next === "remote" && !remoteControlAvailable()) {
@@ -207,6 +205,8 @@ export function SettingsView({
   onSave,
   onRemoveProvider,
   onRefreshModelCatalog,
+  onProvidersChanged,
+  onProviderModelsChanged,
   onRefreshEngineInventory,
   onUpdateEngineInventory,
   onAdvancedSave,
@@ -251,6 +251,8 @@ export function SettingsView({
   onSave: (provider: string, model: string, effort?: string, connection?: RuntimeConnectionUpdate, variant?: string) => Promise<void>;
   onRemoveProvider: (provider: string, options?: { fallbackProvider?: string; fallbackModel?: string }) => Promise<void>;
   onRefreshModelCatalog: () => Promise<void>;
+  onProvidersChanged?: (providers: NonNullable<InitializeResult["providers"]>) => void;
+  onProviderModelsChanged?: (name: string, accountId: string, models: NonNullable<NonNullable<InitializeResult["providers"]>[number]["models"]>) => void;
   onRefreshEngineInventory: () => Promise<EngineListResult | undefined>;
   onUpdateEngineInventory: (params: EngineUpdateParams) => Promise<EngineListResult>;
   onAdvancedSave: (settings: RuntimeAdvancedSettingsUpdate) => Promise<void>;
@@ -792,21 +794,17 @@ export function SettingsView({
                     onFailure={() => setActivePage("providers")}
                   />
                 </>
-              ) : activePage === "subscriptions" && ENABLE_SUBSCRIPTIONS ? (
-                <SubscriptionDashboard
-                  onAddService={() => setActivePage("providers")}
-                  inventory={engineInventory}
-                  providers={providers}
-                  onSelectBuiltinModel={(provider, model) => onSave(provider, model)}
-                />
               ) : activePage === "providers" ? (
                 <ModelServicesPage
+                  inventory={engineInventory}
                   initialized={initialized}
                   running={running}
                   runningProviderNames={runningProviderNameSet}
                   onSave={onSave}
                   onRemoveProvider={onRemoveProvider}
                   onRefreshModelCatalog={onRefreshModelCatalog}
+                  onProvidersChanged={onProvidersChanged}
+                  onProviderModelsChanged={onProviderModelsChanged}
                 />
               ) : activePage === "agents" ? (
                 <EngineSettingsSection

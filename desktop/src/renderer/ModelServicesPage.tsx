@@ -1,5 +1,7 @@
 import {
   type FormEvent as ReactFormEvent,
+  lazy,
+  Suspense,
   useEffect,
   useId,
   useLayoutEffect,
@@ -11,6 +13,7 @@ import type {
   CatalogModelSummary,
   CatalogProviderSummary,
   InitializeResult,
+  EngineListResult,
   ProviderModelSummary,
   ProviderSummary,
   RuntimeConnectionUpdate,
@@ -28,7 +31,9 @@ import {
   Search,
   Trash2,
 } from "./WuuIcons";
-import { CodexSubscriptionLogin } from "./CodexSubscriptionLogin";
+import { SubscriptionDashboard } from "./SubscriptionDashboard";
+import { hasBuiltInSubscriptionControls } from "./SubscriptionSources";
+import { ENABLE_SUBSCRIPTIONS } from "./FeatureFlags";
 import { CatalogSearchField } from "./CatalogSearchField";
 import { EngineIcon } from "./EngineIcons";
 import { hostSupports } from "./HostCapabilities";
@@ -36,6 +41,8 @@ import { isTouchWebShell } from "./ComposerFocus";
 import { Modal } from "./Modal";
 import { ProviderMark } from "./ProviderMarks";
 import {
+  chatGPTConnectionModels,
+  isChatGPTProvider,
   normalizedVariantForProviderModel,
   providerModelDisplayName,
   providerModelVariantOptions,
@@ -50,12 +57,17 @@ import type { TranslationKey } from "./i18n/resources/zh-CN";
 
 type Translate = ReturnType<typeof useI18n>["t"];
 
-// Model services: which model new conversations use, the services the user
-// connected with their own keys, and the providers they can connect next.
+// Authentication UI is needed only after opening a ChatGPT connection, not
+// during ordinary settings, composer or first-run catalog initialization.
+const ChatGPTAccountRows = lazy(() => import("./ChatGPTAccountRows").then(module => ({ default: module.ChatGPTAccountRows })));
+const ChatGPTConnectionDialog = lazy(() => import("./ChatGPTConnectionDialog").then(module => ({ default: module.ChatGPTConnectionDialog })));
+
+// Model connections keep vendor identity separate from authentication method.
+// Account status and usage live with the connection that owns them.
 // Settings save a service without choosing it; only the default model card
 // and "Make default" change what new conversations start with.
 
-type SaveProvider = (
+export type SaveProvider = (
   provider: string,
   model: string,
   effort?: string,
@@ -64,15 +76,19 @@ type SaveProvider = (
 ) => Promise<void>;
 
 export type ModelServicesPageProps = {
+  inventory?: EngineListResult;
   initialized?: InitializeResult;
   running: boolean;
   runningProviderNames: ReadonlySet<string>;
   onSave: SaveProvider;
   onRemoveProvider: (provider: string, options?: { fallbackProvider?: string; fallbackModel?: string }) => Promise<void>;
   onRefreshModelCatalog: () => Promise<void>;
+  onProvidersChanged?: (providers: ProviderSummary[]) => void;
+  onProviderModelsChanged?: (name: string, accountId: string, models: ProviderModelSummary[]) => void;
 };
 
 type ConnectTarget =
+  | { kind: "chatgpt" }
   | { kind: "catalog"; provider: CatalogProviderSummary }
   | { kind: "custom" }
   | { kind: "subscription"; type: "openai-codex" | "xai-subscription" | "grok-build" };
@@ -151,6 +167,16 @@ function hostFromBaseURL(baseURL?: string): string {
   }
 }
 
+export function connectionMethod(provider: ProviderSummary, t: Translate): string {
+  if (isCodexType(provider.type)) return t("provider.methodLocalCodex");
+  if (isChatGPTProvider(provider)) return t("provider.methodChatGPT");
+  if (isGrokBuildType(provider.type)) return t("provider.grokBuild");
+  if (isXAISubscriptionType(provider.type)) return t("provider.methodAccount");
+  const host = hostFromBaseURL(provider.base_url);
+  if (["localhost", "127.0.0.1", "[::1]"].includes(host)) return t("provider.localService");
+  return t("provider.apiKey");
+}
+
 type ServiceIdentity = {
   label: string;
   markID?: string;
@@ -170,6 +196,10 @@ export function serviceIdentity(provider: ProviderSummary, t: Translate): Servic
       attention: provider.api_key_configured ? undefined
         : isGrokBuildType(provider.type) ? t("provider.grokBuildLoginRequired") : t("provider.loginRequired"),
     };
+  }
+  if (isChatGPTProvider(provider)) {
+    return { label: "ChatGPT", markID: "openai", subscription: true,
+      attention: provider.auth_status === "connected" ? undefined : t(provider.auth_status === "permission_required" ? "provider.chatgptPermissionRequired" : "provider.chatgptReconnectRequired") };
   }
   if (isCodexType(provider.type) || provider.connection_locked) {
     return {
@@ -216,6 +246,7 @@ export function ServiceMark({ identity }: { identity: ServiceIdentity }): JSX.El
 }
 
 function providerModels(provider: ProviderSummary): ProviderModelSummary[] {
+  if (isChatGPTProvider(provider)) return chatGPTConnectionModels(provider);
   const models = provider.models?.length ? [...provider.models] : provider.model ? [{ id: provider.model }] : [];
   // Positions stay put when the selection changes.
   return models.sort((left, right) => {
@@ -263,12 +294,15 @@ export function useCatalogProviders(version: number): CatalogState {
 }
 
 export function ModelServicesPage({
+  inventory,
   initialized,
   running,
   runningProviderNames,
   onSave,
   onRemoveProvider,
   onRefreshModelCatalog,
+  onProvidersChanged,
+  onProviderModelsChanged,
 }: ModelServicesPageProps): JSX.Element {
   const { t } = useI18n();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -307,7 +341,10 @@ export function ModelServicesPage({
     <div className="model-services" ref={rootRef} data-testid="settings-providers">
       {detailProvider ? (
         <ServiceDetail
+          key={detailProvider.name}
           provider={detailProvider}
+          onProvidersChanged={onProvidersChanged}
+          onProviderModelsChanged={onProviderModelsChanged}
           label={labels.get(detailProvider.name) ?? detailProvider.name}
           initialized={initialized}
           running={running}
@@ -320,6 +357,7 @@ export function ModelServicesPage({
           }}
         />
       ) : (
+        <>
         <ServicesOverview
           providers={providers}
           labels={labels}
@@ -330,8 +368,11 @@ export function ModelServicesPage({
           catalogRefreshing={catalogRefreshing}
           onRefreshCatalog={() => void refreshCatalog()}
           onOpenService={setOpenService}
+          onProvidersChanged={onProvidersChanged}
           onSave={onSave}
         />
+        {ENABLE_SUBSCRIPTIONS ? <SubscriptionDashboard scope={{ kind: "engines" }} inventory={inventory} providers={providers} onSelectBuiltinModel={(provider, model) => onSave(provider, model)} /> : null}
+        </>
       )}
     </div>
   );
@@ -350,6 +391,7 @@ export function ServiceConnector({
   onSave,
   onConnected,
   onOpenExisting,
+  onProvidersChanged,
 }: {
   providers: readonly ProviderSummary[];
   running: boolean;
@@ -358,6 +400,7 @@ export function ServiceConnector({
   onSave: SaveProvider;
   onConnected: (name: string) => void;
   onOpenExisting?: (name: string) => void;
+  onProvidersChanged?: (providers: ProviderSummary[]) => void;
 }): JSX.Element {
   const { t, locale } = useI18n();
   const [connectTarget, setConnectTarget] = useState<ConnectTarget | null>(null);
@@ -423,7 +466,17 @@ export function ServiceConnector({
           onConnect={startConnect}
         />
       ) : null}
-      {connectTarget ? (
+      {connectTarget?.kind === "chatgpt" ? (
+        <Suspense fallback={
+          <Modal title={t("provider.connectTitle", { name: "ChatGPT" })} ariaLabel={t("provider.connectTitle", { name: "ChatGPT" })}
+            panelClassName="model-dialog model-connect-dialog" onClose={() => setConnectTarget(null)}>
+            <p className="settings-muted-line" role="status">{t("settings.loading")}</p>
+          </Modal>
+        }>
+          <ChatGPTConnectionDialog onProvidersChanged={onProvidersChanged} providers={providers} running={running} defaultOn={defaultOn}
+            onSave={onSave} onClose={() => setConnectTarget(null)} onConnected={(name) => { setConnectTarget(null); onConnected(name); }} />
+        </Suspense>
+      ) : connectTarget ? (
         <ConnectServiceDialog
           target={connectTarget}
           providers={providers}
@@ -456,6 +509,7 @@ function ServicesOverview({
   onRefreshCatalog,
   onOpenService,
   onSave,
+  onProvidersChanged,
 }: {
   providers: readonly ProviderSummary[];
   labels: ReadonlyMap<string, string>;
@@ -466,6 +520,7 @@ function ServicesOverview({
   catalogRefreshing: boolean;
   onRefreshCatalog: () => void;
   onOpenService: (name: string) => void;
+  onProvidersChanged?: (providers: ProviderSummary[]) => void;
   onSave: SaveProvider;
 }): JSX.Element {
   const { t } = useI18n();
@@ -512,6 +567,7 @@ function ServicesOverview({
                     <ServiceMark identity={identity} />
                     <span className="model-service-card-copy">
                       <span className="model-service-card-title">{label}</span>
+                      <span className="model-service-card-meta">{connectionMethod(provider, t)}</span>
                       <span className="model-service-card-meta" data-attention={identity.attention ? "" : undefined}>
                         {identity.attention ? <AlertTriangle className="icon-sm" aria-hidden="true" /> : null}
                         {meta}
@@ -536,6 +592,7 @@ function ServicesOverview({
           onSave={onSave}
           onConnected={onOpenService}
           onOpenExisting={onOpenService}
+          onProvidersChanged={onProvidersChanged}
         />
       </SettingsSection>
     </>
@@ -671,7 +728,9 @@ export function DefaultModelRows({
 /* -------------------------------------------------------------------------- */
 
 function ServiceDetail({
-  provider,
+  provider: configuredProvider,
+  onProvidersChanged,
+  onProviderModelsChanged,
   label,
   initialized,
   running,
@@ -681,6 +740,8 @@ function ServiceDetail({
   onRemove,
 }: {
   provider: ProviderSummary;
+  onProvidersChanged?: (providers: ProviderSummary[]) => void;
+  onProviderModelsChanged?: (name: string, accountId: string, models: ProviderModelSummary[]) => void;
   label: string;
   initialized?: InitializeResult;
   running: boolean;
@@ -690,6 +751,11 @@ function ServiceDetail({
   onRemove: (options?: { fallbackProvider?: string; fallbackModel?: string }) => Promise<void>;
 }): JSX.Element {
   const { t } = useI18n();
+  const [liveModels, setLiveModels] = useState<ProviderModelSummary[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [catalogRevision, setCatalogRevision] = useState(0);
+  const direct = isChatGPTProvider(configuredProvider);
+  const provider = direct ? { ...configuredProvider, models: liveModels } : configuredProvider;
   const identity = serviceIdentity(provider, t);
   const isDefault = provider.name === initialized?.provider;
   // The workspace model is the default service's model.
@@ -719,6 +785,22 @@ function ServiceDetail({
       setBusy(false);
     }
   }
+
+  useEffect(() => {
+    if (!direct || !configuredProvider.chatgpt_account_id) return;
+    let active = true;
+    setLiveModels([]);
+    setModelsLoading(false);
+    if (configuredProvider.auth_status !== "connected") return;
+    setModelsLoading(true);
+    void window.wuu.listChatGPTModels(configuredProvider.chatgpt_account_id).then(result => {
+      if (!active) return;
+      const models = result.providers?.find(item => item.name === configuredProvider.name)?.models ?? result.models.map(item => ({ id: item.id, display_name: item.name, account_descriptor: item.account_descriptor, capabilities: item.capabilities, behavior: item.behavior }));
+      setLiveModels(models);
+      onProviderModelsChanged?.(configuredProvider.name, configuredProvider.chatgpt_account_id!, models);
+    }, cause => { if (active) setError(errorMessage(cause, t)); }).finally(() => { if (active) setModelsLoading(false); });
+    return () => { active = false; };
+  }, [direct, configuredProvider.chatgpt_account_id, configuredProvider.auth_status, catalogRevision]);
 
   // Edits keep the default where it is unless they are the default's model.
   const saveConnection = (connection: RuntimeConnectionUpdate): Promise<boolean> =>
@@ -780,7 +862,7 @@ function ServiceDetail({
               type="button"
               className="settings-button"
               data-testid="settings-provider-make-default"
-              disabled={disabled}
+              disabled={disabled || !!identity.attention || (direct && !liveModels.some(model => model.id === provider.model))}
               onClick={() => void run(() => onSave(
                 provider.name,
                 provider.model,
@@ -799,14 +881,19 @@ function ServiceDetail({
 
       <SettingsSection title={t("provider.connectionSection")}>
         <SettingsGroup>
-          <ConnectionRows provider={provider} identity={identity} disabled={disabled} onSave={saveConnection} onRun={run} />
+          <SettingsRow title={t("provider.connectionMethod")}><span className="settings-row-control-value">{connectionMethod(provider, t)}</span></SettingsRow>
+          {direct ? <Suspense fallback={<p className="settings-muted-line" role="status">{t("settings.loading")}</p>}>
+            <ChatGPTAccountRows provider={provider} disabled={disabled} onProvidersChanged={onProvidersChanged} onRefresh={() => setCatalogRevision(value => value + 1)} />
+          </Suspense> : <ConnectionRows provider={provider} identity={identity} disabled={disabled} onSave={saveConnection} onRun={run} />}
         </SettingsGroup>
       </SettingsSection>
+
+      {ENABLE_SUBSCRIPTIONS && (provider.quota || hasBuiltInSubscriptionControls(provider)) ? <SubscriptionDashboard scope={{ kind: "provider", name: provider.name }} providers={[provider]} onSelectBuiltinModel={(name, model) => onSave(name, model)} /> : null}
 
       <ModelChoices
         provider={provider}
         serviceModel={serviceModel}
-        disabled={disabled}
+        disabled={disabled || modelsLoading || !!identity.attention}
         error={error}
         onChoose={chooseModel}
         onRemove={removeModel}
@@ -898,7 +985,6 @@ function ConnectionRows({
   onRun: (action: () => Promise<void>) => Promise<boolean>;
 }): JSX.Element {
   const { t } = useI18n();
-  const [codexSigningIn, setCodexSigningIn] = useState(false);
   if (isXAISubscriptionType(provider.type)) {
     return (
       <>
@@ -926,12 +1012,8 @@ function ConnectionRows({
             missingLabel={identity.attention ?? ""}
           />
         </SettingsRow>
-        <CodexSubscriptionLogin disabled={disabled} onBusyChange={setCodexSigningIn} onAuthenticated={() => void onRun(async () => {
-          await window.wuu.useCodexCredentials(provider.name);
-          await onSave({});
-        })} />
         <SettingsRow title={t("settings.codexUseLocal")}>
-          <button type="button" className="settings-button" disabled={disabled || codexSigningIn} onClick={() => void onRun(async () => {
+          <button type="button" className="settings-button" disabled={disabled} onClick={() => void onRun(async () => {
             await window.wuu.useCodexCredentials(provider.name);
             await onSave({});
           })}>{t("settings.codexUseLocal")}</button>
@@ -1164,6 +1246,7 @@ function ModelChoices({
   const [replacement, setReplacement] = useState("");
   const [removeError, setRemoveError] = useState("");
   const models = providerModels(provider);
+  const managedCatalog = isChatGPTProvider(provider);
   const hidden = provider.hidden_models ?? [];
   const removingSelected = removing?.id === serviceModel;
   const replacements = models.filter((model) => model.id !== removing?.id);
@@ -1179,7 +1262,7 @@ function ModelChoices({
         {models.length > MODEL_SEARCH_THRESHOLD ? (
           <CatalogSearchField value={query} placeholder={t("provider.searchModels")} onValueChange={setQuery} />
         ) : null}
-        <button
+        {!managedCatalog ? <button
           type="button"
           className="settings-button settings-button-ghost settings-icon-button"
           aria-label={t("provider.addModel")}
@@ -1189,7 +1272,7 @@ function ModelChoices({
           onClick={() => setAdding(true)}
         >
           <Plus className="icon" aria-hidden="true" />
-        </button>
+        </button> : null}
       </>}
     >
       <div className="settings-group model-choice-list" role="group" aria-label={t("provider.modelsSection")}>
@@ -1212,7 +1295,7 @@ function ModelChoices({
                 {name !== model.id ? <code className="model-choice-id">{model.id}</code> : null}
               </button>
               <span className="model-choice-check" aria-hidden="true">{selected ? <Check className="icon" /> : null}</span>
-              <button
+              {!managedCatalog ? <button
                 type="button"
                 className="icon-button model-choice-action"
                 data-testid="settings-provider-remove-model"
@@ -1227,7 +1310,7 @@ function ModelChoices({
                 }}
               >
                 <Trash2 className="icon" aria-hidden="true" />
-              </button>
+              </button> : null}
             </div>
           );
         })}
@@ -1273,7 +1356,7 @@ function ModelChoices({
           </form>
         ) : null}
       </div>
-      {hidden.length > 0 ? (
+      {!managedCatalog && hidden.length > 0 ? (
         <details className="model-choice-hidden">
           <summary><ChevronRight className="icon-sm settings-disclosure-chevron" aria-hidden="true" />{t("provider.hiddenModels", { count: hidden.length })}</summary>
           <div className="settings-group">
@@ -1386,7 +1469,7 @@ function CatalogServiceGroups({
   const subscriptions = isTouchWebShell() ? [] : (["openai-codex", "xai-subscription", "grok-build"] as const)
     .map((type) => ({
       type,
-      name: type === "openai-codex" ? "ChatGPT" : type === "grok-build" ? t("provider.grokBuild") : t("provider.xaiSubscription"),
+      name: type === "openai-codex" ? t("provider.methodLocalCodex") : type === "grok-build" ? t("provider.grokBuild") : t("provider.xaiSubscription"),
       connected: providers.filter((provider) => type === "openai-codex" ? isCodexType(provider.type) : type === "grok-build" ? isGrokBuildType(provider.type) : isXAISubscriptionType(provider.type)),
     }))
     .filter((entry) => !normalized || `${entry.name} ${entry.type}`.toLocaleLowerCase().includes(normalized));
@@ -1406,6 +1489,7 @@ function CatalogServiceGroups({
     </span>;
   }
 
+  const directTile = !isTouchWebShell() && (!normalized || "chatgpt openai".includes(normalized)) ? <button type="button" className="model-service-tile" data-connection="chatgpt" disabled={disabled} onClick={() => onConnect({ kind: "chatgpt" })}><ProviderMark id="openai" label="ChatGPT" /><span className="model-browse-copy"><span className="model-service-tile-name">ChatGPT</span><small>{t("provider.methodChatGPT")}</small></span></button> : null;
   const subscriptionTiles = subscriptions.map((entry) => (
     <button
       key={entry.type}
@@ -1431,17 +1515,18 @@ function CatalogServiceGroups({
       <ProviderMark id={entry.provider.id} label={entry.name} />
       <span className="model-browse-copy">
         <span className="model-catalog-name-line"><span className="model-service-tile-name">{entry.name}</span>{connectionState(entry.connected)}</span>
-        {entry.ambiguous ? <small>{entry.host}</small> : null}
+        <small>{entry.ambiguous ? entry.host : t("provider.apiKey")}</small>
       </span>
     </button>
   ));
-  const empty = entries.length === 0 && subscriptions.length === 0 && !pendingCatalogTiles
+  const empty = entries.length === 0 && subscriptions.length === 0 && !directTile && !pendingCatalogTiles
     ? <p className="settings-group-empty">{t("provider.noServiceMatches")}</p>
     : null;
 
   if (!grouped) {
     return <>
       <div className="model-service-tiles">
+        {directTile}
         {subscriptionTiles}
         {groups.flatMap(catalogTiles)}
         {Array.from({ length: pendingCatalogTiles }, (_, index) => (
@@ -1457,10 +1542,10 @@ function CatalogServiceGroups({
   }
 
   return <>
-    {subscriptions.length ? (
+    {subscriptions.length || directTile ? (
       <section className="model-catalog-group" aria-label={t("provider.catalogSubscription")}>
         <div className="model-catalog-heading"><h3>{t("provider.catalogSubscription")}</h3></div>
-        <div className="model-service-tiles">{subscriptionTiles}</div>
+        <div className="model-service-tiles">{directTile}{subscriptionTiles}</div>
       </section>
     ) : null}
     {groups.filter((group) => group.entries.length > 0).map((group) => (
@@ -1517,7 +1602,7 @@ function ConnectServiceDialog({
   onSave,
   onConnected,
 }: {
-  target: ConnectTarget;
+  target: Exclude<ConnectTarget, { kind: "chatgpt" }>;
   providers: readonly ProviderSummary[];
   running: boolean;
   defaultOn: boolean;
@@ -1532,7 +1617,7 @@ function ConnectServiceDialog({
   const existingCodex = subscriptionType === "openai-codex" ? providers.find((provider) => isCodexType(provider.type)) : undefined;
   const title = catalogProvider
     ? catalogServiceName(catalogProvider.id, catalogProvider.name, t)
-    : subscriptionType === "openai-codex" ? "ChatGPT" : subscriptionType === "grok-build"
+    : subscriptionType === "openai-codex" ? t("provider.methodLocalCodex") : subscriptionType === "grok-build"
       ? t("provider.grokBuild")
       : subscriptionType
         ? t("provider.xaiSubscription")
@@ -1547,7 +1632,6 @@ function ConnectServiceDialog({
   const [makeDefault, setMakeDefault] = useState(defaultOn);
   const [pending, setPending] = useState(false);
   const [loginCode, setLoginCode] = useState("");
-  const [codexSigningIn, setCodexSigningIn] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -1613,13 +1697,13 @@ function ConnectServiceDialog({
         <button type="button" className="settings-button settings-button-ghost" disabled={pending} onClick={onClose}>
           {t("common.cancel")}
         </button>
-        <button type="submit" className="settings-button settings-button-primary" data-testid="settings-provider-connect" disabled={!canSubmit || codexSigningIn}>
+        <button type="submit" className="settings-button settings-button-primary" data-testid="settings-provider-connect" disabled={!canSubmit}>
           {pending ? t("provider.connecting") : t("provider.connectAction")}
         </button>
       </>}
     >
       <div className="model-connect-body">
-        {subscriptionType === "openai-codex" ? <CodexSubscriptionLogin disabled={pending || running || nameTaken} onBusyChange={setCodexSigningIn} onAuthenticated={() => void submit()} /> : null}
+        {subscriptionType === "openai-codex" ? <p className="settings-muted-line">{t("provider.localCodexHint")}</p> : null}
         {target.kind === "custom" ? (
           <div className="model-connect-field">
             <span>{t("provider.protocol")}</span>

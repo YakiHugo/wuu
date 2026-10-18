@@ -58,9 +58,6 @@ const (
 	MethodUserQuestionHold                = "user-question/hold"
 	MethodConfigCodexCredentials          = "config/codex/credentials"
 	MethodConfigCodexModels               = "config/codex/models"
-	MethodAuthCodexLoginStart             = "auth/codex/login/start"
-	MethodAuthCodexLoginPoll              = "auth/codex/login/poll"
-	MethodAuthCodexLoginCancel            = "auth/codex/login/cancel"
 	MethodAuthXAILoginStart               = "auth/xai/login/start"
 	MethodAuthXAILoginPoll                = "auth/xai/login/poll"
 	MethodAuthXAILoginCancel              = "auth/xai/login/cancel"
@@ -1062,6 +1059,7 @@ type PluginStorageResult struct {
 }
 
 type ConfigModelUpdateParams struct {
+	ChatGPTAccountID *string `json:"chatgpt_account_id,omitempty"`
 	// ResetModel clears all external model overrides before applying supplied fields.
 	ResetModel     bool               `json:"reset_model,omitempty"`
 	ModelOptions   *map[string]string `json:"model_options,omitempty"`
@@ -1097,20 +1095,25 @@ type ConfigModelUpdateParams struct {
 	ReuseCodexCredentials *bool `json:"reuse_codex_credentials,omitempty"`
 }
 
-type AuthCodexLoginParams struct {
-	LoginID string `json:"login_id"`
+type AuthChatGPTLoginParams struct {
+	ForceConsent bool   `json:"force_consent,omitempty"`
+	LoginID      string `json:"login_id,omitempty"`
+	AccountID    string `json:"account_id,omitempty"`
 }
-
-// Success means the official CLI completed; connection creation separately
-// validates that Wuu can read the resulting ChatGPT credentials.
-type AuthCodexLoginResult struct {
-	LoginID          string `json:"login_id"`
-	Status           string `json:"status"`
-	VerificationURI  string `json:"verification_uri,omitempty"`
-	UserCode         string `json:"user_code,omitempty"`
-	IntervalMS       int    `json:"interval_ms"`
-	ExpiresInSeconds int    `json:"expires_in"`
-	Error            string `json:"error,omitempty"`
+type AuthChatGPTLoginResult struct {
+	Providers        []ProviderSummary `json:"providers,omitempty"`
+	LoginID          string            `json:"login_id"`
+	Status           string            `json:"status"`
+	AuthorizationURL string            `json:"authorization_url,omitempty"`
+	AccountID        string            `json:"account_id,omitempty"`
+	IntervalMS       int               `json:"interval_ms"`
+	ExpiresIn        int               `json:"expires_in"`
+	Error            string            `json:"error,omitempty"`
+}
+type ChatGPTAccountSummary struct {
+	ID     string `json:"id"`
+	Email  string `json:"email,omitempty"`
+	Status string `json:"status"`
 }
 
 type AuthXAILoginStartResult struct {
@@ -1397,6 +1400,8 @@ type CodexModelSummary struct {
 }
 
 type ProviderSummary struct {
+	ChatGPTAccountID      string `json:"chatgpt_account_id,omitempty"`
+	AuthStatus            string `json:"auth_status,omitempty"`
 	Name                  string `json:"name"`
 	Type                  string `json:"type"`
 	Model                 string `json:"model"`
@@ -1422,17 +1427,18 @@ type ProviderSummary struct {
 }
 
 type ProviderModelSummary struct {
-	FastMode         bool                          `json:"fast_mode,omitempty"`
-	DefaultSpeed     string                        `json:"default_speed,omitempty"`
-	ID               string                        `json:"id"`
-	DisplayName      string                        `json:"display_name,omitempty"`
-	DefaultEffort    string                        `json:"default_effort,omitempty"`
-	DefaultVariant   string                        `json:"default_variant,omitempty"`
-	SupportedEfforts []string                      `json:"supported_efforts,omitempty"`
-	Variants         []ProviderModelVariantSummary `json:"variants,omitempty"`
-	Capabilities     ModelCapabilitySummary        `json:"capabilities,omitempty"`
-	Behavior         ModelBehaviorSummary          `json:"behavior,omitempty"`
-	Source           string                        `json:"source,omitempty"`
+	AccountDescriptor json.RawMessage               `json:"account_descriptor,omitempty"`
+	FastMode          bool                          `json:"fast_mode,omitempty"`
+	DefaultSpeed      string                        `json:"default_speed,omitempty"`
+	ID                string                        `json:"id"`
+	DisplayName       string                        `json:"display_name,omitempty"`
+	DefaultEffort     string                        `json:"default_effort,omitempty"`
+	DefaultVariant    string                        `json:"default_variant,omitempty"`
+	SupportedEfforts  []string                      `json:"supported_efforts,omitempty"`
+	Variants          []ProviderModelVariantSummary `json:"variants,omitempty"`
+	Capabilities      ModelCapabilitySummary        `json:"capabilities,omitempty"`
+	Behavior          ModelBehaviorSummary          `json:"behavior,omitempty"`
+	Source            string                        `json:"source,omitempty"`
 }
 
 type ModelRoleSummary struct {

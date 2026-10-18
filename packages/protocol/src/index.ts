@@ -808,6 +808,8 @@ export type ConfigModelUpdateResult = {
 };
 
 export type ProviderSummary = {
+  chatgpt_account_id?: string;
+  auth_status?: ChatGPTAuthStatus;
   name: string;
   type: string;
   model: string;
@@ -832,6 +834,8 @@ export type ProviderSummary = {
 };
 
 export type ProviderModelSummary = {
+  // Opaque account-provided metadata; only documented fields are interpreted.
+  account_descriptor?: Record<string, unknown>;
   fast_mode?: boolean;
   default_speed?: string;
   id: string;
@@ -1123,6 +1127,7 @@ export type BrowserTabAdopted = {
 };
 
 export type RuntimeConnectionUpdate = {
+  chatgpt_account_id?: string;
   // Remove a model from this provider's choices, including future catalog refreshes.
   remove_model?: string;
   // Restore a removed choice or add a model ID the catalog does not list.
@@ -1142,12 +1147,15 @@ export type RuntimeConnectionUpdate = {
   reuse_codex_credentials?: boolean;
 };
 
-// Success reports CLI completion; provider creation validates readable credentials.
-export type AuthCodexLoginResult = {
+export type ChatGPTAuthStatus = "connected" | "reauth_required" | "permission_required";
+export type ChatGPTAccount = { id: string; email?: string; status: ChatGPTAuthStatus };
+export type AuthChatGPTLoginResult = {
+  providers?: ProviderSummary[];
   login_id: string;
   status: "pending" | "success" | "failed" | "expired" | "cancelled";
-  verification_uri?: string;
-  user_code?: string;
+  // Go-to-main only. Main opens the browser and removes this before renderer IPC.
+  authorization_url?: string;
+  account_id?: string;
   interval_ms: number;
   expires_in: number;
   error?: string;
@@ -3084,9 +3092,12 @@ export type WuuDesktopApi = {
   getMCPAuthStatus: (name: string) => Promise<MCPAuthStatusResult>;
   finishMCPAuth: (name: string, state: string, code: string) => Promise<MCPAuthFinishResult>;
   removeMCPAuth: (name: string) => Promise<MCPAuthRemoveResult>;
-  startCodexLogin: () => Promise<AuthCodexLoginResult>;
-  pollCodexLogin: (loginId: string) => Promise<AuthCodexLoginResult>;
-  cancelCodexLogin: (loginId: string) => Promise<{ ok: boolean }>;
+  startChatGPTLogin: (accountId?: string, enablePlanUsage?: boolean) => Promise<AuthChatGPTLoginResult>;
+  pollChatGPTLogin: (loginId: string) => Promise<AuthChatGPTLoginResult>;
+  cancelChatGPTLogin: (loginId: string) => Promise<{ ok: boolean }>;
+  listChatGPTAccounts: () => Promise<{ accounts: ChatGPTAccount[] }>;
+  signOutChatGPTAccount: (accountId: string) => Promise<{ ok: boolean; revocation_confirmed: boolean; providers: ProviderSummary[] }>;
+  listChatGPTModels: (accountId: string) => Promise<{ models: (ProviderModelSummary & { name: string })[]; providers?: ProviderSummary[] }>;
   startXAILogin: () => Promise<AuthXAILoginStartResult>;
   pollXAILogin: (loginId: string) => Promise<AuthXAILoginPollResult>;
   cancelXAILogin: (loginId: string) => Promise<{ ok: boolean }>;

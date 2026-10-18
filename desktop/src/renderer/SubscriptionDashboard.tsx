@@ -21,8 +21,10 @@ export function SubscriptionDashboard({
   providers,
   onSelectBuiltinModel,
   onAddService,
+  scope,
 }: {
   onAddService?: () => void;
+  scope?: { kind: "provider"; name: string } | { kind: "engines" };
   inventory?: EngineListResult;
   providers?: readonly ProviderSummary[];
   onSelectBuiltinModel: (provider: string, model: string) => Promise<void>;
@@ -74,9 +76,10 @@ export function SubscriptionDashboard({
           codex_credential_source: checked.codex_credential_source, api_key_configured: checked.api_key_configured,
           quota: provider.quota } : provider;
       });
-      return subscriptionSources(refreshed, currentProviders);
+      return subscriptionSources(refreshed, currentProviders).filter((source) => !scope ||
+        (scope.kind === "provider" ? source.kind === "builtin" && source.id === scope.name : source.kind === "engine"));
     },
-    [loadedInventory, inventory, providers, revision, authProviders],
+    [loadedInventory, inventory, providers, revision, authProviders, scope?.kind, scope?.kind === "provider" ? scope.name : undefined],
   );
 
   // Group presentation only. Every connection keeps its own account snapshot,
@@ -138,7 +141,7 @@ export function SubscriptionDashboard({
   return (
     <section className="settings-section settings-subscriptions" data-testid="settings-subscriptions" aria-busy={refreshing}>
       <SettingsPageHeader
-        title={t("settings.subscriptions")}
+        title={t(scope?.kind === "provider" ? "provider.accountUsage" : scope?.kind === "engines" ? "provider.localAgentAccounts" : "settings.subscriptions")}
         actions={<>
           {onAddService ? <button type="button" className="settings-button" onClick={onAddService}>{t("provider.connectTitle", { name: "ChatGPT" })}</button> : null}
           <button type="button" className="settings-button settings-button-ghost settings-icon-button" disabled={refreshing} onClick={() => setRefreshVersion((value) => value + 1)} aria-label={t(refreshing ? "settings.subscriptionRefreshing" : "settings.subscriptionRefresh")} title={t("settings.subscriptionRefresh")}>
@@ -195,7 +198,7 @@ export function SubscriptionDashboard({
                   const observedLabel = Number.isFinite(observedMillis) ? t(source.quota?.observed_at ? "settings.subscriptionObserved" : "settings.subscriptionChecked", { age: formatAge(observedMillis, now, t) }) : undefined;
                   const showObservationAge = !sourceLabel && source.quota?.status === "available" && !(source.quota.expires_at && Date.parse(source.quota.expires_at) <= now);
                   const observationTitle = Number.isFinite(observedMillis) ? formatDate(observedMillis, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", timeZoneName: "short" }) : undefined;
-                  const showModel = source.models.length > 0 && (source.kind === "engine" || (source.provider && hasBuiltInSubscriptionControls(source.provider)));
+                  const showModel = scope?.kind !== "provider" && source.models.length > 0 && (source.kind === "engine" || (source.provider && hasBuiltInSubscriptionControls(source.provider)));
                   const controls = <div className="settings-subscription-controls">
                     {showModel ? <SelectMenu
                       triggerClassName="settings-subscription-model-trigger"
@@ -207,7 +210,7 @@ export function SubscriptionDashboard({
                       options={source.models.map((model) => ({ value: model.id, label: model.label }))}
                       flip
                     /> : null}
-                    {isCodexSubscription(source.provider?.type) ? <button
+                    {scope?.kind !== "provider" && isCodexSubscription(source.provider?.type) ? <button
                       type="button"
                       className="settings-button settings-button-ghost settings-icon-button settings-subscription-more"
                       data-testid="subscription-account-actions"

@@ -152,7 +152,7 @@ import type {
   SideThreadSendResult,
 } from "../shared/protocol";
 import { AppServerClientPool, configurePackagedCUA } from "./appServerClients";
-import { CodexLoginCoordinator } from "./codexLogin";
+import { ChatGPTLoginCoordinator } from "./chatgptLogin";
 import { visibleMainTurns, visibleSideTurns } from "./pluginVisibleHistory";
 import { RendererServerEventBatcher } from "./rendererServerEventBatcher";
 import { ObservationCoordinator, observationActivityFromServerEvent } from "./cuaActivityWindows";
@@ -758,6 +758,7 @@ const remoteAppServerBridge = new RemoteAppServerBridge(async (workdir, method, 
   // Keep the desktop's reverse-RPC capabilities: a phone attachment must not
   // disable browser tools on the shared execution service.
   if (method === "initialize") params = desktopInitializeParams();
+  if (method.startsWith("auth/chatgpt/login/")) throw new Error("ChatGPT sign-in must be started on the local desktop");
   if (method === "shutdown") throw new Error("Remote clients cannot shut down the shared execution service");
   if (method.startsWith("desktop/projects/")) return requestRemoteProjects(projectManager,method,params);
   const cwd = resolve(workdir);
@@ -2211,18 +2212,18 @@ app.whenReady().then(async () => {
   ipcMain.handle("wuu:mcp-auth-finish", (event, name: string, state: string, code: string) =>
     appServerRequest<MCPAuthFinishResult>(event, "mcp/auth/finish", { name, state, code }),
   );
-  const codexLogin = new CodexLoginCoordinator((context, method, params) =>
-    appServerClientPool.requestInContext(context, method, params),
+  const chatgptLogin = new ChatGPTLoginCoordinator(
+    (context, method, params) => appServerClientPool.requestInContext(context, method, params),
+    (url) => shell.openExternal(url),
   );
-  ipcMain.handle("wuu:auth-codex-login-start", (event) =>
-    codexLogin.start(event.sender, runtimeContextForEvent(event)),
+  ipcMain.handle("wuu:auth-chatgpt-login-start", (event, accountId?: string, enablePlanUsage?: boolean) =>
+    chatgptLogin.start(event.sender, runtimeContextForEvent(event), accountId, enablePlanUsage),
   );
-  ipcMain.handle("wuu:auth-codex-login-poll", (event, loginId: string) =>
-    codexLogin.poll(event.sender.id, loginId),
-  );
-  ipcMain.handle("wuu:auth-codex-login-cancel", (event, loginId: string) =>
-    codexLogin.cancel(event.sender.id, loginId),
-  );
+  ipcMain.handle("wuu:auth-chatgpt-login-poll", (event, loginId: string) => chatgptLogin.poll(event.sender.id, loginId));
+  ipcMain.handle("wuu:auth-chatgpt-login-cancel", (event, loginId: string) => chatgptLogin.cancel(event.sender.id, loginId));
+  ipcMain.handle("wuu:auth-chatgpt-accounts", (event) => appServerRequest(event, "auth/chatgpt/accounts"));
+  ipcMain.handle("wuu:auth-chatgpt-signout", (event, accountId: string) => appServerRequest(event, "auth/chatgpt/signout", { account_id: accountId }));
+  ipcMain.handle("wuu:auth-chatgpt-models", (event, accountId: string) => appServerRequest(event, "auth/chatgpt/models", { account_id: accountId }));
   ipcMain.handle("wuu:auth-xai-login-start", (event) =>
     appServerRequest<AuthXAILoginStartResult>(event, "auth/xai/login/start"),
   );

@@ -52,6 +52,7 @@ afterEach(() => {
 
 function installBuildInfoStub(info: BuildInfoResult): void {
   const stub: Partial<WuuDesktopApi> = {
+    listEngines: vi.fn().mockResolvedValue({ engines: [] }),
     getBuildInfo: vi.fn().mockResolvedValue(info),
     listMCPServers: vi.fn().mockResolvedValue({ servers: [] }),
     connectMCPServer: vi.fn(),

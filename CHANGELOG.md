@@ -10,7 +10,7 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Added
 
-- Connect ChatGPT from model services even before a provider exists. Sign in with the installed official Codex CLI using a cancellable device-code flow, or reuse an existing local login.
+- Connect ChatGPT directly through official browser sign-in without Codex CLI, with account-scoped model discovery, public Responses inference, protected refresh and sign-out. Unify model connections and account usage in Settings while keeping API keys and local Codex credentials distinct.
 
 ### Removed
 

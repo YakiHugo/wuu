@@ -26,10 +26,12 @@ import (
 	"github.com/blueberrycongee/wuu/internal/participant"
 	"github.com/blueberrycongee/wuu/internal/process"
 	"github.com/blueberrycongee/wuu/internal/providers"
+	"github.com/blueberrycongee/wuu/internal/providers/chatgpt"
 	"github.com/blueberrycongee/wuu/internal/providers/xaisub"
 	"github.com/blueberrycongee/wuu/internal/runtime"
 	"github.com/blueberrycongee/wuu/internal/session"
 	"github.com/blueberrycongee/wuu/internal/sidethread"
+	"github.com/blueberrycongee/wuu/internal/siwc"
 	"github.com/blueberrycongee/wuu/internal/subagent"
 	"github.com/blueberrycongee/wuu/internal/tools"
 )
@@ -264,7 +266,11 @@ type Server struct {
 	engineModelCatalogMu     sync.Mutex
 	engineModelCatalogCache  map[string]*engineModelCatalogCacheEntry
 
-	codexLogins codexLoginHub
+	chatGPTMu         sync.Mutex
+	chatGPTManager    *siwc.Manager
+	chatGPTHTTP       *http.Client
+	chatGPTAttempts   map[string]bool
+	chatGPTModelCache map[string][]chatgpt.ModelInfo
 
 	xaiLoginMu sync.Mutex
 	xaiLogins  *xaisub.LoginHub
@@ -709,7 +715,7 @@ func (s *Server) Close() {
 	}
 	s.closeOnce.Do(func() {
 		s.closed.Store(true)
-		s.codexLogins.close()
+		s.closeChatGPTLogins()
 		if s.nativeHistoryCancel != nil {
 			s.nativeHistoryCancel()
 		}
@@ -1083,12 +1089,8 @@ func (s *Server) handleLine(ctx context.Context, raw []byte) error {
 			return s.writeResponse(req.ID, nil, errServerClosed)
 		}
 		return nil
-	case MethodAuthCodexLoginStart:
-		return s.handleAuthCodexLoginStart(ctx, req)
-	case MethodAuthCodexLoginPoll:
-		return s.handleAuthCodexLoginPoll(req)
-	case MethodAuthCodexLoginCancel:
-		return s.handleAuthCodexLoginCancel(req)
+	case "auth/chatgpt/login/start", "auth/chatgpt/login/poll", "auth/chatgpt/login/cancel", "auth/chatgpt/accounts", "auth/chatgpt/signout", "auth/chatgpt/models":
+		return s.handleAuthChatGPT(ctx, req)
 	case MethodAuthXAILoginStart:
 		return s.handleAuthXAILoginStart(ctx, req)
 	case MethodAuthXAILoginPoll:

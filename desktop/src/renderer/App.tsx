@@ -3590,6 +3590,25 @@ export function App(): JSX.Element {
     setSettingsOpen(true);
   }
 
+  function updateChatGPTProviders(providers: NonNullable<InitializeResult["providers"]>): void {
+    setState(current => current.initialized ? {
+      ...current,
+      initialized: {
+        ...current.initialized,
+        providers: current.initialized.providers?.map(provider => {
+          if (!provider.chatgpt_account_id || provider.type !== "chatgpt") return provider;
+          const snapshot = providers.find(item => item.type === "chatgpt" && item.name === provider.name && item.chatgpt_account_id === provider.chatgpt_account_id);
+          return snapshot ? {
+            ...provider,
+            auth_status: snapshot.auth_status,
+            api_key_configured: snapshot.api_key_configured,
+            models: snapshot.auth_status === "connected" ? snapshot.models ?? [] : [],
+          } : provider;
+        }),
+      },
+    } : current);
+  }
+
   async function refreshModelCatalog(): Promise<void> {
     setModelCatalogTip(null);
     try {
@@ -5374,6 +5393,12 @@ export function App(): JSX.Element {
           onSave={updateProviderSettings}
           onRemoveProvider={removeProvider}
           onRefreshModelCatalog={refreshModelCatalog}
+          onProvidersChanged={updateChatGPTProviders}
+          onProviderModelsChanged={(name, accountId, models) => setState(current => current.initialized ? {
+            ...current,
+            initialized: { ...current.initialized, providers: current.initialized.providers?.map(provider =>
+              provider.name === name && provider.chatgpt_account_id === accountId && provider.auth_status === "connected" ? { ...provider, models } : provider) },
+          } : current)}
           onRefreshEngineInventory={() => refreshEngineInventory(true)}
           onUpdateEngineInventory={updateEngineInventory}
           onAdvancedSave={updateAdvancedSettings}
@@ -5408,6 +5433,7 @@ export function App(): JSX.Element {
     return (
       <WuuMascotRuntimeProvider>
         <FirstRunOnboarding
+          onProvidersChanged={updateChatGPTProviders}
           inventory={state.initialized?.extension_inventory}
           providers={state.initialized?.providers}
           engines={engineInventory}
