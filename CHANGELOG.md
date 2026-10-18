@@ -8,6 +8,13 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ## [Unreleased]
 
+### Added
+
+- Monitor plugin for background scripts, event delivery into the active conversation,
+  timeout and persistent watches, output inspection, and per-task stop controls.
+- Public process service for conversation-bound extension commands and event delivery,
+  with process-tree cleanup and optional handoff from completed child sessions.
+
 ### Fixed
 
 - Preserve and queue desktop messages when another turn wins a concurrent send, retaining attachments, send order, and Stop intent.
