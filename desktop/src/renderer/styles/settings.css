@@ -191,7 +191,11 @@
   display: grid;
   min-width: 0;
   min-height: 0;
-  grid-template-rows: var(--canvas-titlebar-height) minmax(0, 1fr);
+  /* Titlebar actions must not impose their min-content width on the page. */
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(var(--canvas-titlebar-height), auto) minmax(0, 1fr);
+  container-name: settings-content;
+  container-type: inline-size;
   position: relative;
   overflow: hidden;
   margin: 0 0 var(--conversation-pane-inset) var(--conversation-pane-inset);
@@ -215,7 +219,8 @@
  * content area — not just the tiny traffic-light spacer in the sidebar. */
 .settings-titlebar {
   display: flex;
-  height: var(--canvas-titlebar-height);
+  min-width: 0;
+  height: auto;
   min-height: var(--canvas-titlebar-height);
   align-items: center;
   /* Right side clears the Windows controls overlay; a no-op elsewhere
@@ -352,6 +357,31 @@
   min-height: 0;
   margin: 0 0 0 auto;
   -webkit-app-region: no-drag;
+}
+
+/* The titlebar lives outside settings-page, so it needs the content pane's
+ * own width query. Keep full-size actions on a second row when the rail or
+ * larger text leaves too little room beside the breadcrumb. */
+@container settings-content (max-width: 42em) {
+  .settings-titlebar {
+    flex-wrap: wrap;
+  }
+
+  .settings-titlebar-slot {
+    display: contents;
+  }
+
+  .settings-titlebar-slot > .settings-page-title {
+    flex: 1 1 0;
+  }
+
+  .settings-titlebar-slot > .settings-page-actions {
+    min-width: 0;
+    flex: 1 0 100%;
+    flex-wrap: wrap;
+    margin: 0;
+    padding-bottom: var(--space-2);
+  }
 }
 
 /* --- Page header ----------------------------------------------------------

@@ -8,7 +8,8 @@ import type {
 } from "../shared/protocol";
 import { clearDraftEngineMemory } from "./DraftEngineMemory";
 import { EngineIcon } from "./EngineIcons";
-import { EngineAuthentication } from "./EngineAuthentication";
+import { Modal } from "./Modal";
+import { SubscriptionDashboard } from "./SubscriptionDashboard";
 import { engineLabel } from "./EngineDisplay";
 import { useI18n } from "./i18n";
 import { SelectMenu, type SelectMenuOption } from "./SelectMenu";
@@ -106,243 +107,148 @@ export function DefaultEngineRow({
   );
 }
 
-/**
- * The Agent settings page. Each installed external agent appears once, with
- * its switch on the row and its path override (and sign-in for ACP agents)
- * under the row's disclosure. An agent Wuu cannot find waits in a last group:
- * its row opens to say why once, with its install link and path override.
- */
+/** External runtime connections, with account and executable details in a drawer. */
 export function EngineSettingsSection({
   result,
   loadError = "",
   onRefresh,
   onUpdate,
+  embedded = false,
+  showAll = false,
+  selectedEngineID,
+  onCloseEngine,
 }: {
   result?: EngineListResult;
   loadError?: string;
   onRefresh: () => Promise<EngineListResult | undefined>;
   onUpdate: (params: EngineUpdateParams) => Promise<EngineListResult>;
+  embedded?: boolean;
+  showAll?: boolean;
+  selectedEngineID?: string;
+  onCloseEngine?: () => void;
 }): JSX.Element {
   const { t } = useI18n();
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [pathDrafts, setPathDrafts] = useState<Record<string, string>>({});
+  const [openedID, setOpenedID] = useState<string | null>(null);
+  const [accountSnapshots, setAccountSnapshots] = useState<Record<string, EngineInfo>>({});
+  const engines = useMemo(() => result?.engines ?? [], [result]);
+  const binarySettings = externalSettings(result);
+  const selected = engines.find(engine => engine.id === (selectedEngineID ?? openedID) && engine.id !== BUILTIN_ENGINE);
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
     setError("");
-    try {
-      await onRefresh();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setRefreshing(false);
-    }
+    try { await onRefresh(); }
+    catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setRefreshing(false); }
   }, [onRefresh]);
 
   const save = useCallback(async (params: EngineUpdateParams) => {
     setBusy(true);
     setError("");
-    try {
-      await onUpdate(params);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
+    try { await onUpdate(params); }
+    catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
   }, [onUpdate]);
 
-  const engines = useMemo(() => result?.engines ?? [], [result]);
-  const binarySettings = externalSettings(result);
+  const enabled = (engine: EngineInfo) => binarySettings[engine.id]?.enabled
+    ?? (binarySettings[engine.id]?.binary_path ? true : engine.enabled);
+  const external = engines.filter(engine => engine.id !== BUILTIN_ENGINE);
+  const visible = showAll ? external : external.filter(engine => enabled(engine)
+    && (engine.binary_ok || Boolean(binarySettings[engine.id]?.binary_path) || binarySettings[engine.id]?.enabled === true
+      || result?.settings?.default_engine === engine.id || engine.latest_request || engine.quota
+      || accountSnapshots[`${engine.id}:${binarySettings[engine.id]?.binary_path ?? ""}`]));
+  const status = (engine: EngineInfo) => !enabled(engine) ? t("settings.engineDisabled")
+    : !engine.binary_ok ? t("settings.engineNotInstalled")
+      : engine.quota?.status === "sign_in" ? t("settings.subscriptionSignIn")
+      : engine.error || engine.models_error ? t("settings.subscriptionCatalogFailed") : t("settings.engineReady");
+  const close = () => { setOpenedID(null); setError(""); onCloseEngine?.(); };
+  const refreshButton = <button
+    className="settings-button settings-button-ghost settings-icon-button"
+    type="button" disabled={busy || refreshing} aria-busy={refreshing}
+    aria-label={t("settings.engineRefresh")} title={t("settings.engineRefresh")}
+    data-testid="settings-engine-refresh" onClick={() => void refresh()}
+  ><RefreshCw className={`icon${refreshing ? " settings-spin" : ""}`} aria-hidden="true" /></button>;
 
-  const toggleExpanded = (id: string) => setExpandedId((current) => (current === id ? null : id));
+  // Account observations belong to an executable configuration. Preserve them
+  // while disabled, but never reuse one after a path override changes.
+  const selectedSettings = selected ? binarySettings[selected.id] : undefined;
+  const accountKey = selected ? `${selected.id}:${selectedSettings?.binary_path ?? ""}` : "";
+  const saved = accountSnapshots[accountKey];
+  const snapshot = selected && saved && (!selected.binary_path || !saved.binary_path || selected.binary_path === saved.binary_path) ? saved : undefined;
 
-  const pathInput = (engine: EngineInfo, placeholder: string): JSX.Element => {
-    const engineSettings = binarySettings[engine.id];
-    return (
-      <input
-        key={`${engine.id}-${engineSettings?.binary_path ?? ""}`}
-        className="settings-input"
-        type="text"
-        aria-label={`${engineLabel(engine.id, engine)} ${t("settings.engineBinaryPath")}`}
-        data-testid={`settings-engine-${engine.id}-path`}
-        placeholder={placeholder}
-        defaultValue={engineSettings?.binary_path ?? ""}
-        spellCheck={false}
-        disabled={busy}
-        onBlur={(event) => {
-          const next = event.currentTarget.value.trim();
-          if (next !== (engineSettings?.binary_path ?? "")) {
-            void save({ [engine.id]: { binary_path: next } });
-          }
-        }}
-      />
-    );
-  };
-
-  // An installed agent: the switch turns it on or off, and the disclosure
-  // holds its path override.
-  const renderDetected = (engine: EngineInfo): JSX.Element => {
-    const { id } = engine;
-    const enabled = binarySettings[id]?.enabled !== false;
-    const expanded = expandedId === id;
-    const label = engineLabel(id, engine);
-    return (
-      <div
-        key={id}
-        className="settings-engine-item"
-        data-testid={`settings-engine-${id}-status`}
-        aria-label={`${label} · ${externalState(engine, binarySettings, t).text}`}
-      >
-        <div className="settings-engine-row">
+  return <>
+    {!embedded ? <SettingsPageHeader title={t("settings.agents")} description={t("settings.agentsDescription")} /> : null}
+    <SettingsSection title={t("provider.engineConnections")} actions={refreshButton} testID="settings-engine-connections">
+      {!selected && (error || loadError) ? <p className="settings-error" role="alert">{error || loadError}</p> : null}
+      {result === undefined ? <SettingsGroup>
+        <div className="settings-engine-skeleton" role="status" aria-label={t("settings.engineDetecting")} aria-busy="true">
+          <div className="settings-engine-row" aria-hidden="true"><span className="settings-engine-skeleton-line settings-engine-skeleton-title" /></div>
+        </div>
+      </SettingsGroup> : visible.length ? <SettingsGroup>
+        {visible.map(engine => <button key={engine.id} type="button"
+          className="settings-engine-row settings-engine-row-toggle connection-engine-row"
+          data-testid={`settings-engine-${engine.id}-status`}
+          aria-label={`${engineLabel(engine.id, engine)} · ${status(engine)}`}
+          onClick={() => { setError(""); setOpenedID(engine.id); }}>
           <span className="settings-engine-row-main">
-            <span className="settings-engine-row-icon" aria-hidden="true">
-              <EngineIcon engine={id} />
-            </span>
-            <span className="settings-engine-row-name">{label}</span>
+            <span className="settings-engine-row-icon" aria-hidden="true"><EngineIcon engine={engine.id} /></span>
+            <span className="settings-engine-row-name">{engineLabel(engine.id, engine)}</span>
           </span>
-          <button
-            className="settings-switch"
-            type="button"
-            role="switch"
-            aria-checked={enabled}
-            aria-label={`${label} ${enabled ? t("settings.engineDisable") : t("settings.engineEnable")}`}
-            data-testid={`settings-engine-${id}-enabled`}
-            disabled={busy}
-            onClick={() => void save({ [id]: { enabled: !enabled } })}
-          >
+          <span className="connection-engine-status">{status(engine)}</span>
+          <ChevronRight className="icon" aria-hidden="true" />
+        </button>)}
+      </SettingsGroup> : <p className="settings-muted-line">{t("provider.engineConnectionsEmpty")}</p>}
+    </SettingsSection>
+    {selected ? <Modal key={selected.id} ariaLabel={engineLabel(selected.id, selected)}
+      title={engineLabel(selected.id, selected)} icon={<EngineIcon engine={selected.id} />}
+      panelClassName="model-dialog connection-detail-drawer" onClose={close} closeDisabled={busy}>
+      <div className="connection-detail-body">
+        <SettingsRow title={status(selected)}>
+          <button type="button" className="settings-switch" role="switch" aria-checked={enabled(selected)}
+            aria-label={`${engineLabel(selected.id, selected)} ${t(enabled(selected) ? "settings.engineDisable" : "settings.engineEnable")}`}
+            data-testid={`settings-engine-${selected.id}-enabled`} disabled={busy}
+            onClick={() => void save({ [selected.id]: { enabled: !enabled(selected) } })}>
             <span className="settings-switch-thumb" aria-hidden="true" />
           </button>
-          <button
-            className="settings-engine-expand"
-            type="button"
-            aria-expanded={expanded}
-            aria-label={`${label} ${t("settings.engineAdvanced")}`}
-            data-testid={`settings-engine-${id}-advanced-toggle`}
-            onClick={() => toggleExpanded(id)}
-          >
-            <ChevronRight className={`icon settings-disclosure-chevron${expanded ? " open" : ""}`} aria-hidden="true" />
+        </SettingsRow>
+        {error || loadError ? <p className="settings-error" role="alert">{error || loadError}</p> : null}
+        {selected.error || !selected.binary_ok ? <p className="settings-engine-reason">{selected.error || t("settings.engineNotInstalledHint")}</p> : null}
+        {!selected.binary_ok ? <div className="settings-engine-path-row">
+          {selected.install_url ? <button className="settings-button" type="button"
+            onClick={() => void window.wuu.openExternal(selected.install_url!).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))}>
+            {t("settings.engineInstall")}<ExternalLink className="icon" aria-hidden="true" />
+          </button> : null}
+          {refreshButton}
+        </div> : null}
+        <SubscriptionDashboard key={`account-${accountKey}-${selected.binary_path ?? ""}`}
+          scope={{ kind: "engine", id: selected.id }} inventory={result}
+          initialInventory={snapshot ? { engines: [snapshot] } : undefined}
+          onInventoryLoaded={loaded => {
+            const observed = loaded.engines.find(engine => engine.id === selected.id);
+            if (observed) setAccountSnapshots(current => ({ ...current, [accountKey]: observed }));
+          }} providers={[]} onSelectBuiltinModel={async () => {}} />
+        <details className="connection-engine-advanced">
+          <summary>{t("settings.engineAdvanced")}</summary>
+          <label className="settings-field">
+            <span>{t("settings.engineBinaryPath")}</span>
+            <input key={`${selected.id}-${selectedSettings?.binary_path ?? ""}`} className="settings-input"
+              type="text" aria-label={`${engineLabel(selected.id, selected)} ${t("settings.engineBinaryPath")}`}
+              data-testid={`settings-engine-${selected.id}-path`} placeholder={selected.binary_path || t("settings.engineAutoBinary")}
+              value={pathDrafts[accountKey] ?? selectedSettings?.binary_path ?? ""} spellCheck={false} disabled={busy}
+              onChange={event => setPathDrafts(current => ({ ...current, [accountKey]: event.target.value }))} />
+          </label>
+          <button type="button" className="settings-button"
+            data-testid={`settings-engine-${selected.id}-path-save`}
+            disabled={busy || (pathDrafts[accountKey] ?? selectedSettings?.binary_path ?? "").trim() === (selectedSettings?.binary_path ?? "")}
+            onClick={() => void save({ [selected.id]: { binary_path: (pathDrafts[accountKey] ?? "").trim() } })}>
+            {t("common.save")}
           </button>
-        </div>
-        {expanded ? (
-          <div className="settings-engine-advanced">
-            {pathInput(engine, engine.binary_path || t("settings.engineAutoBinary"))}
-            {engine.protocol === "acp" && enabled ? (
-              <EngineAuthentication key={`${id}-${binarySettings[id]?.binary_path ?? ""}`} engineID={id} />
-            ) : null}
-          </div>
-        ) : null}
+        </details>
       </div>
-    );
-  };
-
-  // An agent Wuu cannot find: the whole row opens it, and the reason, the
-  // install link and the path override live inside, said once.
-  const renderMissing = (engine: EngineInfo): JSX.Element => {
-    const { id } = engine;
-    const expanded = expandedId === id;
-    const label = engineLabel(id, engine);
-    return (
-      <div
-        key={id}
-        className="settings-engine-item"
-        data-testid={`settings-engine-${id}-status`}
-        aria-label={`${label} · ${t("settings.engineNotInstalled")}`}
-      >
-        <div className="settings-engine-row">
-          <button
-            className="settings-engine-row-main settings-engine-row-toggle"
-            type="button"
-            aria-expanded={expanded}
-            data-testid={`settings-engine-${id}-advanced-toggle`}
-            onClick={() => toggleExpanded(id)}
-          >
-            <span className="settings-engine-row-icon" aria-hidden="true">
-              <EngineIcon engine={id} />
-            </span>
-            <span className="settings-engine-row-name">{label}</span>
-            <span className="settings-engine-expand" aria-hidden="true">
-              <ChevronRight className={`icon settings-disclosure-chevron${expanded ? " open" : ""}`} />
-            </span>
-          </button>
-        </div>
-        {expanded ? (
-          <div className="settings-engine-advanced">
-            <p className="settings-engine-reason">{engine.error || t("settings.engineNotInstalledHint")}</p>
-            <div className="settings-engine-path-row">
-              {pathInput(engine, t("settings.engineBinaryPathPlaceholder"))}
-              {engine.install_url ? (
-                <button
-                  className="settings-button"
-                  type="button"
-                  onClick={() => void window.wuu.openExternal(engine.install_url!).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))}
-                >
-                  {t("settings.engineInstall")}
-                  <ExternalLink className="icon" aria-hidden="true" />
-                </button>
-              ) : null}
-            </div>
-          </div>
-        ) : null}
-      </div>
-    );
-  };
-
-  const external = engines.filter((engine) => engine.id !== BUILTIN_ENGINE);
-  const detected = external.filter((engine) => engine.binary_ok);
-  const missing = external.filter((engine) => !engine.binary_ok);
-
-  return (
-    <>
-      <SettingsPageHeader
-        title={t("settings.agents")}
-        description={t("settings.agentsDescription")}
-        actions={
-          <button
-            className="settings-button settings-button-ghost settings-icon-button"
-            type="button"
-            disabled={busy || refreshing}
-            aria-busy={refreshing}
-            aria-label={t("settings.engineRefresh")}
-            title={t("settings.engineRefresh")}
-            data-testid="settings-engine-refresh"
-            onClick={() => void refresh()}
-          >
-            <RefreshCw className={`icon${refreshing ? " settings-spin" : ""}`} aria-hidden="true" />
-          </button>
-        }
-      />
-      {error || loadError ? <p className="settings-error" role="alert">{error || loadError}</p> : null}
-      {result === undefined ? (
-        <SettingsGroup>
-          <div
-            className="settings-engine-skeleton"
-            role="status"
-            aria-label={t("settings.engineDetecting")}
-            aria-busy="true"
-          >
-            <div className="settings-engine-row" aria-hidden="true">
-              <span className="settings-engine-skeleton-line settings-engine-skeleton-title" />
-              <span className="settings-engine-skeleton-line settings-engine-skeleton-description" />
-            </div>
-          </div>
-        </SettingsGroup>
-      ) : null}
-      {detected.length > 0 ? (
-        <SettingsSection title={t("settings.engineInstalled")} testID="settings-agent-installed">
-          <SettingsGroup>
-            {detected.map((engine) => renderDetected(engine))}
-          </SettingsGroup>
-        </SettingsSection>
-      ) : null}
-      {missing.length > 0 ? (
-        <SettingsSection title={t("settings.engineNotInstalled")} testID="settings-agent-missing">
-          <SettingsGroup>
-            {missing.map((engine) => renderMissing(engine))}
-          </SettingsGroup>
-        </SettingsSection>
-      ) : null}
-    </>
-  );
+    </Modal> : null}
+  </>;
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { MoreHorizontal, RefreshCw } from "./WuuIcons";
 import type { EngineListResult, ProviderSummary } from "../shared/protocol";
 import { EngineIcon } from "./EngineIcons";
@@ -7,7 +7,7 @@ import { ServiceMark, serviceIdentity } from "./ModelServicesPage";
 import { SelectMenu } from "./SelectMenu";
 import { ThreadContextMenu } from "./ThreadContextMenu";
 import { useI18n } from "./i18n";
-import { SettingsPageHeader } from "./SettingsSection";
+import { SettingsSection } from "./SettingsSection";
 import {
   hasBuiltInSubscriptionControls,
   isCodexSubscription,
@@ -22,14 +22,20 @@ export function SubscriptionDashboard({
   onSelectBuiltinModel,
   onAddService,
   scope,
+  initialInventory,
+  onInventoryLoaded,
 }: {
   onAddService?: () => void;
-  scope?: { kind: "provider"; name: string } | { kind: "engines" };
+  scope?: { kind: "provider"; name: string } | { kind: "engine"; id: string };
   inventory?: EngineListResult;
+  initialInventory?: EngineListResult;
+  onInventoryLoaded?: (inventory: EngineListResult) => void;
   providers?: readonly ProviderSummary[];
   onSelectBuiltinModel: (provider: string, model: string) => Promise<void>;
 }): JSX.Element {
   const { t, formatDate } = useI18n();
+  const scopedEngine = scope?.kind === "engine" ? inventory?.engines.find(engine => engine.id === scope.id) : undefined;
+  const canRefresh = scope?.kind !== "engine" || Boolean(scopedEngine?.enabled && scopedEngine.binary_ok);
   const [error, setError] = useState<"" | "settings.subscriptionRefreshFailed" | "settings.subscriptionModelFailed">("");
   const [authProviders, setAuthProviders] = useState<ProviderSummary[]>([]);
   const [authError, setAuthError] = useState(false);
@@ -37,9 +43,11 @@ export function SubscriptionDashboard({
   const [pending, setPending] = useState("");
   const [revision, setRevision] = useState(0);
   const [menu, setMenu] = useState<{ sourceKey: string; x: number; y: number } | null>(null);
-  const [loadedInventory, setLoadedInventory] = useState<EngineListResult>();
-  // The mount effect always starts a load; begin busy so the first frame
-  // already reserves the quota placeholders.
+  const [loadedInventory, setLoadedInventory] = useState<EngineListResult | undefined>(initialInventory);
+  const snapshotCallback = useRef(onInventoryLoaded);
+  snapshotCallback.current = onInventoryLoaded;
+  // Active runtimes load on opening their details; disabled or missing ones
+  // retain any observed account snapshot without probing the runtime.
   const [refreshing, setRefreshing] = useState(true);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [now, setNow] = useState(Date.now);
@@ -50,15 +58,16 @@ export function SubscriptionDashboard({
   }, []);
   useEffect(() => {
     let active = true;
+    if (!canRefresh) { setRefreshing(false); return; }
     setRefreshing(true);
     setError("");
     void window.wuu.listEngines({ include_quota: true }).then((result) => {
-      if (active) { setLoadedInventory(result); setNow(Date.now()); }
+      if (active) { setLoadedInventory(result); snapshotCallback.current?.(result); setNow(Date.now()); }
     }, () => {
       if (active) setError("settings.subscriptionRefreshFailed");
     }).finally(() => { if (active) setRefreshing(false); });
     return () => { active = false; };
-  }, [refreshVersion]);
+  }, [refreshVersion, canRefresh]);
   const sources = useMemo(
     () => {
       // Keep live model selections from the parent; refresh owns only the
@@ -66,7 +75,8 @@ export function SubscriptionDashboard({
       const base = inventory ?? loadedInventory;
       const refreshed = base ? { ...base, engines: base.engines.map((engine) => {
         const snapshot = loadedInventory?.engines.find((item) => item.id === engine.id);
-        return snapshot ? { ...snapshot, enabled: engine.enabled } : engine;
+        if (!snapshot) return engine;
+        return canRefresh ? { ...snapshot, enabled: engine.enabled } : { ...engine, quota: snapshot.quota ?? engine.quota };
       }) } : undefined;
       const currentProviders = (providers ?? loadedInventory?.subscription_providers ?? []).map((current) => {
         const snapshot = loadedInventory?.subscription_providers?.find((item) => item.name === current.name);
@@ -76,10 +86,10 @@ export function SubscriptionDashboard({
           codex_credential_source: checked.codex_credential_source, api_key_configured: checked.api_key_configured,
           quota: provider.quota } : provider;
       });
-      return subscriptionSources(refreshed, currentProviders).filter((source) => !scope ||
-        (scope.kind === "provider" ? source.kind === "builtin" && source.id === scope.name : source.kind === "engine"));
+      return subscriptionSources(refreshed, currentProviders, scope?.kind === "engine" ? scope.id : undefined).filter((source) => !scope ||
+        (scope.kind === "provider" ? source.kind === "builtin" && source.id === scope.name : source.kind === "engine" && source.id === scope.id));
     },
-    [loadedInventory, inventory, providers, revision, authProviders, scope?.kind, scope?.kind === "provider" ? scope.name : undefined],
+    [loadedInventory, inventory, providers, revision, authProviders, canRefresh, scope?.kind, scope?.kind === "provider" ? scope.name : scope?.id],
   );
 
   // Group presentation only. Every connection keeps its own account snapshot,
@@ -139,16 +149,16 @@ export function SubscriptionDashboard({
   }
 
   return (
-    <section className="settings-section settings-subscriptions" data-testid="settings-subscriptions" aria-busy={refreshing}>
-      <SettingsPageHeader
-        title={t(scope?.kind === "provider" ? "provider.accountUsage" : scope?.kind === "engines" ? "provider.localAgentAccounts" : "settings.subscriptions")}
+    <SettingsSection testID="settings-subscriptions"
+        title={t(scope ? "provider.accountUsage" : "settings.subscriptions")}
         actions={<>
           {onAddService ? <button type="button" className="settings-button" onClick={onAddService}>{t("provider.connectTitle", { name: "ChatGPT" })}</button> : null}
-          <button type="button" className="settings-button settings-button-ghost settings-icon-button" disabled={refreshing} onClick={() => setRefreshVersion((value) => value + 1)} aria-label={t(refreshing ? "settings.subscriptionRefreshing" : "settings.subscriptionRefresh")} title={t("settings.subscriptionRefresh")}>
+          <button type="button" className="settings-button settings-button-ghost settings-icon-button" disabled={refreshing || !canRefresh} onClick={() => setRefreshVersion((value) => value + 1)} aria-label={t(refreshing ? "settings.subscriptionRefreshing" : "settings.subscriptionRefresh")} title={t("settings.subscriptionRefresh")}>
             <RefreshCw className={refreshing ? "icon settings-spin" : "icon"} aria-hidden="true" />
           </button>
         </>}
-      />
+      >
+      <div className="settings-subscriptions" aria-busy={refreshing}>
       {sources.length === 0 ? (
         inventory || loadedInventory ? <p className="settings-muted-line">{t("settings.subscriptionsEmpty")}</p>
           : refreshing ? (
@@ -165,16 +175,16 @@ export function SubscriptionDashboard({
             </div>
           ) : null
       ) : (
-        <div className="settings-subscription-list">
+        <div className={scope ? undefined : "settings-subscription-list"}>
           {[...groups].map(([key, accounts]) => {
             const first = accounts[0];
             const identity = first.provider ? serviceIdentity(first.provider, t) : undefined;
             return (
-              <article key={key} className="settings-subscription" aria-label={identity?.label ?? first.label}>
+              <article key={key} className={scope ? undefined : "settings-subscription"} aria-label={identity?.label ?? first.label}>
                 {accounts.map((source, index) => {
                   const showAuthentication = source.engine?.protocol === "acp" && source.engine.enabled && source.engine.binary_ok
-                    && (source.login !== "ready" || source.catalogFailed);
-                  const status = source.login === "unavailable" ? "settings.subscriptionUnavailable"
+                    && (scope?.kind === "engine" || source.login !== "ready" || source.catalogFailed);
+                  const status = source.login === "unavailable" ? source.engine && !source.engine.binary_ok ? "settings.engineNotInstalled" : source.engine && !source.engine.enabled ? "settings.engineDisabled" : "settings.subscriptionUnavailable"
                     : source.catalogFailed ? "settings.subscriptionCatalogFailed"
                       : source.login === "sign_in" && source.quota?.status !== "sign_in" ? "settings.subscriptionSignIn" : null;
                   const observed = source.quota?.status === "available" || source.quota?.status === "stale";
@@ -226,12 +236,13 @@ export function SubscriptionDashboard({
                   </div>;
                   const attribution = [sourceLabel && t("settings.subscriptionAccountSource", { source: sourceLabel }), observedLabel, observationTitle].filter(Boolean).join(" · ");
                   return <section key={source.key} className="settings-subscription-source" title={attribution} data-testid={`subscription-${source.kind}-${source.id}`}>
-                    {index === 0 ? <div className="settings-subscription-main">
+                    {index === 0 && !scope ? <div className="settings-subscription-main">
                       {identity ? <ServiceMark identity={identity} />
                         : <span className="settings-engine-row-icon" aria-hidden="true"><EngineIcon engine={first.id} /></span>}
                       <h2 className="settings-subscription-name">{identity?.label ?? first.label}</h2>
                       {accounts.length === 1 ? controls : null}
                     </div> : null}
+                    {scope?.kind === "engine" ? controls : null}
                     {accountName || (observed && source.quota?.plan) || accounts.length > 1 ? <div className="settings-subscription-account" title={attribution}>
                       <span className="settings-subscription-account-name">{accountName || sourceLabel}</span>
 
@@ -239,10 +250,11 @@ export function SubscriptionDashboard({
                       {accounts.length > 1 ? controls : null}
                     </div> : null}
                     {sourceLabel ? <span className="sr-only">{t("settings.subscriptionAccountSource", { source: sourceLabel })}</span> : null}
-                    {status ? <p className="settings-subscription-status">{t(status)}</p> : null}
+                    {status && !(scope?.kind === "engine" && source.login === "unavailable" && (!scopedEngine?.enabled || !scopedEngine?.binary_ok)) ? <p className="settings-subscription-status">{t(status)}</p> : null}
                     {quotaLoading && source.engine?.enabled && source.engine.binary_ok && source.engine.capabilities?.includes("account-quota")
                       ? <QuotaSkeleton />
                       : <Quota source={source} now={now} />}
+                    {scope?.kind === "engine" && !source.quota && !quotaLoading ? <p className="settings-subscription-status">{t("settings.subscriptionQuotaUnknown")}</p> : null}
                     {(observedLabel && showObservationAge) || showAuthentication ? <div className="settings-subscription-actions">
                       {observedLabel && showObservationAge ? <time className="settings-subscription-age" dateTime={observedAt} title={observationTitle}>{observedLabel}</time> : null}
                       {showAuthentication ? <EngineAuthentication engineID={source.id} compact onAuthenticated={() => setRefreshVersion((value) => value + 1)} /> : null}
@@ -261,7 +273,8 @@ export function SubscriptionDashboard({
       ]} /> : null}
       {authError ? <p className="settings-subscription-status" role="alert">{t("settings.subscriptionLoginFailed")}</p> : null}
       {error ? <p className="settings-subscription-status" role="alert">{t(error)}</p> : null}
-    </section>
+      </div>
+    </SettingsSection>
   );
 }
 

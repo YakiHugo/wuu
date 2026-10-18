@@ -4,6 +4,8 @@ import type {
   CatalogProviderSummary,
   CodexPetsSnapshot,
   EngineListResult,
+  EngineUpdateParams,
+  EngineBinarySettings,
   ExtensionInventoryRecord,
   InitializeResult,
   MCPServerStatus,
@@ -220,6 +222,27 @@ startFocusModality();
 function Fixture(): JSX.Element {
   const shellRef = useRef<HTMLDivElement>(null);
   const [state, setState] = useState(initialized);
+  const [engineInventory, setEngineInventory] = useState(engines);
+  const updateEngines = async (update: EngineUpdateParams) => {
+    const { default_engine, ...changes } = update;
+    const { default_engine: previousDefault, ...previousBinarySettings } = engineInventory.settings ?? {};
+    const binarySettings: Record<string, EngineBinarySettings | undefined> = { ...previousBinarySettings };
+    const binaryChanges: Record<string, EngineBinarySettings | undefined> = changes;
+    for (const [id, change] of Object.entries(binaryChanges)) {
+      binarySettings[id] = { ...binarySettings[id], ...change };
+    }
+    const settings = { ...binarySettings, default_engine: default_engine ?? previousDefault };
+    const next: EngineListResult = {
+      settings,
+      engines: engineInventory.engines.map(engine => {
+        const change = binaryChanges[engine.id];
+        return change ? { ...engine, enabled: change.enabled ?? engine.enabled,
+          ...(change.binary_path ? { binary_path: change.binary_path, binary_ok: true, error: undefined } : {}) } : engine;
+      }),
+    };
+    setEngineInventory(next);
+    return next;
+  };
   const [collapsed, setCollapsed] = useState(params.has("collapsed"));
   useLayoutEffect(() => {
     document.documentElement.dataset.theme = params.get("theme") || "light";
@@ -273,7 +296,7 @@ function Fixture(): JSX.Element {
         initialPage={(params.get("page") as SettingsPage | null) ?? undefined}
         running={false}
         usage={empty ? undefined : sampleUsage()}
-        engineInventory={engines}
+        engineInventory={engineInventory}
         codexPets={pets}
         codexPetsLoading={false}
         codexPetsError=""
@@ -286,8 +309,8 @@ function Fixture(): JSX.Element {
         onSave={save}
         onRemoveProvider={async (name) => setState((current) => ({ ...current, providers: current.providers?.filter((item) => item.name !== name) }))}
         onRefreshModelCatalog={async () => undefined}
-        onRefreshEngineInventory={async () => engines}
-        onUpdateEngineInventory={async () => engines}
+        onRefreshEngineInventory={async () => engineInventory}
+        onUpdateEngineInventory={updateEngines}
         onAdvancedSave={async () => undefined}
         onGeneralSave={async () => undefined}
         onCodexPetsRefresh={async () => pets}

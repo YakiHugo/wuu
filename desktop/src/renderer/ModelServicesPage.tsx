@@ -4,7 +4,6 @@ import {
   Suspense,
   useEffect,
   useId,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -14,6 +13,7 @@ import type {
   CatalogProviderSummary,
   InitializeResult,
   EngineListResult,
+  EngineUpdateParams,
   ProviderModelSummary,
   ProviderSummary,
   RuntimeConnectionUpdate,
@@ -35,6 +35,8 @@ import { SubscriptionDashboard } from "./SubscriptionDashboard";
 import { hasBuiltInSubscriptionControls } from "./SubscriptionSources";
 import { ENABLE_SUBSCRIPTIONS } from "./FeatureFlags";
 import { CatalogSearchField } from "./CatalogSearchField";
+import { EngineSettingsSection } from "./EngineSettingsSection";
+import { engineLabel } from "./EngineDisplay";
 import { EngineIcon } from "./EngineIcons";
 import { hostSupports } from "./HostCapabilities";
 import { isTouchWebShell } from "./ComposerFocus";
@@ -77,6 +79,9 @@ export type SaveProvider = (
 
 export type ModelServicesPageProps = {
   inventory?: EngineListResult;
+  inventoryError?: string;
+  onRefreshEngines?: () => Promise<EngineListResult | undefined>;
+  onUpdateEngines?: (params: EngineUpdateParams) => Promise<EngineListResult>;
   initialized?: InitializeResult;
   running: boolean;
   runningProviderNames: ReadonlySet<string>;
@@ -295,6 +300,9 @@ export function useCatalogProviders(version: number): CatalogState {
 
 export function ModelServicesPage({
   inventory,
+  inventoryError,
+  onRefreshEngines,
+  onUpdateEngines,
   initialized,
   running,
   runningProviderNames,
@@ -305,19 +313,19 @@ export function ModelServicesPage({
   onProviderModelsChanged,
 }: ModelServicesPageProps): JSX.Element {
   const { t } = useI18n();
-  const rootRef = useRef<HTMLDivElement>(null);
+  const addButtonRef = useRef<HTMLButtonElement>(null);
   const providers = initialized?.providers ?? [];
   const labels = useMemo(() => serviceLabels(providers, t), [providers, t]);
   const [openService, setOpenService] = useState("");
+  const [showAll, setShowAll] = useState(false);
+  const [adding, setAdding] = useState<"type" | "provider" | "engine" | null>(null);
+  const [selectedEngine, setSelectedEngine] = useState<string>();
+  const closeAdding = () => { setAdding(null); addButtonRef.current?.focus(); };
+  const closeService = () => setOpenService("");
   const [catalogVersion, setCatalogVersion] = useState(0);
   const [catalogRefreshing, setCatalogRefreshing] = useState(false);
   const catalog = useCatalogProviders(catalogVersion);
   const detailProvider = providers.find((provider) => provider.name === openService);
-
-  useLayoutEffect(() => {
-    const scroller = rootRef.current?.closest(".settings-scroll");
-    if (scroller) scroller.scrollTop = 0;
-  }, [openService]);
 
   // A removed or renamed service returns the page to the overview.
   useEffect(() => {
@@ -338,42 +346,61 @@ export function ModelServicesPage({
   }
 
   return (
-    <div className="model-services" ref={rootRef} data-testid="settings-providers">
-      {detailProvider ? (
-        <ServiceDetail
-          key={detailProvider.name}
-          provider={detailProvider}
-          onProvidersChanged={onProvidersChanged}
-          onProviderModelsChanged={onProviderModelsChanged}
-          label={labels.get(detailProvider.name) ?? detailProvider.name}
-          initialized={initialized}
-          running={running}
-          inUse={runningProviderNames.has(detailProvider.name)}
-          onBack={() => setOpenService("")}
-          onSave={onSave}
-          onRemove={async (options) => {
-            await onRemoveProvider(detailProvider.name, options);
-            setOpenService("");
-          }}
-        />
-      ) : (
-        <>
-        <ServicesOverview
-          providers={providers}
-          labels={labels}
-          initialized={initialized}
-          running={running}
-          catalog={catalog}
-          defaultOn={!defaultUsable}
-          catalogRefreshing={catalogRefreshing}
-          onRefreshCatalog={() => void refreshCatalog()}
-          onOpenService={setOpenService}
-          onProvidersChanged={onProvidersChanged}
-          onSave={onSave}
-        />
-        {ENABLE_SUBSCRIPTIONS ? <SubscriptionDashboard scope={{ kind: "engines" }} inventory={inventory} providers={providers} onSelectBuiltinModel={(provider, model) => onSave(provider, model)} /> : null}
-        </>
-      )}
+    <div className="model-services" data-testid="settings-providers">
+      <SettingsPageHeader
+        title={t("settings.providers")}
+        actions={<>
+          <button type="button" className="settings-button settings-button-ghost"
+            data-testid="settings-connections-show-all" aria-pressed={showAll}
+            onClick={() => setShowAll(value => !value)}>{t(showAll ? "provider.showActive" : "provider.showAll")}</button>
+          <button type="button" className="settings-button settings-button-ghost settings-icon-button"
+            data-testid="settings-model-catalog-refresh" aria-label={t("settings.modelCatalogUpdate")}
+            title={t("settings.modelCatalogUpdate")} aria-busy={catalogRefreshing} disabled={catalogRefreshing}
+            onClick={() => void refreshCatalog()}><RefreshCw className={`icon${catalogRefreshing ? " settings-spin" : ""}`} aria-hidden="true" /></button>
+          <button type="button" className="settings-button" data-testid="settings-connection-add" ref={addButtonRef} disabled={running}
+            onClick={() => setAdding("type")}><Plus className="icon" aria-hidden="true" />{t("provider.addConnection")}</button>
+        </>}
+      />
+      <ServicesOverview providers={providers} labels={labels} initialized={initialized} running={running}
+        catalog={catalog} defaultOn={!defaultUsable} showAll={showAll}
+        onOpenService={setOpenService} onProvidersChanged={onProvidersChanged} onSave={onSave} />
+      {onRefreshEngines && onUpdateEngines ? <EngineSettingsSection embedded showAll={showAll}
+        result={inventory} loadError={inventoryError} onRefresh={onRefreshEngines} onUpdate={onUpdateEngines}
+        selectedEngineID={selectedEngine} onCloseEngine={() => { setSelectedEngine(undefined); if (selectedEngine) addButtonRef.current?.focus(); }} /> : null}
+      {adding === "type" ? <Modal title={t("provider.addConnection")} ariaLabel={t("provider.addConnection")}
+        panelClassName="model-dialog connection-type-dialog" onClose={closeAdding}>
+        <div className="connection-type-options">
+          <button type="button" className="model-service-card" data-testid="settings-connection-add-provider" onClick={() => setAdding("provider")}>
+            <ProviderMark id="openai" label="Provider" /><span className="model-service-card-copy"><span>{t("provider.providerConnections")}</span><span className="model-service-card-meta">{t("provider.providerConnectionsHint")}</span></span><ChevronRight className="icon" />
+          </button>
+          {onUpdateEngines ? <button type="button" className="model-service-card" data-testid="settings-connection-add-engine" onClick={() => setAdding("engine")}>
+            <span className="provider-mark"><Code2 className="icon" /></span><span className="model-service-card-copy"><span>{t("provider.engineConnections")}</span><span className="model-service-card-meta">{t("provider.engineConnectionsHint")}</span></span><ChevronRight className="icon" />
+          </button> : null}
+        </div>
+      </Modal> : null}
+      {adding === "provider" ? <ServiceConnector providers={providers} running={running} catalog={catalog}
+        defaultOn={!defaultUsable} onSave={onSave} onProvidersChanged={onProvidersChanged} catalogDialog
+        onDismiss={closeAdding} onConnected={name => { setAdding(null); setOpenService(name); }}
+        onOpenExisting={name => { setAdding(null); setOpenService(name); }} /> : null}
+      {adding === "engine" ? <Modal title={t("provider.engineConnections")} ariaLabel={t("provider.engineConnections")}
+        panelClassName="model-dialog connection-type-dialog" onClose={closeAdding}>
+        <div className="connection-type-options">
+          {inventory?.engines.filter(engine => engine.id !== "wuu").map(engine => <button key={engine.id} type="button"
+            className="model-service-card" data-testid={`settings-connection-catalog-engine-${engine.id}`}
+            onClick={() => { setAdding(null); setSelectedEngine(engine.id); }}>
+            <span className="settings-engine-row-icon"><EngineIcon engine={engine.id} /></span>
+            <span className="model-service-card-copy"><span>{engineLabel(engine.id, engine)}</span>
+              <span className="model-service-card-meta">{t(!engine.binary_ok ? "settings.engineNotInstalled" : !engine.enabled ? "settings.engineDisabled" : "settings.engineReady")}</span></span>
+            <ChevronRight className="icon" />
+          </button>)}
+          {!inventory ? <p role="status">{inventoryError || t("settings.engineDetecting")}</p> : null}
+        </div>
+      </Modal> : null}
+      {detailProvider ? <ServiceDetail key={detailProvider.name} provider={detailProvider}
+        onProvidersChanged={onProvidersChanged} onProviderModelsChanged={onProviderModelsChanged}
+        label={labels.get(detailProvider.name) ?? detailProvider.name} initialized={initialized} running={running}
+        inUse={runningProviderNames.has(detailProvider.name)} onBack={closeService} onSave={onSave}
+        onRemove={async options => { await onRemoveProvider(detailProvider.name, options); closeService(); }} /> : null}
     </div>
   );
 }
@@ -392,6 +419,8 @@ export function ServiceConnector({
   onConnected,
   onOpenExisting,
   onProvidersChanged,
+  catalogDialog = false,
+  onDismiss,
 }: {
   providers: readonly ProviderSummary[];
   running: boolean;
@@ -400,6 +429,8 @@ export function ServiceConnector({
   onSave: SaveProvider;
   onConnected: (name: string) => void;
   onOpenExisting?: (name: string) => void;
+  catalogDialog?: boolean;
+  onDismiss?: () => void;
   onProvidersChanged?: (providers: ProviderSummary[]) => void;
 }): JSX.Element {
   const { t, locale } = useI18n();
@@ -421,7 +452,7 @@ export function ServiceConnector({
 
   return (
     <>
-      <div className="model-service-catalog" data-testid="settings-provider-tiles">
+      {!catalogDialog ? <><div className="model-service-catalog" data-testid="settings-provider-tiles">
         <CatalogServiceGroups
           catalogProviders={[...featured, ...local.filter((provider) => !featuredIDs.includes(provider.id))]}
           pendingCatalogTiles={catalog.providers === undefined && !catalog.failed ? featuredIDs.length : 0}
@@ -456,25 +487,25 @@ export function ServiceConnector({
           ) : null}
         </div>
       </div>
-      {catalog.failed ? <p className="settings-section-note">{t("provider.catalogUnavailable")}</p> : null}
-      {browsing ? (
+      {catalog.failed ? <p className="settings-section-note">{t("provider.catalogUnavailable")}</p> : null}</> : null}
+      {(browsing || catalogDialog) && !connectTarget ? (
         <BrowseServicesDialog
           catalog={catalog}
           providers={providers}
           disabled={running}
-          onClose={() => setBrowsing(false)}
+          onClose={() => { setBrowsing(false); onDismiss?.(); }}
           onConnect={startConnect}
         />
       ) : null}
       {connectTarget?.kind === "chatgpt" ? (
         <Suspense fallback={
           <Modal title={t("provider.connectTitle", { name: "ChatGPT" })} ariaLabel={t("provider.connectTitle", { name: "ChatGPT" })}
-            panelClassName="model-dialog model-connect-dialog" onClose={() => setConnectTarget(null)}>
+            panelClassName="model-dialog model-connect-dialog" onClose={() => { setConnectTarget(null); onDismiss?.(); }}>
             <p className="settings-muted-line" role="status">{t("settings.loading")}</p>
           </Modal>
         }>
           <ChatGPTConnectionDialog onProvidersChanged={onProvidersChanged} providers={providers} running={running} defaultOn={defaultOn}
-            onSave={onSave} onClose={() => setConnectTarget(null)} onConnected={(name) => { setConnectTarget(null); onConnected(name); }} />
+            onSave={onSave} onClose={() => { setConnectTarget(null); onDismiss?.(); }} onConnected={(name) => { setConnectTarget(null); onConnected(name); }} />
         </Suspense>
       ) : connectTarget ? (
         <ConnectServiceDialog
@@ -482,7 +513,7 @@ export function ServiceConnector({
           providers={providers}
           running={running}
           defaultOn={defaultOn}
-          onClose={() => setConnectTarget(null)}
+          onClose={() => { setConnectTarget(null); onDismiss?.(); }}
           onSave={onSave}
           onConnected={(name) => {
             setConnectTarget(null);
@@ -505,8 +536,7 @@ function ServicesOverview({
   running,
   catalog,
   defaultOn,
-  catalogRefreshing,
-  onRefreshCatalog,
+  showAll,
   onOpenService,
   onSave,
   onProvidersChanged,
@@ -517,8 +547,7 @@ function ServicesOverview({
   running: boolean;
   catalog: CatalogState;
   defaultOn: boolean;
-  catalogRefreshing: boolean;
-  onRefreshCatalog: () => void;
+  showAll: boolean;
   onOpenService: (name: string) => void;
   onProvidersChanged?: (providers: ProviderSummary[]) => void;
   onSave: SaveProvider;
@@ -527,27 +556,10 @@ function ServicesOverview({
 
   return (
     <>
-      <SettingsPageHeader
-        title={t("settings.providers")}
-        actions={
-          <button
-            className="settings-button settings-button-ghost settings-icon-button"
-            type="button"
-            data-testid="settings-model-catalog-refresh"
-            aria-label={t("settings.modelCatalogUpdate")}
-            title={t("settings.modelCatalogUpdate")}
-            aria-busy={catalogRefreshing}
-            disabled={catalogRefreshing}
-            onClick={onRefreshCatalog}
-          >
-            <RefreshCw className={`icon${catalogRefreshing ? " settings-spin" : ""}`} aria-hidden="true" />
-          </button>
-        }
-      />
 
       {providers.length > 0 ? (
-        <SettingsSection title={t("provider.connectedSection")}>
-          <div className="model-service-grid" role="list" aria-label={t("provider.connectedSection")}>
+        <SettingsSection title={t("provider.providerConnections")}>
+          <div className="model-service-grid" role="list" aria-label={t("provider.providerConnections")}>
             {providers.map((provider) => {
               const identity = serviceIdentity(provider, t);
               const label = labels.get(provider.name) ?? identity.label;
@@ -581,9 +593,9 @@ function ServicesOverview({
             })}
           </div>
         </SettingsSection>
-      ) : null}
+      ) : <SettingsSection title={t("provider.providerConnections")}><p className="settings-muted-line">{t("provider.noService")}</p></SettingsSection>}
 
-      <SettingsSection title={t("provider.addSection")}>
+      {showAll ? <SettingsSection title={t("provider.addSection")}>
         <ServiceConnector
           providers={providers}
           running={running}
@@ -594,7 +606,7 @@ function ServicesOverview({
           onOpenExisting={onOpenService}
           onProvidersChanged={onProvidersChanged}
         />
-      </SettingsSection>
+      </SettingsSection> : null}
     </>
   );
 }
@@ -826,9 +838,10 @@ function ServiceDetail({
   }
 
   return (
-    <>
+    <Modal ariaLabel={label} panelClassName="model-dialog connection-detail-drawer" closeDisabled={busy} onClose={onBack}>
+      <div className="connection-detail-body">
       <nav className="settings-page-back" aria-label={t("settings.providers")}>
-        <button type="button" onClick={onBack} data-testid="settings-provider-back">
+        <button type="button" disabled={busy} onClick={onBack} data-testid="settings-provider-back">
           <ChevronLeft className="icon" aria-hidden="true" />
           {t("settings.providers")}
         </button>
@@ -967,7 +980,8 @@ function ServiceDetail({
           {error ? <p className="settings-error" role="alert">{error}</p> : null}
         </Modal>
       ) : null}
-    </>
+      </div>
+    </Modal>
   );
 }
 
@@ -1580,14 +1594,15 @@ function BrowseServicesDialog({
       panelClassName="model-dialog model-browse-dialog"
       onClose={onClose}
       footer={
-        <button type="button" className="settings-button settings-button-ghost model-service-custom-action" disabled={disabled} onClick={() => onConnect({ kind: "custom" })}>
+        <button type="button" className="settings-button settings-button-ghost model-service-custom-action" data-testid="settings-provider-custom" disabled={disabled} onClick={() => onConnect({ kind: "custom" })}>
           <Plus className="icon" aria-hidden="true" />{t("provider.customEndpoint")}
         </button>
       }
     >
       <CatalogSearchField value={query} placeholder={t("provider.searchServices")} onValueChange={setQuery} />
       <div className="model-browse-list" data-scroll-fade="">
-        <CatalogServiceGroups catalogProviders={catalog.providers ?? []} providers={providers} query={query} grouped disabled={disabled} onConnect={onConnect} />
+        {catalog.failed ? <p className="settings-section-note">{t("provider.catalogUnavailable")}</p> : null}
+      <CatalogServiceGroups catalogProviders={catalog.providers ?? []} providers={providers} query={query} grouped disabled={disabled} onConnect={onConnect} />
       </div>
     </Modal>
   );

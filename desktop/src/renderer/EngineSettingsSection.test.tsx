@@ -17,6 +17,7 @@ let container: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
+  window.wuu = { ...window.wuu, listEngines: vi.fn().mockResolvedValue(inventory) };
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -65,9 +66,9 @@ describe("EngineSettingsSection", () => {
     const devin = (await openDefaultPicker()).find((item) => item.dataset.value === "devin")!;
     await act(async () => devin.click());
     expect(onUpdate).toHaveBeenLastCalledWith({ default_engine: "devin" });
-    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="settings-engine-devin-advanced-toggle"]')!.click());
-    expect(container.querySelector<HTMLInputElement>('[data-testid="settings-engine-devin-path"]')!.value).toBe("/opt/devin");
-    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="settings-engine-devin-enabled"]')!.click());
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="settings-engine-devin-status"]')!.click());
+    expect(document.querySelector<HTMLInputElement>('[data-testid="settings-engine-devin-path"]')!.value).toBe("/opt/devin");
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="settings-engine-devin-enabled"]')!.click());
     expect(onUpdate).toHaveBeenLastCalledWith({ devin: { enabled: false } });
   });
 
@@ -110,7 +111,7 @@ describe("EngineSettingsSection", () => {
     expect(container.querySelector('[data-testid="settings-engine-refresh"]')).not.toBeNull();
   });
 
-  it("keeps an undetected agent listed but unselectable, with the reason on the row", async () => {
+  it("hides absent default-enabled catalog engines and keeps them out of the default picker", async () => {
     const missingClaude: EngineListResult = {
       engines: [
         { id: "wuu", enabled: true, binary_ok: true },
@@ -123,9 +124,7 @@ describe("EngineSettingsSection", () => {
 
     const options = await openDefaultPicker();
     expect(options.map((item) => item.dataset.value)).toEqual(["wuu", "codex"]);
-    expect(
-      container.querySelector('[data-testid="settings-engine-claude-status"]')?.getAttribute("aria-label"),
-    ).toContain("未安装");
+    expect(container.querySelector('[data-testid="settings-engine-claude-status"]')).toBeNull();
   });
 
   it("lists a switched-off agent in the default picker without letting it be picked", async () => {
@@ -156,9 +155,51 @@ describe("EngineSettingsSection", () => {
     expect(row.getAttribute("aria-label")).toContain("已就绪");
     expect(row.textContent).not.toContain(path);
     await act(async () => {
-      container.querySelector<HTMLButtonElement>('[data-testid="settings-engine-claude-advanced-toggle"]')!.click();
+      container.querySelector<HTMLButtonElement>('[data-testid="settings-engine-claude-status"]')!.click();
     });
-    expect(container.querySelector<HTMLInputElement>('[data-testid="settings-engine-claude-path"]')?.placeholder).toBe(path);
+    expect(document.querySelector<HTMLInputElement>('[data-testid="settings-engine-claude-path"]')?.placeholder).toBe(path);
     expect(row.querySelector(".settings-engine-detail")).toBeNull();
   });
+
+  it("keeps a configured missing engine recoverable and retains its drawer after disabling", async () => {
+    let current: EngineListResult = {
+      engines: [{ id: "codex", enabled: false, binary_ok: false }],
+      settings: { codex: { enabled: true, binary_path: "/missing/codex" } },
+    };
+    const onUpdate = vi.fn(async () => {
+      current = { ...current, settings: { codex: { enabled: false, binary_path: "/missing/codex" } } };
+      render(current, onUpdate);
+      return current;
+    });
+    render(current, onUpdate);
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="settings-engine-codex-status"]')!.click());
+    expect(window.wuu.listEngines).not.toHaveBeenCalled();
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="settings-engine-codex-enabled"]')!.click());
+    expect(container.querySelector('[data-testid="settings-engine-codex-status"]')).toBeNull();
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="subscription-engine-codex"]')).not.toBeNull();
+  });
+
+  it("opens a hidden catalog engine by selection and retains a failed path draft for retry", async () => {
+    const missing: EngineListResult = { engines: [{ id: "codex", enabled: false, binary_ok: false }] };
+    const onUpdate = vi.fn().mockRejectedValueOnce(new Error("Cannot save path")).mockResolvedValue(missing);
+    await act(async () => root.render(<EngineSettingsSection result={missing} embedded selectedEngineID="codex" onUpdate={onUpdate} onRefresh={vi.fn()} />));
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    const input = document.querySelector<HTMLInputElement>('[data-testid="settings-engine-codex-path"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "/custom/codex");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(onUpdate).not.toHaveBeenCalled();
+    const save = document.querySelector<HTMLButtonElement>('[data-testid="settings-engine-codex-path-save"]')!;
+    await act(async () => save.click());
+    expect(document.querySelector('[role="dialog"] [role="alert"]')?.textContent).toBe("Cannot save path");
+    expect(input.value).toBe("/custom/codex");
+    expect(save.disabled).toBe(false);
+    await act(async () => save.click());
+    expect(onUpdate).toHaveBeenCalledTimes(2);
+    expect(onUpdate).toHaveBeenLastCalledWith({ codex: { binary_path: "/custom/codex" } });
+  });
+
 });

@@ -29,9 +29,10 @@ export type SubscriptionSource = {
 export function subscriptionSources(
   inventory: EngineListResult | undefined,
   providers: readonly ProviderSummary[] | undefined,
+  engineID?: string,
 ): SubscriptionSource[] {
   const engines = (inventory?.engines ?? [])
-    .filter((engine) => engine.id !== BUILTIN_ENGINE && (engine.binary_ok || engine.latest_request))
+    .filter((engine) => engine.id !== BUILTIN_ENGINE && (engine.binary_ok || engine.latest_request || engine.quota || engine.id === engineID))
     .map((engine) => engineSource(engine));
   const builtin = (providers ?? [])
     .filter(isBuiltInSubscription)

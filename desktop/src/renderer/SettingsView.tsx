@@ -89,7 +89,7 @@ import { ENABLE_APP_SNAPSHOTS } from "../shared/featureFlags";
 import { SystemPermissionsSection } from "./SystemPermissions";
 import { toastErrorMessage } from "./Toast";
 import type { ArchiveDeletionState } from "./useArchiveDeletion";
-import { DefaultEngineRow, EngineSettingsSection } from "./EngineSettingsSection";
+import { DefaultEngineRow } from "./EngineSettingsSection";
 import { DefaultModelRows, ModelServicesPage } from "./ModelServicesPage";
 import { SettingsRemotePage } from "./SettingsRemotePage";
 import { ThemePreferenceControl } from "./ThemePreferenceSection";
@@ -157,7 +157,6 @@ function remoteControlAvailable(): boolean {
 function nativeSettingsPages(): NativeSettingsPage[] {
   return [
     "providers",
-    "agents",
     "advanced",
     "mcp",
     "appearance",
@@ -174,7 +173,7 @@ const COPY_RESET_MS = 1500;
 
 function availableSettingsPage(page: SettingsPage | undefined): SettingsPage {
   const next = page ?? "providers";
-  if (next === "subscriptions") {
+  if (next === "subscriptions" || next === "agents") {
     return "providers";
   }
   if (next === "remote" && !remoteControlAvailable()) {
@@ -703,7 +702,7 @@ export function SettingsView({
               {nativePages.map((page) => {
                 const Icon = NATIVE_PAGE_ICONS[page];
                 return (
-                  <SettingsNavItem key={page} icon={<Icon className="icon-lg" />} active={activePage === page} onClick={() => setActivePage(page)}>
+                  <SettingsNavItem key={page} pageID={page} icon={<Icon className="icon-lg" />} active={activePage === page} onClick={() => setActivePage(page)}>
                     {settingsPageTitle(page, t)}
                   </SettingsNavItem>
                 );
@@ -716,6 +715,7 @@ export function SettingsView({
                   return (
                     <SettingsNavItem
                       key={pageId}
+                      pageID={pageId}
                       icon={<PluginBlocksIcon className="icon-lg" />}
                       active={activePage === pageId}
                       onClick={() => setActivePage(pageId)}
@@ -729,6 +729,7 @@ export function SettingsView({
                   return (
                     <SettingsNavItem
                       key={pageId}
+                      pageID={pageId}
                       icon={<PluginIcon icon={entry.icon} pluginId={entry.pluginId} fingerprint={entry.generation} className="icon-lg" />}
                       active={activePage === pageId}
                       onClick={() => setActivePage(pageId)}
@@ -797,6 +798,9 @@ export function SettingsView({
               ) : activePage === "providers" ? (
                 <ModelServicesPage
                   inventory={engineInventory}
+                  inventoryError={engineInventoryError}
+                  onRefreshEngines={onRefreshEngineInventory}
+                  onUpdateEngines={onUpdateEngineInventory}
                   initialized={initialized}
                   running={running}
                   runningProviderNames={runningProviderNameSet}
@@ -805,13 +809,6 @@ export function SettingsView({
                   onRefreshModelCatalog={onRefreshModelCatalog}
                   onProvidersChanged={onProvidersChanged}
                   onProviderModelsChanged={onProviderModelsChanged}
-                />
-              ) : activePage === "agents" ? (
-                <EngineSettingsSection
-                  result={engineInventory}
-                  loadError={engineInventoryError}
-                  onRefresh={onRefreshEngineInventory}
-                  onUpdate={onUpdateEngineInventory}
                 />
               ) : activePage === "advanced" ? (
                 <SettingsRuntimePage
@@ -922,11 +919,13 @@ export function SettingsView({
 /* -------------------------------------------------------------------------- */
 
 function SettingsNavItem({
+  pageID,
   icon,
   active,
   onClick,
   children
 }: {
+  pageID?: SettingsPage;
   icon: ReactNode;
   active: boolean;
   onClick: () => void;
@@ -936,6 +935,7 @@ function SettingsNavItem({
     <button
       className={`settings-nav-item${active ? " active" : ""}`}
       data-wuu-component="settings-navigation-item"
+      data-wuu-page={pageID}
       type="button"
       aria-current={active ? "page" : undefined}
       onClick={onClick}
@@ -1270,6 +1270,7 @@ function SettingsGeneralPage({
       >
         <SettingsGroup>
           <DefaultEngineRow result={engineInventory} onUpdate={onUpdateEngineInventory} />
+          <SettingsRow title={t("settings.providers")}><button type="button" className="settings-button settings-button-ghost" onClick={onAddService}>{t("provider.manageConnections")}</button></SettingsRow>
           <DefaultModelRows initialized={initialized} running={running} onSave={onSave} onAddService={onAddService} />
           <DefaultEnvironmentRow
             value={initialized?.general_settings?.execution_environments ?? {}}
