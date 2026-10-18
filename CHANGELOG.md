@@ -10,6 +10,8 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Added
 
+- Add DeepSeek Harness as an external ACP engine, with native model and
+  reasoning selection, HTTP MCP tools, and persistent conversation recovery.
 - Keep independent activity previews for multiple browser tabs and native windows
   in one conversation, with up to five visible cards and individual dismissal.
 
@@ -22,6 +24,13 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
   breaks, keep empty folder actions visible, and align the sidebar's top controls
   with its trailing action column. Apply the same spacing scale to the fork
   destination dialog, with aligned option columns and stable text while loading.
+
+### Fixed
+
+- Restore ACP sessions through advertised `session/resume` support and close
+  native sessions before terminating their processes, including model probes
+  and cancelled turns. Preserve advertised empty reasoning defaults when
+  clearing a previous override.
 
 ### Removed
 
