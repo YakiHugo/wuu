@@ -200,10 +200,7 @@ import {
   resolveDraftEngineMemory,
   writeDraftEngineMemory,
 } from "./DraftEngineMemory";
-import {
-  FirstRunOnboarding,
-  hasOnboardingProvider as hasReadyProvider,
-} from "./FirstRunOnboarding";
+import { FirstRunOnboarding } from "./FirstRunOnboarding";
 import {
   EmptyConversationHome,
   RuntimeLoading,
@@ -212,6 +209,7 @@ import { EmptyHomeOverview } from "./EmptyHomeOverview";
 import { WuuMascotRuntimeProvider } from "./WuuMascot";
 import { deriveActiveSessionHints } from "./activeSessionHint";
 import {
+  hasAuthenticatedProvider as hasReadyProvider,
   providerModelContextWindow,
   pullRequestUnavailableReason,
 } from "./RuntimeHelpers";
@@ -580,6 +578,7 @@ export function App(): JSX.Element {
     animateRightPanelLayout,
     animateSidebarLayout,
     startSidebarResize,
+    trackSidebarResizerPointer,
     startRightPanelResize,
     handleRightPanelSeparatorKey,
     resetWorkspaceRightPanelWidth,
@@ -751,7 +750,6 @@ export function App(): JSX.Element {
     openWorkspaceProjectTab,
     syncWorkspaceProjectTab,
     showWorkspaceToolPicker,
-    resumeWorkspaceViewTab,
     focusWorkspaceViewTab,
     closeWorkspaceViewTab,
     closeWorkspaceViewTabsWhere,
@@ -1322,6 +1320,19 @@ export function App(): JSX.Element {
       : undefined;
   const activeThread = activeThreadForState(state);
   const activeThreadID = activeThread?.id;
+  const activeThreadCwd = activeThread?.cwd;
+  const previousThreadWorkspace = useRef({ id: activeThreadID, cwd: activeThreadCwd });
+  useEffect(() => {
+    const previous = previousThreadWorkspace.current;
+    previousThreadWorkspace.current = { id: activeThreadID, cwd: activeThreadCwd };
+    if (activeThreadID && previous.id === activeThreadID && previous.cwd &&
+      activeThreadCwd && previous.cwd !== activeThreadCwd) {
+      showToast({
+        message: translateCurrent("app.workspaceSwitched"),
+        dedupeKey: `workspace-switched:${activeThreadID}:${activeThreadCwd}`,
+      });
+    }
+  }, [activeThreadID, activeThreadCwd]);
   const activeProjectDraft = projectAgentEnabled && !activeThread && currentSessionTab?.kind === "draft" && currentSessionTab.project === true;
   const activeThreadRunning = isThreadRunning(activeThread);
   const activeThreadHasRunningTurn = activeThread?.turns.some(turn => turn.status === "in_progress") ?? false;
@@ -3422,6 +3433,7 @@ export function App(): JSX.Element {
         }}
         projects={state.projects}
         activeContext={state.activeContext}
+        inlineCompletionWorkspace={activeThread ? resolveThreadRuntimeContext(activeThread, state.projects) : state.activeContext}
         activeWorkspace={activeWorkspace}
         compactDisabledReason={
           !activeThread
@@ -5373,6 +5385,7 @@ export function App(): JSX.Element {
           onCodexPetsRefresh={refreshCodexPets}
           onCodexPetsUpdate={updateCodexPets}
           onSidebarResizeStart={startSidebarResize}
+          onSidebarResizerPointer={trackSidebarResizerPointer}
           onSidebarSeparatorKey={handleSidebarSeparatorKey}
           archivedThreads={state.threads
             .filter((thread) => thread.archived)
@@ -5655,6 +5668,8 @@ export function App(): JSX.Element {
             aria-valuenow={sidebarWidth}
             tabIndex={0}
             onPointerDown={startSidebarResize}
+            onPointerEnter={trackSidebarResizerPointer}
+            onPointerMove={trackSidebarResizerPointer}
             onDoubleClick={toggleSidebar}
             onKeyDown={handleSidebarSeparatorKey}
           />
@@ -5820,6 +5835,7 @@ export function App(): JSX.Element {
                 {splitConversation && state.thread && state.secondaryThread ? (
                   <ConversationSplitLayoutRenderer
                     state={state}
+                    pendingComposerMessagesForThread={pendingComposerMessagesForActiveThread}
                     primaryThread={state.thread}
                     secondaryThread={state.secondaryThread}
                     splitLeftPercent={splitLeftPercent}
@@ -6006,7 +6022,6 @@ export function App(): JSX.Element {
           onOpenTool={openWorkspaceTool}
           onOpenPluginTool={openWorkspacePluginTool}
           onShowTools={showWorkspaceToolPicker}
-          onResumeTab={resumeWorkspaceViewTab}
           onCloseTab={(id) => {
             if (id === "side-thread") sideThread.close();
             closeWorkspaceViewTab(id);

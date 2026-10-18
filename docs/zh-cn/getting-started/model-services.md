@@ -12,7 +12,7 @@
 4. 保存后回到输入框，选择本次对话使用的服务和模型。
 5. 发送一个包含工具调用的小请求，例如读取项目文件，确认它不只是能回复文字。
 
-首次设置提供了较简单的连接表单。自定义端点和更多模型选项请在设置中调整。配置里列出的模型不代表你的账号一定有访问权限。
+首次设置会一起列出检测到的本机 Codex 和 Grok 登录。选择其中一个，即可接入并设为默认模型服务，也可以连接其他服务。已有连接不会隐藏这些选项。更多模型选项可在设置中调整。配置里列出的模型不代表你的账号一定有访问权限。
 
 输入框中的选择属于当前对话；第一条消息发出前，它属于当前草稿。设置中还可以保存工作区默认值，切换一次对话的模型不会自动替换这些默认值。
 
@@ -40,6 +40,16 @@ GPT-6.1 Sol 支持 `low`、`medium`（默认）、`high`、`xhigh` 和 `max`，�
 GPT-6 Sol 和 Luna 支持 `none` 至 `max` 推理档位，默认 `medium`。Fast 条目使用同一个模型，通过优先处理提供不同速度和价格。对这两个模型，官方 OpenAI 连接未指定协议时，Wuu 默认使用 Responses。如果明确选择了 Chat Completions，使用推理和工具时请切换为 Responses；Chat Completions 仅在 `none` 档位支持它们的工具调用。自定义端点保留原有协议。详见官方 [Sol](https://developers.openai.com/api/docs/models/gpt-6-sol) 和 [Luna](https://developers.openai.com/api/docs/models/gpt-6-luna) 规格。
 
 Claude Opus 5.5 和 Fable 5.1 始终使用自适应思考。Wuu 将已保存的 `none` 选择映射为 `low`，两者默认档位分别为 `medium` 和 `high`。Wuu 请求可读的思考摘要，并允许 API 丢弃因上下文变更而失效的思考块，同时保留有效的签名块。这两个模型不接受强制工具选择，因此 Wuu 通过指令表达收尾工具调用要求，使用自动工具选择；这不保证模型一定调用工具。详见官方 [Opus 5.5](https://platform.claude.com/docs/en/models/opus-5-5/migration-guide) 和 [Fable 5.1](https://platform.claude.com/docs/en/models/fable-5-1/migration-guide) 迁移指南。
+
+## DeepSeek 模型
+
+使用 `deepseek-flash` 调用 DeepSeek V4.1 Flash 1017，或使用 `deepseek-v4-pro` 调用 V4 Pro。官方基础地址为 `https://api.deepseek.com`，Wuu 默认使用 Responses；Anthropic 兼容连接使用 `https://api.deepseek.com/anthropic`。两者均支持 1M 上下文、最多 393,216 token 输出，以及 `none`、`low`、`high`（默认）、`max` 思考档位。Flash 还支持图片输入。
+
+目录不再推荐已下线的 `deepseek-v4-flash` 和 `deepseek-v4-flash-vision-exp`。已有选择使用这两个仍被官方接受的别名时，保留 Flash 能力并解析到最新 `deepseek-flash`；明确配置过的模型选项会保留，直到手动删除。官方目录不再提供已停用的 `deepseek-chat`、`deepseek-reasoner`，保存过这些选择时请改用 `deepseek-flash`。V4 Pro 仍可使用。
+
+DeepSeek 的 Chat Completions 思考模式不接受强制工具选择。Wuu 对这些思考档位使用自动工具选择，`none` 档仍支持强制工具调用。思考模式忽略 temperature；Flash 的 `top_p` 仅在思考模式生效，有效范围为 0.95–1.0，非思考模式固定为 1.0。
+
+目录按**高峰时段美元价格／百万 token**记录：Flash 输入 $0.30、缓存命中 $0.006、输出 $1.20；Pro 输入 $1.32、缓存命中 $0.044、输出 $3.96。空闲时段半价。高峰为北京时间周一至周五 09:00–12:00、14:00–18:00，中国法定节假日除外。这些静态目录价格不计算随时段变化的实际账单。详见官方[模型更新](https://api-docs.deepseek.com/zh-cn/updates)、[接口参数](https://api-docs.deepseek.com/zh-cn/api/create-chat-completion)和[价格说明](https://api-docs.deepseek.com/zh-cn/quick_start/pricing)。
 
 ## 使用已有订阅
 
@@ -78,6 +88,47 @@ wuu exec --provider openai --permission-mode read_only "阅读这个项目，告
 ```
 
 `--provider` 选择已配置的服务标识，`--model` 覆盖本次运行的模型。配置优先级和项目级设置的限制见[配置说明](../reference/configuration.md)。
+
+## 流式响应延迟
+
+Wuu 内置的 HTTP 模型客户端跨回合复用流式连接池。Codex 重新读取凭证时仍保留连接池，
+每个请求继续使用当前凭证。连接、响应头和流空闲超时分别管理，连接复用不会给长回答
+增加总时长限制。
+
+Codex 默认使用 `stream_transport: "auto"`。符合条件的内置会话在创建、恢复或切换模型
+时可提前建立 WebSocket，不提交推理请求。同一连接上的兼容续接使用
+`previous_response_id` 加新增输入；重连、请求选项改变或历史不兼容时恢复发送完整上下文。
+预热只有在连接保持到实际使用时才能移走发送路径上的连接开销，不会消除服务端排队
+或模型计算时间。
+
+WebSocket 在提交前不可用时可回退到 HTTP。请求一旦可能已经提交，后续尝试仍由正常
+恢复计量规则管理。HTTP gzip 是独立的上传优化，不压缩 WebSocket 消息。测试时保留
+原有传输配置：强制使用 SSE 可能失去已有的连接与上下文复用。测量与正确性检查见
+[延迟评估流程](../project/development.md#服务商延迟评估)。
+
+## 实验性 HTTP 请求压缩
+
+HTTP 请求 gzip 默认关闭。只有端点运营方确认支持 `Content-Encoding: gzip` 后，
+才在启动 Wuu 的进程中设置 `WUU_EXPERIMENTAL_REQUEST_GZIP_ENDPOINTS`。
+该变量接受逗号分隔的完整请求 URL，例如：
+
+```bash
+export WUU_EXPERIMENTAL_REQUEST_GZIP_ENDPOINTS="https://gateway.example/v1/responses"
+```
+
+示例域名仅为占位，不表示该服务支持压缩。按实际协议包含完整的 `/responses`、
+`/chat/completions` 或 `/v1/messages` 路径。匹配包含查询字符串；不支持仅填主机名、
+通配符、URL 用户信息或片段。重定向目标也必须显式列入名单。
+兼容 API 格式不意味着支持请求压缩。
+
+此实验仅对至少 64 KiB 的序列化 JSON 使用快速 gzip，并且只有字节数减少时才发送
+压缩结果。这个阈值是实验性选择。请求已有 `Content-Encoding` 头时，不再自动压缩。
+JSON 内容、token 计量、响应流和 WebSocket 行为保持不变。压缩会增加本机 CPU 和
+内存开销；上传字节减少不代表首 token 更快或模型费用更低。
+
+拒绝 gzip 或连接失败时，不会增加额外重试或自动改发未压缩请求；现有恢复规则仍然
+适用。如果端点拒绝该编码，请取消该环境变量并重启 Wuu，再明确决定是否重试。
+此设置作用于 Wuu 的 HTTP 模型客户端，不作用于外部 Agent 引擎。
 
 ## 回合结束与额外请求
 

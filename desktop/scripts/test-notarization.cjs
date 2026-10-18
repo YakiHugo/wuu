@@ -141,3 +141,44 @@ test("ticket stapling preserves final command diagnostics", async (t) => {
   assert.equal(stdout.join(""), failure.stdout);
   assert.equal(stderr.join(""), failure.stderr);
 });
+
+test("accepted notarization resumes without uploading or querying Apple again", async () => {
+  const { notarizeArchive } = require("./notarization.cjs");
+  const dir = mkdtempSync(join(tmpdir(), "wuu-accepted-"));
+  const archive = join(dir, "app.zip"), receipt = join(dir, "receipt.json");
+  writeFileSync(archive, "signed archive");
+  try {
+    await notarizeArchive(archive, receipt, { run: (_cmd, args) => JSON.stringify(args[1] === "submit" ? { id } : { id, status: "Accepted" }) });
+    await notarizeArchive(archive, receipt, { run: () => assert.fail("accepted archive must not contact Apple again") });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("unknown upload outcome remains blocked across process restarts", async () => {
+  const { notarizeArchive } = require("./notarization.cjs");
+  const dir = mkdtempSync(join(tmpdir(), "wuu-unknown-"));
+  const archive = join(dir, "app.zip"), receipt = join(dir, "receipt.json");
+  writeFileSync(archive, "signed archive");
+  try {
+    await assert.rejects(notarizeArchive(archive, receipt, { run: () => { throw networkError(); } }), /upload/i);
+    await assert.rejects(notarizeArchive(archive, receipt, { run: () => assert.fail("must not resubmit an ambiguous upload") }), /unknown/i);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("submission can be durably checkpointed before polling begins", async () => {
+  const { notarizeArchive } = require("./notarization.cjs");
+  const dir = mkdtempSync(join(tmpdir(), "wuu-submit-checkpoint-"));
+  const archive = join(dir, "app.zip"), receipt = join(dir, "app.json");
+  writeFileSync(archive, "signed archive");
+  const calls = [];
+  const run = (_command, args) => {
+    calls.push(args[1]);
+    return JSON.stringify(args[1] === "submit" ? { id } : { id, status: "Accepted" });
+  };
+  try {
+    assert.equal((await notarizeArchive(archive, receipt, { run, submitOnly: true })).status, "Submitted");
+    assert.deepEqual(calls, ["submit"]);
+    assert.equal(JSON.parse(readFileSync(receipt)).id, id);
+    assert.equal((await notarizeArchive(archive, receipt, { run })).status, "Accepted");
+    assert.deepEqual(calls, ["submit", "info"]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

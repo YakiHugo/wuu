@@ -10,6 +10,7 @@ import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { ProcessSurface } from "./ProcessSurface";
+import { ContextCompactionNotice } from "./TurnNotice";
 import {
   PROCESS_SUMMARY_COUNT_DEBOUNCE_MS,
   PROCESS_SUMMARY_COUNT_MAX_WAIT_MS,
@@ -96,6 +97,26 @@ it("keeps its disclosure node and source receipt ledger when live search results
   expect(container.querySelector(".process-surface-fold")).toBe(fold);
   expect(container.querySelector(".process-surface-row")).toBe(summary);
   expect(container.querySelector(".web-source-avatar.is-arriving")).not.toBeNull();
+});
+
+it("announces a running compaction from the summary only while details are closed", () => {
+  const compaction: ThreadItem = { id: "compact-live", type: "context_compaction", status: "in_progress" };
+  const { container } = render({
+    processItems: [compaction], streaming: true,
+    renderProcessItem: item => <ContextCompactionNotice status={item.status} />,
+  });
+  const indicator = container.querySelector(".context-compaction-indicator")!;
+  expect(indicator.getAttribute("role")).toBe("status");
+  expect(indicator.getAttribute("aria-live")).toBe("polite");
+
+  const details = container.querySelector<HTMLDetailsElement>(".process-surface-fold")!;
+  act(() => {
+    details.open = true;
+    details.dispatchEvent(new Event("toggle"));
+  });
+  expect(indicator.getAttribute("role")).toBe("img");
+  expect(indicator.hasAttribute("aria-live")).toBe(false);
+  expect(container.querySelector(".context-compaction-notice")?.getAttribute("aria-live")).toBe("polite");
 });
 
 it.each([
@@ -1024,7 +1045,7 @@ describe("ProcessSurface", () => {
     }
   });
 
-  it("uses the renderReasoningItem callback for reasoning items in the body", () => {
+  it("uses the renderProcessItem callback for reasoning items in the body", () => {
     const { container } = render({
       processItems: [
         makeReadFile("tool-1", "a.ts", "completed"),
@@ -1032,7 +1053,7 @@ describe("ProcessSurface", () => {
         makeReasoning("reason-1", "thinking aloud", "in_progress"),
       ],
       streaming: true,
-      renderReasoningItem: (item, isStreaming) => (
+      renderProcessItem: (item, isStreaming) => (
         <span
           data-testid="reasoning-mock"
           data-streaming={String(isStreaming)}
@@ -1048,7 +1069,7 @@ describe("ProcessSurface", () => {
     expect(mocked[0].getAttribute("data-streaming")).toBe("true");
   });
 
-  it("omits reasoning body items when renderReasoningItem is not provided", () => {
+  it("omits reasoning body items when renderProcessItem is not provided", () => {
     const { container } = render({
       processItems: [
         makeReadFile("tool-1", "a.ts", "completed"),
@@ -1106,7 +1127,7 @@ describe("ProcessSurface", () => {
       const { container } = render({
         processItems: [makeReasoning("reason-1", "thinking aloud", "in_progress")],
         streaming: true,
-        renderReasoningItem: (item) => (
+        renderProcessItem: (item) => (
           <span data-testid="reasoning-mock">{item.id}</span>
         ),
       });
@@ -1131,7 +1152,7 @@ describe("ProcessSurface", () => {
           makeReadFile("tool-2", "last.ts"),
         ],
         streaming: false,
-        renderReasoningItem: item => <span>{item.text}</span>,
+        renderProcessItem: item => <span>{item.text}</span>,
       });
       const text = container.querySelector(".process-surface-body")!.textContent!;
       expect(text.indexOf("first.ts")).toBeLessThan(text.indexOf("middle reasoning"));
@@ -1142,7 +1163,7 @@ describe("ProcessSurface", () => {
       const { container } = render({
         processItems: [makeReasoning("reason-1", "thinking aloud", "completed")],
         streaming: false,
-        renderReasoningItem: item => <span>{item.text}</span>,
+        renderProcessItem: item => <span>{item.text}</span>,
       });
       const details = container.querySelector<HTMLDetailsElement>("details.process-surface-fold")!;
       const layout = stubScrollLayout(details.querySelector<HTMLElement>(".process-surface-body")!, {});
@@ -1154,7 +1175,7 @@ describe("ProcessSurface", () => {
       const { container } = render({
         processItems: [makeReasoning("reason-1", "thinking aloud", "completed")],
         streaming: true,
-        renderReasoningItem: (item) => <span>{item.id}</span>,
+        renderProcessItem: (item) => <span>{item.id}</span>,
       });
       const details = container.querySelector(
         "details.process-surface-fold",
@@ -1181,7 +1202,7 @@ describe("ProcessSurface", () => {
       const { container } = render({
         processItems: [makeReasoning("reason-1", "thinking aloud", "completed")],
         streaming: true,
-        renderReasoningItem: (item) => <span>{item.id}</span>,
+        renderProcessItem: (item) => <span>{item.id}</span>,
       });
       const details = container.querySelector(
         "details.process-surface-fold",
@@ -1221,7 +1242,7 @@ describe("ProcessSurface", () => {
         const { container } = render({
           processItems: [makeReasoning("reason-1", "thinking aloud", "in_progress")],
           streaming: true,
-          renderReasoningItem: item => <span>{item.text}</span>,
+          renderProcessItem: item => <span>{item.text}</span>,
         });
         const details = container.querySelector<HTMLDetailsElement>("details.process-surface-fold")!;
         const body = details.querySelector<HTMLElement>(".process-surface-body")!;

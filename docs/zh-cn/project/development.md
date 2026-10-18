@@ -20,6 +20,12 @@ macOS LaunchServices 启动器也会转发该设置。
 
 `make dev` 运行桌面启动器，在启动 Electron 前构建共享 Web 资源、适用平台的原生辅助程序，以及 TypeScript 插件运行包和当前 Go 核心。应用使用该检出目录的私有 `wuu-core`，不是 `PATH` 中另行安装的 `wuu`。renderer 修改通过 Vite 更新；修改 Go、原生辅助程序或进程启动代码后，应重启启动器，让运行中的进程使用新构建。
 
+在 macOS 上，`make dev` 和 `npm --prefix desktop run dev` 默认启用 Computer Use。可设置 `WUU_ENABLE_CUA_MAC=0` 在本次开发运行中关闭；`dev:direct` 仍可显式启用。使用时仍需 macOS 的辅助功能和屏幕录制权限。
+
+macOS 源码启动器会跨 LaunchServices 保留启动终端的 `PATH`、shell/工具链目录和
+`WUU_<ID>_BINARY` 覆盖值。图形方式打开的安装包会检测常见用户安装位置，并在需要时
+读取登录 shell 路径。在 Wuu 运行期间安装 CLI 后，可点击“设置 → Agent → 刷新”。
+
 桌面安装包在 `Resources/tools` 中内置一份校验过 checksum 的固定版本 ripgrep，并把该目录追加到核心的 `PATH` 末尾，因此即使系统没有安装 `rg`，搜索工具和 agent 的 shell 命令也能使用它；`PATH` 中已有的 `rg` 优先。`make dev` 不会下载它。如需在开发时使用内置版本，先运行一次 `npm --prefix desktop run build:ripgrep`；否则核心使用 `PATH` 中的 `rg`，或回退到内置的搜索实现。
 
 Project Agent 尚属实验功能，默认构建和发布构建均关闭，没有可供用户开启的设置。
@@ -39,7 +45,7 @@ make build-go
 ./bin/wuu --help
 ```
 
-八个内置业务插件使用 `plugins/<id>/src/` 中的 TypeScript 源码。
+九个内置业务插件使用 `plugins/<id>/src/` 中的 TypeScript 源码。
 `make build-plugins` 把独立 JavaScript 运行包生成到内嵌资源目录；`make build-go`、
 `make install` 和桌面核心构建会先重新生成这些资源，再编译 Go。已提交的运行包
 让普通 Go 构建不依赖 npm 安装；`make check-plugins` 会拒绝过期的生成产物。
@@ -80,6 +86,26 @@ make build-go
 构建 core 后，运行 `WUU_BROWSER_OWNERSHIP_CORE=bin/wuu node desktop/scripts/browser-task-ownership-e2e.cjs`，检查真实 Go 执行归属和 Chromium 输入。停止必须中断当前任务；之后的新指令应取得新的操作权限，旧执行 ID 仍须被拒绝。该脚本也覆盖浏览器任务隔离、保留页面、待发送输入期间接管与清理。证据保存在 `desktop/out/browser-task-ownership/`。
 
 这些检查不验证 ScreenCaptureKit、原生应用输入、macOS 权限、系统窗口合成或安装包签名。在启用 Computer Use 的 macOS 构建中，还需检查浏览器 → 原生应用 → 浏览器切换、同一应用的两个窗口、将终端和 Wuu 作为普通目标、隐藏或最小化窗口、目标关闭、屏幕录制权限拒绝或撤销，以及待发送输入期间的接管。隐藏和停止不能退出被观察的应用；停用或替换扩展必须停止它的流。还需检查明暗主题、默认与大字号、减少动态效果，以及输入框附近的拖拽和缩放。`node desktop/scripts/inspect-cua-pip.cjs` 可为运行中的原生预览记录进程/窗口诊断与截图；辅助进程正在运行本身不能证明画面实时有效。
+
+## 外部引擎发现冒烟检查
+
+在 macOS 上构建桌面与核心后，通过 LaunchServices 使用系统 PATH 和临时用户数据
+验证真实设置刷新流程：
+
+```bash
+go build -o desktop/build/bin/wuu-core ./cmd/wuu
+go build -o desktop/build/bin/fakecodex ./internal/codexengine/testdata/fakecodex
+(cd desktop && npx electron-vite build)
+open -n -W -a "$PWD/desktop/node_modules/electron/dist/Electron.app" \
+  --env PATH=/usr/local/bin:/usr/bin:/bin \
+  --args "$PWD/desktop/scripts/engine-discovery-e2e.cjs" --use-mock-keychain
+```
+
+结果写入 `desktop/out/e2e/engine-discovery/result.json`（`open` 不转发应用退出码）。
+检查覆盖启动检测、运行期间安装、真实设置刷新按钮、Codex 原生协议轮次、新增 shell
+目录，以及显式禁用。使用合成 Codex 协议端，要求系统公共目录没有安装 Codex；
+不验证上游登录与推理。可向 `open` 添加 `--env WUU_ENGINE_DISCOVERY_OUTPUT=/absolute/output`
+以保留独立证据目录。
 
 ## 选择相关检查
 
@@ -150,6 +176,69 @@ Connect 和 Refresh 能覆盖尚在排队的启动任务。它不使用真实凭
 此夹具通过运行时显式注入 OAuth 服务，不验证 macOS Keychain 或桌面 UI。
 结果、连接标识与 RPC 记录默认写入 `.tmp/e2e/mcp-auth-reload/`；可用
 `WUU_MCP_AUTH_E2E_OUTPUT` 指定其他证据目录。
+
+### 服务商延迟评估
+
+内置服务商分别减少连接准备和上传工作：每个服务商持有一个流式 HTTP 客户端与连接池；
+Codex、Grok Build 和 SuperGrok 凭证适配器共享连接池，但逐请求重建认证信息。自定义 HTTP transport 保留代理与
+超时行为。Codex `auto` 可复用预热的 WebSocket，并在兼容续接时只发送历史增量。
+gzip 仍是按端点显式开启的 HTTP 请求体实验；API 格式兼容不代表支持压缩。
+这些机制保留载荷语义、取消与提交计量约束，运行边界见
+[模型服务说明](../getting-started/model-services.md#流式响应延迟)。
+
+用已配置的服务商标识运行可复用的真实服务评估：
+
+```sh
+mkdir -p .tmp/provider-latency
+go run ./scripts/provider-latency-e2e -provider openai-codex -transport sse \
+  -records 320 -repeats 2 -turns 2 -label candidate \
+  > .tmp/provider-latency/candidate.jsonl
+python3 scripts/provider-latency-e2e/score.py .tmp/provider-latency/*.jsonl
+```
+
+它通过正常路径读取本机凭证，只发送生成的仓库记录，可能产生费用，不修改已保存配置。
+`-records 0` 测短历史，`-tool` 执行合成工具并核对结果，默认强制首个工具调用。
+端点拒绝强制调用时，增加 `-force-tool=false` 测普通自动选择；两种策略分开统计。比较
+`-transport websocket`（完整上下文）与 `-transport auto`（符合条件的增量），再用
+`-prewarm` 测量预热后的发送延迟；预热耗时单独记录。`-gzip-endpoint` 为当前进程指定
+一个完整请求 URL；未传入时会清除评估进程继承的 gzip 设置。失败会停止同一会话的后续
+依赖回合，其他重复样本仍继续。
+
+JSONL 包含夹具哈希、模型、负载、期限、正确性、首字、首个可用文本或工具调用、完成、
+DNS/TLS 与 HTTP 时间、HTTP 暴露 Content-Length 时的请求体大小、连接复用、WebSocket
+续接状态、提交次数及服务商报告的 token 用量。不包含凭证、原始错误、提示词或模型思考。
+缺失计时是未知，不表示没有开销。范围覆盖真实 Agent 循环、工具执行和服务商；不包含
+桌面 IPC 与绘制。请求写完时间包含本机准备、连接和上传，HTTP 首字节还包含服务端工作；
+探针不能独立分离服务端排队与模型预填充。
+
+基线与候选使用同一 runner、依赖和机器，随报告保留源码提交、补丁、runner 与可执行文件
+哈希。链接 worktree 建议使用 `go build -buildvcs=false`，配合
+`-ldflags='-X main.sourceRevision=<commit> -X main.sourceDiff=<patch-sha256>'`；核对声明
+与实际源码，仅在服务商基线没有改动时填 `none`。用相同提示词、effort、期限和工具策略
+交错运行 A/B/B/A，分别统计首轮与后续轮、服务商/模型、短长历史和工具循环。
+不要混合真实网络、请求体节流、注入延迟或性能采样结果。记录提示缓存用量，服务端缓存
+与负载可能主导结果。
+
+评分脚本的正确性分为 `100 × 通过数 / 计划数`。通过要求回答符合预期、工具结果正确、
+没有截断且提交次数符合预期。恢复导致的额外提交即使最终回答正确，也不通过这一严格
+约束。未执行的依赖回合仍计入计划分母。延迟指数为 `100 × 基线 / 候选`，比较首字平均
+时间，失败和未执行回合按完整期限计入。基线为标签 `baseline` 的未压缩 SSE，按负载和
+回合匹配，全部通过正确性检查后才输出指数。高于 100 表示该样本更快；同时检查成功样本
+的 P50/P90、完成时间及失败。小样本不能证明尾延迟或整体产品分数。
+
+用 `-list-providers` 列出已配置的名称和模型，不输出凭证。测试命令调度时，
+对已配置的 DeepSeek 或 Codex 增加 `-shell-workload -repeats 3 -timeout 120s`。
+增加 `-shell-delay 0s` 可运行短命令对照。这个独立负载不使用合成历史、合成工具和预热参数。真实模型执行白名单内的 PTC
+程序，并行运行 25 秒 shell 夹具与独立读取，再在第二轮读取最终结果。runner 检查
+只启动一次、两次回答、工具次数、完成所属会话，以及后台转交前后的输出。报告分别
+记录首个回答的 `ready_ms`、最终验证的 `total_ms`，以及各工具执行与
+`queue_wait_ms`（旧基线为未知）。完成事件来自真实进程管理器，由 runner 启动
+第二次模型轮次；不覆盖桌面通知交付。传输评分脚本不为此负载评分，应按服务商和
+版本比较 JSONL。首个回答更早不代表构建更早完成。前后使用同一 runner，并保留失败记录。
+
+本机原始报告放在忽略的产物目录。公开性能结论需要在 [evals](../../../evals/README.md)
+提交完整且来源干净的记录。CI 应检查确定性的连接复用、载荷与重定向契约、预热/增量、
+取消和恢复行为，不依赖真实服务耗时阈值或凭证。
 
 ### 工作区 PDF 预览
 
@@ -369,6 +458,11 @@ fake Codex 子进程，并使用临时存储，不使用供应商凭据或真实
 `WUU_HISTORY_E2E_OUTPUT` 更改目录。这验证应用服务器协议，不代表桌面渲染
 或真实供应商 CLI 已通过验收。
 
+### 下一句建议验收
+
+`make test-plugins` 包含 next-message 已交付 JSONL 运行时和桌面 provider 生命周期契约。先运行 `make build-go`，再运行 `node scripts/next-message-model-e2e.mjs`，可验证真实插件 → Go 模型服务 → HTTP 传输链路。它仅使用本机回环合成提供商，检查 token、输入、取消和用量记录，证据保存到 `.tmp/e2e/next-message-model/`，可用 `WUU_NEXT_MESSAGE_E2E_OUTPUT` 覆盖。
+
+构建桌面后运行 `cd desktop && electron scripts/next-message-e2e.cjs`，可用生产 App 和插件、合成轮次、模拟模型回复检查按键、工作区路由、设置，以及亮暗主题、宽窄窗口、默认和大字号；保存截图和实际捕获的录制帧。Linux 需要 Xvfb 等图形显示服务；仅在需要的可丢弃测试环境中使用 `--no-sandbox`。`WUU_NEXT_MESSAGE_E2E_OUTPUT` 可指定证据目录。这些检查不评估真实模型建议质量和提供商费用。
 ### 真实会话样本验收
 
 运行 `npm --prefix desktop run test:e2e:conversation-corpus`，构建当前 checkout，

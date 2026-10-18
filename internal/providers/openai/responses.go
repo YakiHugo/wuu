@@ -99,8 +99,7 @@ func (c *Client) responsesStreamChatSSE(ctx context.Context, payload responsesRe
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	streamClient := newStreamingHTTPClient(c.httpClient, c.streamConfig)
-	resp, lease, err := c.doSingleResponsesRequest(ctx, streamClient, body, true, payload.ExtraHeaders, payload.Attempt, payload.SubmissionReason)
+	resp, lease, err := c.doSingleResponsesRequest(ctx, c.streamHTTPClient, body, true, payload.ExtraHeaders, payload.Attempt, payload.SubmissionReason)
 	if err != nil {
 		return nil, err
 	}
@@ -864,6 +863,11 @@ func (c *Client) doSingleResponsesRequest(
 	if strings.TrimSpace(submissionReason) != "" {
 		mode = "fallback"
 	}
+	httpClient, err = providers.PrepareRequestCompression(httpReq, body, httpClient)
+	if err != nil {
+		return nil, nil, fmt.Errorf("prepare request body: %w", err)
+	}
+
 	lease, err := c.coordinator.AcquireForAttempt(ctx, c.providerScope, attempt)
 	if err != nil {
 		return nil, nil, err

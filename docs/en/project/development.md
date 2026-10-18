@@ -22,6 +22,13 @@ The override is also forwarded through the macOS LaunchServices launcher.
 
 `make dev` runs the desktop launcher. It builds the shared Web assets, native helper where applicable, and TypeScript plugin runtime bundles and the current Go core before starting Electron. The app uses that checkout's private `wuu-core`, not a separately installed `wuu` on `PATH`. Renderer changes use Vite updates; restart the launcher after changing Go, native helpers, or process-startup code so the running processes use the new build.
 
+On macOS, `make dev` and `npm --prefix desktop run dev` enable Computer Use by default. Set `WUU_ENABLE_CUA_MAC=0` to disable it for a development run. `dev:direct` remains available to explicitly enable it. macOS Accessibility and Screen Recording permissions still apply.
+
+macOS source launches preserve the invoking terminal's `PATH`, shell/toolchain
+locations, and `WUU_<ID>_BINARY` overrides across LaunchServices. Packaged graphical
+launches discover standard user install locations and, when needed, login-shell
+paths. After installing a CLI while Wuu is running, use Settings → Agents → Refresh.
+
 Desktop packages bundle a checksum-pinned ripgrep in `Resources/tools` and append that directory to the core's `PATH`, so search tools and agent shell commands have `rg` even when the system lacks it; an `rg` already on `PATH` takes precedence. `make dev` does not download it. Run `npm --prefix desktop run build:ripgrep` once to use the bundled copy in development; otherwise the core uses `rg` from `PATH` or its built-in search fallback.
 
 Project Agent is experimental and disabled in default and release builds. It
@@ -43,7 +50,7 @@ make build-go
 ./bin/wuu --help
 ```
 
-The eight bundled business plugins are TypeScript source under `plugins/<id>/src/`.
+The nine bundled business plugins are TypeScript source under `plugins/<id>/src/`.
 `make build-plugins` emits self-contained JavaScript into the embedded package assets;
 `make build-go`, `make install`, and desktop core builds regenerate those assets before
 compiling Go. The checked-in bundles keep plain Go builds reproducible without an npm
@@ -83,6 +90,28 @@ unconfirmed input in the production UI. It checks read-only recovery, complete
 clipboard content, ordinary held input controls, and wide/default-font and
 narrow/large-font layouts. Results and screenshots are saved to
 `desktop/out/e2e/native-steering/`; set `WUU_STEER_UI_OUTPUT` to override it.
+
+## External engine discovery smoke check
+
+On macOS, build the desktop and core, then exercise the real settings refresh
+flow through LaunchServices with a system-only PATH and disposable user data:
+
+```bash
+go build -o desktop/build/bin/wuu-core ./cmd/wuu
+go build -o desktop/build/bin/fakecodex ./internal/codexengine/testdata/fakecodex
+(cd desktop && npx electron-vite build)
+open -n -W -a "$PWD/desktop/node_modules/electron/dist/Electron.app" \
+  --env PATH=/usr/local/bin:/usr/bin:/bin \
+  --args "$PWD/desktop/scripts/engine-discovery-e2e.cjs" --use-mock-keychain
+```
+
+Read `desktop/out/e2e/engine-discovery/result.json` for the result (`open` does not
+forward the app's exit status). The check covers startup detection, installation
+while running, the real Settings refresh button, a native Codex protocol turn,
+new shell directories, and explicit disable. It uses a synthetic Codex peer and
+requires no system-wide Codex installation; it does not test upstream login or
+inference. Use `open --env WUU_ENGINE_DISCOVERY_OUTPUT=/absolute/output` to keep
+separate evidence folders.
 
 ## Choose the relevant checks
 
@@ -135,6 +164,25 @@ copied `<code>` text, and keep the card height when the reply settles. It uses
 the same self-started fixture server across both themes, 1000/420px windows and
 15/20px text. Measurements and screenshots go to `desktop/out/stream-code-cursor/`
 (`WUU_CODE_CURSOR_OUTPUT` overrides this).
+
+### Next-message suggestion acceptance
+
+`make test-plugins` includes the shipped next-message JSONL runtime and desktop
+provider lifecycle contracts. For the real plugin → Go model service → HTTP
+transport chain, build the core with `make build-go` and run
+`node scripts/next-message-model-e2e.mjs`. This starts only a loopback synthetic
+provider, checks token/input limits, cancellation and accounting, and writes
+receipts under `.tmp/e2e/next-message-model/` (`WUU_NEXT_MESSAGE_E2E_OUTPUT` overrides it).
+
+After `npm --prefix desktop run build`, run
+`cd desktop && electron scripts/next-message-e2e.cjs`. The fixture mounts the
+production App and plugin with synthetic turns and mocked model replies. It
+checks keyboard behavior, workspace routing, settings and light/dark,
+wide/narrow, default/large text, retaining screenshots and a captured-frame
+recording. Linux needs a graphical display such as Xvfb; use `--no-sandbox` only
+in a disposable test environment that requires it. Set `WUU_NEXT_MESSAGE_E2E_OUTPUT`
+to choose the evidence directory. These checks do not evaluate live-model
+suggestion quality or provider billing.
 
 ### Live activity preview acceptance
 
@@ -192,6 +240,93 @@ The fixture uses the runtime's explicit OAuth-service injection; it does not tes
 macOS Keychain or the desktop UI. Receipts, connection identities and RPC output
 are saved under `.tmp/e2e/mcp-auth-reload/`; set `WUU_MCP_AUTH_E2E_OUTPUT` to use
 another evidence directory.
+
+### Provider latency evaluation
+
+The built-in provider path minimizes setup and upload work independently: one
+streaming HTTP client per provider owns its pool; Codex, Grok Build and SuperGrok
+credential adapters share that pool while rebuilding authentication per request. Custom HTTP transports
+retain their proxy and deadline behavior. Codex `auto` can reuse a prewarmed
+WebSocket and send a history delta on compatible continuations. Gzip remains an
+explicit endpoint experiment for HTTP bodies; API compatibility alone cannot
+establish support. These mechanisms preserve payload meaning, cancellation and
+submission accounting. The [model-service guide](../getting-started/model-services.md#streaming-latency)
+describes their operating boundaries.
+
+Run the reusable real-provider evaluation with a configured provider identifier:
+
+```sh
+mkdir -p .tmp/provider-latency
+go run ./scripts/provider-latency-e2e -provider openai-codex -transport sse \
+  -records 320 -repeats 2 -turns 2 -label candidate \
+  > .tmp/provider-latency/candidate.jsonl
+python3 scripts/provider-latency-e2e/score.py .tmp/provider-latency/*.jsonl
+```
+
+This uses normal local credential resolution and sends only generated repository
+records. It can incur charges. It does not edit saved configuration. `-records 0`
+measures short histories; `-tool` executes a synthetic tool and checks its result.
+It forces the first tool call by default; add `-force-tool=false` to test normal
+auto choice on endpoints that reject forced calls. Keep those policies separate.
+Compare `-transport websocket` (full context) with `-transport auto` (eligible
+deltas), and add `-prewarm` to measure send latency after setup. Prewarm duration
+is reported separately. `-gzip-endpoint` accepts one exact request URL for that
+process only; omission clears any inherited gzip opt-in for the evaluation.
+Failures stop dependent turns in that conversation but preserve other repeats.
+
+JSONL includes the fixture hash, model, workload, deadline, correctness, first
+text, first usable text/tool call, completion, DNS/TLS and HTTP timing, body sizes
+when HTTP exposes Content-Length, connection reuse, WebSocket replay state,
+submission counts and reported token usage. It excludes credentials, raw errors,
+prompts and model reasoning. Missing timing fields are unknown, not zero-cost
+work. This covers the real agent loop, tool execution and provider; desktop IPC
+and painting are outside the measurement. Request-written time includes local
+preparation, connection and upload; first HTTP byte also includes server work.
+The probe does not claim to isolate server queueing from model prefill.
+
+Build baseline and candidate with the same runner, dependencies and machine.
+Keep the source revision, patch, runner and executable hashes with the reports.
+For linked worktrees, prefer `go build -buildvcs=false` with
+`-ldflags='-X main.sourceRevision=<commit> -X main.sourceDiff=<patch-sha256>'`:
+verify the declared source against the checkout, and use `none` only for an
+unmodified provider baseline. Interleave A/B/B/A runs with equal prompts, effort,
+deadlines and tool policy. Separate first and subsequent turns, provider/model,
+short/long histories and tool loops. Do not combine WAN measurements with body
+pacing, injected network delay or profiled runs. Report prompt-cache usage because
+backend caches and load can dominate the result.
+
+The scorer reports correctness as `100 × passed / planned`. A pass requires the
+expected answer, tool result where applicable, no truncation and the expected
+submission count. An extra recovered submission fails this strict contract even
+if the eventual answer is correct. Missing dependent turns remain in the planned
+denominator. The latency index is `100 × baseline / candidate` using mean
+first-text time, charging a full deadline for failed or unrun turns. The baseline
+is uncompressed SSE with label `baseline`, matched by workload and turn; it must
+pass its correctness gate before an index is emitted. Higher than 100 means
+faster for that sample. Also inspect successful P50/P90, completion and failures;
+a small sample does not establish tail latency or a general product score.
+
+Use `-list-providers` to list configured names and models without credentials.
+For command scheduling, add `-shell-workload -repeats 3 -timeout 120s` with either
+configured DeepSeek or Codex. Add `-shell-delay 0s` for the short-command control.
+This separate workload ignores the synthetic
+history/tool/prewarm flags. A real model runs an allowlisted PTC program with a
+25-second shell fixture and an independent read, then reads the final result
+in a second turn. The runner verifies one launch, both answers, tool counts,
+completion ownership and output before/after a background handoff. It reports
+`ready_ms` for the first answer separately from `total_ms` for final verification,
+plus per-tool execution and `queue_wait_ms` (unknown on older baselines).
+Completion reaches the runner through the real process manager; the runner then
+starts the second model turn. Desktop notification delivery is outside this probe.
+The transport scorer does not score this workload. Compare its JSONL records by
+provider and revision; an earlier first answer does not mean the build finished
+sooner. Use the same runner on both revisions and retain failures in the report.
+
+Local raw reports belong in ignored output directories. Public performance claims
+require a complete clean-source record under [evals](../../../evals/README.md).
+CI should gate deterministic connection reuse, payload/redirect contracts,
+prewarm/delta behavior, cancellation and recovery, rather than live wall-clock
+thresholds or credentials.
 
 ### Workspace PDF preview
 

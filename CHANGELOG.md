@@ -12,6 +12,40 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 - Switch popped-out conversations to a compact window and back without replacing the conversation or losing unsent input.
 
+### Removed
+
+- Remove the workspace new page's Continue viewing section, which duplicated
+  files, diffs, and artifacts already available in the tab strip.
+
+## [2026.10.18] - 2026-10-18
+
+### Contributors
+
+@blueberrycongee
+
+### Highlights
+
+- Refresh external agent discovery after CLI installation and offer detected Codex and Grok logins together during setup, while preserving current settings and other connection options.
+- Let independent tools proceed while long foreground commands continue in the background, with output and completion notifications preserved.
+- Restore next-message suggestions after clearing or undoing an accepted draft, preserve composer focus on Tab, and improve natural continuations.
+- Refine rounded settings and sidebar layouts, align workspace and branch labels, keep compaction indicators on long summaries, and unify Markdown document previews.
+- Keep the macOS Dock icon visible with the desktop pet, and make the permission guide follow window movement while avoiding system dialogs.
+- Synchronize workspace switches with a clear success notice and simplify Automations around existing tasks and completed runs.
+
+## [2026.10.17] - 2026-10-17
+
+### Contributors
+
+@blueberrycongee, @Rosemary1812
+
+### Highlights
+
+- Add optional next-message suggestions for main and side chats, with independent model and reasoning settings and Tab-to-insert drafts.
+- Show context compaction alongside tool activity with paired token rings, before/after counts, and expandable details.
+- Refine the rounded conversation canvas with compact headers, centered workspace tabs, responsive sidebar resizing, readable workspace labels, and streaming scroll fades.
+- Reuse streaming model connections across turns and keep Claude provider errors in the conversation notice without duplicating assistant replies.
+- Refresh DeepSeek Flash 1017 availability, output limits, and pricing while preserving saved model aliases.
+
 ## [2026.10.16] - 2026-10-16
 
 ### Contributors

@@ -12,7 +12,7 @@ These settings apply to the **Wuu** engine. Selecting an [external engine](exter
 4. Save the provider, return to the composer, and select the provider and model for the conversation.
 5. Send a small request that includes a tool call, such as reading a project file, to check more than text-only replies.
 
-The first-run form offers a simpler connection setup. Use Settings for a custom endpoint and additional model options. A model listed in a configuration is not a guarantee that your account can access it.
+First-run setup lists detected local Codex and Grok logins together. Select a login to connect it and use it as the default model service, or connect another service. Existing connections do not hide these choices. Use Settings for additional model options. A model listed in a configuration is not a guarantee that your account can access it.
 
 The composer's selection belongs to the conversation, or to the draft before its first message. Settings also lets you set workspace defaults; changing a conversation's model does not silently replace those defaults.
 
@@ -42,6 +42,16 @@ To use GPT-6.1 Sol through an existing Codex subscription, reuse your local Code
 GPT-6 Sol and Luna support reasoning levels from `none` through `max`, defaulting to `medium`. Their Fast entries use the same model with priority processing and a different price. Wuu defaults an unspecified official OpenAI connection to Responses for these models. If you explicitly selected Chat Completions, choose Responses for reasoning with tools; Chat Completions supports their tool calls only at `none`. Custom endpoints retain their configured transport. See the official [Sol](https://developers.openai.com/api/docs/models/gpt-6-sol) and [Luna](https://developers.openai.com/api/docs/models/gpt-6-luna) specifications.
 
 Claude Opus 5.5 and Fable 5.1 always use adaptive thinking. Wuu maps a saved `none` selection to `low`; their defaults are `medium` and `high`, respectively. Wuu requests readable thinking summaries and lets the API drop thinking blocks invalidated by context changes while retaining valid signed blocks. These models reject forced tool choice, so Wuu expresses a required closing tool call as an instruction with automatic tool selection; this does not guarantee that the model calls it. See the official [Opus 5.5](https://platform.claude.com/docs/en/models/opus-5-5/migration-guide) and [Fable 5.1](https://platform.claude.com/docs/en/models/fable-5-1/migration-guide) migration guides.
+
+## DeepSeek models
+
+Use `deepseek-flash` for DeepSeek V4.1 Flash 1017, or `deepseek-v4-pro` for V4 Pro. The official base URL is `https://api.deepseek.com`; Wuu defaults these models to Responses. Anthropic-compatible connections use `https://api.deepseek.com/anthropic`. Both models have a 1M context window, a maximum output of 393,216 tokens, and reasoning levels `none`, `low`, `high` (default), and `max`. Flash also accepts images.
+
+The catalog no longer advertises the retired `deepseek-v4-flash` and `deepseek-v4-flash-vision-exp` models. Saved selections using these accepted aliases retain Flash capabilities and resolve to the latest `deepseek-flash`; explicitly configured model choices remain until you remove them. The discontinued `deepseek-chat` and `deepseek-reasoner` IDs are not offered by the official catalog; replace saved selections with `deepseek-flash`. V4 Pro remains available.
+
+In Chat Completions thinking mode, DeepSeek rejects forced tool choice. Wuu uses automatic tool selection for these reasoning variants; `none` retains forced tool support. Thinking mode ignores temperature. For Flash, `top_p` only takes effect while thinking, with an effective range of 0.95–1.0; outside thinking it is fixed at 1.0.
+
+Catalog prices use **peak USD rates per million tokens**: Flash input $0.30, cached input $0.006, output $1.20; Pro input $1.32, cached input $0.044, output $3.96. Off-peak rates are half. Peak hours are Monday–Friday 01:00–04:00 and 06:00–10:00 UTC, excluding Chinese public holidays. These static catalog rates do not calculate a time-dependent bill. See the official [model update](https://api-docs.deepseek.com/updates), [API parameters](https://api-docs.deepseek.com/api/create-chat-completion), and [pricing](https://api-docs.deepseek.com/quick_start/pricing).
 
 ## Use an existing subscription
 
@@ -105,6 +115,57 @@ wuu exec --provider openai --permission-mode read_only "Read this project and ex
 ```
 
 `--provider` selects a configured identifier, and `--model` overrides the model for this run. See [configuration](../reference/configuration.md) for precedence and the limits on project-level settings.
+
+## Streaming latency
+
+Wuu's built-in HTTP model clients reuse a streaming connection pool across turns.
+The pool survives Codex credential reloads; each request still uses the current
+credentials. Connect, response-header and stream-idle deadlines remain separate,
+so connection reuse does not impose a total timeout on a long answer.
+
+Codex defaults to `stream_transport: "auto"`. In eligible built-in sessions,
+thread creation, resume and model changes can prewarm its WebSocket before the
+next send, without submitting an inference request. A compatible continuation
+on the same connection sends `previous_response_id` plus new input. Reconnection,
+changed request options or incompatible history require full context again.
+Prewarming removes setup from the send path only when that connection survives
+until use; it does not remove provider queueing or model computation.
+
+An unavailable WebSocket can fall back to HTTP before submission. Once a request
+may have been submitted, normal recovery accounting governs any further attempt.
+HTTP gzip is a separate upload optimization and does not compress WebSocket
+messages. Keep the configured transport when testing it: forcing SSE can lose
+existing connection and context reuse. See the [latency evaluation workflow](../project/development.md#provider-latency-evaluation)
+for measurements and correctness checks.
+
+## Experimental HTTP request compression
+
+HTTP request gzip is disabled by default. To test an endpoint whose operator has
+confirmed it accepts `Content-Encoding: gzip`, set
+`WUU_EXPERIMENTAL_REQUEST_GZIP_ENDPOINTS` in the process that launches Wuu. Use a
+comma-separated list of exact, complete request URLs, for example:
+
+```bash
+export WUU_EXPERIMENTAL_REQUEST_GZIP_ENDPOINTS="https://gateway.example/v1/responses"
+```
+
+This example is a placeholder, not a claim of endpoint support. Include the full
+`/responses`, `/chat/completions`, or `/v1/messages` path as applicable. Matching
+includes the query string; host-only values, wildcards, URL userinfo and fragments
+are not supported. Redirect destinations must also be explicitly listed.
+API-format compatibility does not imply request-compression support.
+
+The experiment uses fast gzip for serialized JSON bodies of at least 64 KiB,
+only when it reduces bytes. The cutoff is experimental. Existing
+`Content-Encoding` headers disable automatic compression for that request.
+JSON content, token accounting, response streaming and WebSocket behavior stay
+unchanged. Compression adds local CPU and memory work; fewer uploaded bytes do
+not establish lower time to first token or lower model charges.
+
+No extra retry or uncompressed resend is added for rejected gzip or connection
+failures. Existing recovery rules still apply. If the endpoint rejects the
+encoding, unset the variable and restart Wuu before retrying deliberately.
+This setting applies to Wuu's HTTP model clients, not external agent engines.
 
 ## Turn completion and extra requests
 
