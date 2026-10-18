@@ -8,6 +8,11 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ## [Unreleased]
 
+### Added
+
+- Keep independent activity previews for multiple browser tabs and native windows
+  in one conversation, with up to five visible cards and individual dismissal.
+
 ### Removed
 
 - Remove the workspace new page's Continue viewing section, which duplicated
@@ -23,6 +28,8 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
   including previously affected forks, while preserving their conversation history.
 - Hide live activity previews while image viewers or dialogs are open, then
   restore eligible previews without interrupting background tasks.
+- Keep retained native previews from taking focus or restoring windows now owned
+  by another task when activity control changes.
 - Keep right-to-left paragraphs, headings, and quotes in messages aligned
   and selectable in their natural direction while inline code, code blocks,
   and tool output remain left-to-right.
