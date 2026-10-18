@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import type { ProviderSummary } from "../shared/protocol";
 import { ChatGPTLogin } from "./ChatGPTLogin";
+import { ConnectionPage } from "./ConnectionPage";
 import { Modal } from "./Modal";
 import { ProviderMark } from "./ProviderMarks";
 import { SelectMenu } from "./SelectMenu";
 import type { SaveProvider } from "./ModelServicesPage";
 import { useI18n } from "./i18n";
 
-export function ChatGPTConnectionDialog({ providers, running, defaultOn, onSave, onClose, onConnected, onProvidersChanged }: {
+export function ChatGPTConnectionDialog({ providers, running, defaultOn, onSave, onClose, onConnected, onProvidersChanged, inline = false }: {
   providers: readonly ProviderSummary[];
   running: boolean;
   defaultOn: boolean;
@@ -15,6 +16,7 @@ export function ChatGPTConnectionDialog({ providers, running, defaultOn, onSave,
   onClose: () => void;
   onConnected: (name: string) => void;
   onProvidersChanged?: (providers: ProviderSummary[]) => void;
+  inline?: boolean;
 }): JSX.Element {
   const { t } = useI18n();
   const [accounts, setAccounts] = useState<Awaited<ReturnType<typeof window.wuu.listChatGPTAccounts>>["accounts"]>([]);
@@ -69,9 +71,10 @@ export function ChatGPTConnectionDialog({ providers, running, defaultOn, onSave,
     finally { saving.current = false; setBusy(false); }
   }
   function authenticated(id: string): void { setAccountId(id); setRevision(value => value + 1); }
-  return <Modal title={t("provider.connectTitle", { name: "ChatGPT" })} ariaLabel={t("provider.connectTitle", { name: "ChatGPT" })}
+  const Surface = inline ? ConnectionPage : Modal;
+  return <Surface title={t("provider.connectTitle", { name: "ChatGPT" })} ariaLabel={t("provider.connectTitle", { name: "ChatGPT" })}
     icon={<ProviderMark id="openai" label="ChatGPT" />} panelClassName="model-dialog model-connect-dialog" closeDisabled={busy} onClose={onClose} asForm onSubmit={() => void save()}
-    footer={<><button type="button" className="settings-button settings-button-ghost" disabled={busy} onClick={onClose}>{t("common.cancel")}</button>
+    footer={<>{inline ? null : <button type="button" className="settings-button settings-button-ghost" disabled={busy} onClick={onClose}>{t("common.cancel")}</button>}
       <button type="submit" className="settings-button settings-button-primary" data-testid="settings-provider-connect" disabled={!canSave}>{t(busy ? "provider.connecting" : "provider.connectAction")}</button></>}>
     <div className="model-connect-body">
       {accounts.length ? <div className="model-connect-field"><span>{t("provider.chatgptAccount")}</span><SelectMenu value={accountId} disabled={busy || signingIn}
@@ -89,5 +92,5 @@ export function ChatGPTConnectionDialog({ providers, running, defaultOn, onSave,
       {authNotice ? <p className="settings-muted-line" role="status">{authNotice}</p> : null}
       {error ? <p className="settings-error" role="alert">{error}</p> : null}
     </div>
-  </Modal>;
+  </Surface>;
 }

@@ -75,8 +75,6 @@ async function openSettingsPage(win, page) {
 }
 async function openProviderCatalog(win) {
   await click(win, '[data-testid="settings-connection-add"]');
-  await waitFor(win, () => document.querySelector('[data-testid="settings-connection-add-provider"]'));
-  await click(win, '[data-testid="settings-connection-add-provider"]');
   await waitFor(win, () => document.querySelector('.model-browse-dialog'));
 }
 const type = (win, selector, value) => evaluate(win, ({ target, text }) => {
@@ -106,7 +104,13 @@ async function setAppearance(win, { theme, size, width }) {
     document.documentElement.style.setProperty('--appearance-scale', String(size / 14));
     document.documentElement.style.setProperty('--conversation-message-font-size', `${size}px`);
   }, { theme, size });
-  assert.equal(await evaluate(win, () => parseFloat(getComputedStyle(document.querySelector('.model-service-card-title')).fontSize)), size, 'The layout matrix must use the requested UI font size.');
+  const renderedFontSize = await evaluate(win, () => {
+    const label = [...document.querySelectorAll('.settings-page .model-service-card-title, .settings-page .settings-row-label-title')]
+      .find(node => node.getBoundingClientRect().width > 0 && node.getBoundingClientRect().height > 0);
+    if (!label) throw new Error('Layout matrix requires a visible connection or settings row label.');
+    return parseFloat(getComputedStyle(label).fontSize);
+  });
+  assert.equal(renderedFontSize, size, 'The layout matrix must use the requested UI font size.');
 }
 // A settings column can itself overflow the viewport. Check both boundaries
 // so narrow-window regressions cannot pass merely because the parent grew.
@@ -144,7 +148,7 @@ const timeout = setTimeout(() => { console.error('E2E timeout', fixture); app.ex
 async function run() {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const endpoint = `http://127.0.0.1:${server.address().port}/v1`;
-  const engines = Object.fromEntries(['codex', 'claude', 'cursor', 'devin', 'grok', 'hermes', 'pi', 'opencode', 'antigravity'].map(id => [id, { enabled: false }]));
+  const engines = Object.fromEntries(['codex', 'claude', 'cursor', 'devin', 'dsh', 'grok', 'hermes', 'pi', 'opencode', 'antigravity'].map(id => [id, { enabled: false }]));
   fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({
     default_provider: 'fixture', engines,
     providers: { fixture: { type: 'openai-compatible', base_url: endpoint, api_key: 'fixture-only', model: 'fixture' } },
@@ -175,37 +179,38 @@ async function run() {
   await openProviderCatalog(main);
   await waitFor(main, () => Boolean(document.querySelector('.model-browse-dialog')));
   await capture(main, '01b-grouped-catalog.png');
-  assert.ok(await evaluate(main, () => Boolean(document.querySelector('.model-browse-dialog [data-catalog-group="api"]'))));
-  assert.ok(await evaluate(main, () => Boolean(document.querySelector('.model-browse-dialog [data-catalog-group="relay"]'))));
   await type(main, '.model-browse-dialog input[type="search"]', '  DEEPSEEK  ');
   await waitFor(main, () => document.querySelectorAll('.model-browse-dialog [data-catalog]').length === 1);
   assert.equal(await evaluate(main, () => document.querySelector('.model-browse-dialog [data-catalog]').dataset.catalog), 'deepseek');
   await type(main, '.model-browse-dialog input[type="search"]', 'no-such-service-e2e');
   await waitFor(main, () => document.querySelectorAll('.model-browse-dialog [data-catalog], .model-browse-dialog [data-subscription]').length === 0);
-  assert.ok(await evaluate(main, () => Boolean(document.querySelector('.model-browse-dialog .environment-dialog-footer button'))));
-  main.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' });
-  main.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' });
-  await waitFor(main, () => !document.querySelector('[role="dialog"]'));
+  assert.ok(await evaluate(main, () => Boolean(document.querySelector('[data-testid="settings-provider-custom"]'))));
+  await click(main, '[data-testid="settings-connection-back"]');
+  await waitFor(main, () => document.querySelector('[data-testid="settings-connection-add"]'));
   await openProviderCatalog(main);
-  await waitFor(main, () => document.querySelector('.model-browse-dialog input[type="search"]')?.value === '');
+  await type(main, '.model-browse-dialog input[type="search"]', 'deepseek');
   await click(main, '.model-browse-dialog [data-catalog="deepseek"]');
   await waitFor(main, () => Boolean(document.querySelector('.model-connect-dialog')));
-  assert.equal(await evaluate(main, () => Boolean(document.querySelector('.model-browse-dialog'))), false);
-  await click(main, '.model-connect-dialog .environment-dialog-header .icon-button');
-  await waitFor(main, () => !document.querySelector('[role="dialog"]'));
+  assert.equal(await evaluate(main, () => Boolean(document.querySelector('[role="dialog"]'))), false, 'Connection navigation stays in the page.');
+  assert.equal(await evaluate(main, () => Boolean(document.querySelector('[data-testid="settings-provider-card"]'))), false, 'Configuration replaces the overview.');
+  await click(main, '.model-connect-dialog [data-testid="settings-connection-back"]');
+  await waitFor(main, () => document.querySelector('.model-browse-dialog input[type="search"]')?.value === 'deepseek');
+  assert.equal(await evaluate(main, () => document.querySelectorAll('.model-browse-dialog [data-catalog]').length), 1, 'Back preserves catalog filtering.');
+  await click(main, '[data-testid="settings-connection-back"]');
+  await waitFor(main, () => document.querySelector('[data-testid="settings-connection-add"]'));
   assert.deepEqual(readConfig(), configBeforeBrowsing, 'Browsing and dismissing leave saved services and the default unchanged.');
 
   // A catalog provider: its endpoint and a suggested model come from the
   // catalog, so the key is the only thing to type. The working default stays.
   await openProviderCatalog(main);
   await click(main, '[data-catalog="deepseek"]');
-  await waitFor(main, () => document.querySelector('[role="dialog"] [data-testid="settings-provider-connect-key"]'));
+  await waitFor(main, () => document.querySelector('[data-testid="settings-provider-connect-key"]'));
   assert.equal(await evaluate(main, () => document.querySelector('[data-testid="settings-provider-connect-default"]').getAttribute('aria-checked')), 'false');
   assert.equal(await evaluate(main, () => document.querySelector('[data-testid="settings-provider-connect"]').disabled), true);
   await type(main, '[data-testid="settings-provider-connect-key"]', 'sk-e2e-deepseek');
   await capture(main, '02-connect-deepseek.png');
   await click(main, '[data-testid="settings-provider-connect"]');
-  await waitFor(main, () => document.querySelector('.model-service-hero h1')?.textContent === 'DeepSeek');
+  await waitFor(main, () => document.querySelector('.connection-page-title')?.textContent === 'DeepSeek');
   let config = readConfig();
   assert.equal(config.default_provider, 'fixture', 'Connecting a second service keeps the default.');
   assert.equal(config.providers.deepseek.base_url, 'https://api.deepseek.com');
@@ -233,7 +238,7 @@ async function run() {
   main.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' });
   main.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' });
   await waitFor(main, () => !document.querySelector('.model-remove-dialog'));
-  assert.ok(await evaluate(main, () => Boolean(document.querySelector('.connection-detail-drawer'))), 'Dismissing a confirmation keeps the connection drawer open.');
+  assert.ok(await evaluate(main, () => Boolean(document.querySelector('[data-testid="settings-provider-back"]'))), 'Dismissing a confirmation keeps the connection details open.');
   await evaluate(main, id => document.querySelector(`[data-model="${id}"]`).closest('.model-choice').querySelector('[data-testid="settings-provider-remove-model"]').click(), hidden);
   await waitFor(main, () => document.querySelector('[data-testid="settings-provider-remove-model-confirm"]'));
   await click(main, '[data-testid="settings-provider-remove-model-confirm"]');
@@ -244,7 +249,7 @@ async function run() {
 
   // A custom endpoint made the default: the next conversation uses it.
   await click(main, '[data-testid="settings-provider-back"]');
-  await waitFor(main, () => !document.querySelector('.connection-detail-drawer'));
+  await waitFor(main, () => !document.querySelector('[data-testid="settings-provider-back"]'));
   await openProviderCatalog(main);
   await click(main, '[data-testid="settings-provider-custom"]');
   await waitFor(main, () => document.querySelector('[data-testid="settings-provider-connect-base-url"]'));
@@ -255,8 +260,17 @@ async function run() {
   await click(main, '[data-testid="settings-provider-connect-default"]');
   await capture(main, '05-connect-custom.png');
   await click(main, '[data-testid="settings-provider-connect"]');
-  await waitFor(main, () => document.querySelector('.model-service-hero .model-service-badge'));
-  config = readConfig();
+  await waitFor(main, () => document.querySelector('[data-testid="settings-provider-back"]')
+    && document.querySelector('[data-testid="settings-provider-model"][data-model="fixture-b"][aria-pressed="true"]')
+    && !document.querySelector('[data-testid="settings-provider-connect"]'));
+  // The detail appears after save completes; verify its persisted result before
+  // the next edit so an unfinished connection cannot satisfy the transition.
+  const savedDeadline = Date.now() + 30000;
+  while (Date.now() < savedDeadline) {
+    config = readConfig();
+    if (config.default_provider === 'gateway' && config.providers.gateway?.model === 'fixture-b') break;
+    await delay(50);
+  }
   assert.equal(config.default_provider, 'gateway');
   assert.equal(config.providers.gateway.model, 'fixture-b');
 
@@ -317,25 +331,40 @@ async function run() {
   }
   // Keep detail controls reachable at large text sizes in narrow windows.
   await click(main, '[data-provider="gateway"]');
-  await waitFor(main, () => document.querySelector('.connection-detail-drawer'));
+  await waitFor(main, () => document.querySelector('[data-testid="settings-provider-back"]'));
   for (const theme of ['light', 'dark']) for (const width of [1280, 760]) {
     await setAppearance(main, { theme, size: 20, width });
     await settle(main);
     const overflow = await evaluate(main, () => {
-      const panel = document.querySelector('.connection-detail-drawer');
+      const panel = document.querySelector('[data-testid="settings-provider-back"]').closest('.connection-page');
       const rect = panel.getBoundingClientRect();
-      return { horizontal: panel.scrollWidth > panel.clientWidth + 1, outside: rect.left < -1 || rect.right > innerWidth + 1 };
+      const viewport = panel.closest('.settings-scroll').getBoundingClientRect();
+      const controls = [];
+      for (const node of panel.querySelectorAll('button, input, select, summary')) {
+        const bounds = node.getBoundingClientRect();
+        if (!bounds.width || !bounds.height) continue;
+        const label = node.getAttribute('aria-label') || node.textContent.trim().slice(0, 40) || node.tagName;
+        if (bounds.left < rect.left - 1 || bounds.right > rect.right + 1) controls.push(`outside detail: ${label}`);
+        const x = bounds.left + bounds.width / 2;
+        const y = bounds.top + bounds.height / 2;
+        if (x >= Math.max(0, viewport.left) && x < Math.min(innerWidth, viewport.right)
+          && y >= Math.max(0, viewport.top) && y < Math.min(innerHeight, viewport.bottom)) {
+          const hit = document.elementFromPoint(x, y);
+          if (!hit || !node.contains(hit)) controls.push(`obscured: ${label}`);
+        }
+      }
+      return { horizontal: panel.scrollWidth > panel.clientWidth + 1, outside: rect.left < -1 || rect.right > innerWidth + 1, controls };
     });
-    assert.deepEqual(overflow, { horizontal: false, outside: false }, `drawer ${theme} ${width}px`);
+    assert.deepEqual(overflow, { horizontal: false, outside: false, controls: [] }, `detail ${theme} ${width}px`);
     await capture(main, `07-detail-${theme}-20-${width}.png`);
   }
   await click(main, '[data-testid="settings-provider-back"]');
-  await waitFor(main, () => !document.querySelector('.connection-detail-drawer'));
+  await waitFor(main, () => !document.querySelector('[data-testid="settings-provider-back"]'));
   await setAppearance(main, { theme: 'light', size: 14.5, width: 1280 });
 
   // Removal asks first and deletes the saved key with the service.
   await click(main, '[data-provider="deepseek"]');
-  await waitFor(main, () => document.querySelector('.model-service-hero h1')?.textContent === 'DeepSeek');
+  await waitFor(main, () => document.querySelector('.connection-page-title')?.textContent === 'DeepSeek');
   await click(main, '.model-service-hero-actions [aria-haspopup="menu"]');
   await waitFor(main, () => [...document.querySelectorAll('[role="menuitem"]')].some(item => item.textContent.includes('删除服务')));
   await evaluate(main, () => [...document.querySelectorAll('[role="menuitem"]')].find(item => item.textContent.includes('删除服务')).click());

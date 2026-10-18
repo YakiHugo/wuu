@@ -439,11 +439,25 @@ function click(element: Element | null | undefined): void {
 
 async function openProviderCatalog(): Promise<void> {
   click(document.querySelector('[data-testid="settings-connection-add"]'));
-  click(document.querySelector('[data-testid="settings-connection-add-provider"]'));
   await flush();
 }
 
 describe("SettingsView model services", () => {
+  it("finds consolidated engine and subscription controls through settings search", async () => {
+    installServicesStub();
+    renderSettings({ initialized: servicesInitialized(), initialPage: "general", locale: "en-US" });
+    await flush();
+    const search = container.querySelector<HTMLInputElement>('.settings-search input')!;
+    for (const query of ["codex", "quota"]) {
+      act(() => setInputValue(search, query));
+      const connection = container.querySelector('.settings-nav [data-wuu-page="providers"]');
+      expect(connection).not.toBeNull();
+      expect(container.querySelector('.settings-nav [data-wuu-page="agents"], .settings-nav [data-wuu-page="subscriptions"]')).toBeNull();
+      click(connection);
+      expect(container.querySelector('.settings-page')?.getAttribute("data-wuu-page")).toBe("providers");
+    }
+  });
+
   it("keeps connection actions available while the catalog loads and reports failure", async () => {
     const api = installServicesStub();
     let rejectCatalog!: (reason: Error) => void;
@@ -456,9 +470,26 @@ describe("SettingsView model services", () => {
     expect(document.querySelector('[data-testid="settings-provider-connect-base-url"]')).not.toBeNull();
 
     await act(async () => { rejectCatalog(new Error("catalog unavailable")); });
-    click(document.querySelector('.model-connect-dialog .environment-dialog-header .icon-button'));
-    await openProviderCatalog();
+    click(document.querySelector('.model-connect-dialog [data-testid="settings-connection-back"]'));
     expect(document.querySelector('[data-testid="settings-provider-custom"]')).not.toBeNull();
+  });
+
+  it("returns from connection configuration to the same catalog search without saving", async () => {
+    installServicesStub();
+    const onSave = vi.fn(async () => {});
+    renderSettings({ initialized: servicesInitialized(), initialPage: "providers", onSave });
+    await flush();
+    await openProviderCatalog();
+    const search = document.querySelector<HTMLInputElement>('.model-browse-dialog input[type="search"]')!;
+    act(() => setInputValue(search, "deepseek"));
+    click(document.querySelector('[data-catalog="deepseek"]'));
+    await flush();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.querySelector('[data-testid="settings-provider-card"]')).toBeNull();
+    click(document.querySelector('.model-connect-dialog [data-testid="settings-connection-back"]'));
+    expect(document.querySelector<HTMLInputElement>('.model-browse-dialog input[type="search"]')?.value).toBe("deepseek");
+    expect(document.querySelector('[data-catalog="moonshotai-cn"]')).toBeNull();
+    expect(onSave).not.toHaveBeenCalled();
   });
 
   it("gathers conversation defaults on General", async () => {
@@ -507,14 +538,14 @@ describe("SettingsView model services", () => {
 
     click(connectedTile);
     await flush();
-    const dialog = document.querySelector('[role="dialog"]')!;
+    const dialog = document.querySelector('.model-connect-dialog')!;
     const name = dialog.querySelector<HTMLInputElement>('[data-testid="settings-provider-connect-name"]')!.value;
     expect(name).not.toBe("");
     expect(initialized.providers?.map((provider) => provider.name)).not.toContain(name);
     expect(dialog.querySelector('[data-testid="settings-provider-connect-default"]')?.getAttribute("aria-checked")).toBe("false");
     expect(onSave).not.toHaveBeenCalled();
     act(() => setInputValue(dialog.querySelector<HTMLInputElement>('[data-testid="settings-provider-connect-key"]')!, "sk-another-connection"));
-    click(dialog.querySelector('.environment-dialog-footer button[type="button"]'));
+    click(document.querySelector('.model-connect-dialog [data-testid="settings-connection-back"]'));
 
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(onSave).not.toHaveBeenCalled();
@@ -532,21 +563,22 @@ describe("SettingsView model services", () => {
     expect(document.querySelector('[data-catalog]')).toBeNull();
   });
 
-  it("keeps the overview behind configuration and returns keyboard focus when closed", async () => {
+  it("replaces the overview with configuration and returns keyboard focus on Back", async () => {
     installServicesStub();
     renderSettings({ initialized: servicesInitialized(), initialPage: "providers" });
     await flush();
     const opener = document.querySelector<HTMLButtonElement>('[data-provider="deepseek"]')!;
     opener.focus();
     click(opener);
-    expect(document.querySelector('.connection-detail-drawer')).not.toBeNull();
-    expect(document.querySelector('[data-provider="openrouter"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="settings-provider-back"]')).not.toBeNull();
+    expect(document.querySelector('[data-provider="openrouter"]')).toBeNull();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
     click(document.querySelector('[data-testid="settings-provider-back"]'));
-    expect(document.querySelector('.connection-detail-drawer')).toBeNull();
-    expect(document.activeElement).toBe(opener);
+    expect(document.querySelector('[data-testid="settings-provider-back"]')).toBeNull();
+    expect(document.activeElement).toBe(document.querySelector('[data-provider="deepseek"]'));
   });
 
-  it("dismisses a model removal confirmation without closing its connection drawer", async () => {
+  it("dismisses a model removal confirmation without leaving its connection details", async () => {
     installServicesStub();
     const onSave = vi.fn(async () => {});
     renderSettings({ initialized: servicesInitialized(), initialPage: "providers", onSave });
@@ -556,7 +588,7 @@ describe("SettingsView model services", () => {
     expect(document.querySelector('.model-remove-dialog')).not.toBeNull();
     act(() => document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     expect(document.querySelector('.model-remove-dialog')).toBeNull();
-    expect(document.querySelector('.connection-detail-drawer')).not.toBeNull();
+    expect(document.querySelector('[data-testid="settings-provider-back"]')).not.toBeNull();
     expect(onSave).not.toHaveBeenCalled();
   });
 
@@ -595,11 +627,15 @@ describe("SettingsView model services", () => {
     click(document.querySelector('[data-testid="settings-provider-key-save"]'));
     expect(document.querySelector<HTMLButtonElement>('[data-testid="settings-provider-back"]')!.disabled).toBe(true);
     click(document.querySelector('[data-testid="settings-provider-back"]'));
-    expect(document.querySelector('.connection-detail-drawer')).not.toBeNull();
+    expect(document.querySelector('[data-testid="settings-provider-back"]')).not.toBeNull();
     await act(async () => rejectSave(new Error("Credential storage unavailable")));
-    expect(document.querySelector('.connection-detail-drawer')?.textContent).toContain("Credential storage unavailable");
+    expect(document.querySelector('[data-testid="settings-providers"]')?.textContent).toContain("Credential storage unavailable");
     expect(document.querySelector<HTMLInputElement>('[data-testid="settings-provider-key-input"]')!.value).toBe("sk-retry");
     expect(document.querySelector<HTMLButtonElement>('[data-testid="settings-provider-key-save"]')!.disabled).toBe(false);
+    onSave.mockImplementationOnce(async () => {});
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="settings-provider-key-save"]')!.click());
+    expect(onSave).toHaveBeenCalledTimes(2);
+    expect(document.querySelector('[data-testid="settings-provider-key-input"]')).toBeNull();
   });
 
   it("chooses a service model in place and makes the service default only on request", async () => {
@@ -683,7 +719,7 @@ describe("SettingsView model services", () => {
     await openProviderCatalog();
     click(document.querySelector('[data-catalog="moonshotai-cn"]'));
     await flush();
-    const dialog = document.querySelector('[role="dialog"]')!;
+    const dialog = document.querySelector('.model-connect-dialog')!;
     const connect = dialog.querySelector<HTMLButtonElement>('[data-testid="settings-provider-connect"]')!;
     expect(connect.disabled).toBe(true);
     // The current default works, so connecting another service keeps it.
@@ -711,7 +747,7 @@ describe("SettingsView model services", () => {
 
     await openProviderCatalog();
     click(document.querySelector('[data-testid="settings-provider-custom"]'));
-    const dialog = document.querySelector('[role="dialog"]')!;
+    const dialog = document.querySelector('.model-connect-dialog')!;
     expect(dialog.querySelector('[data-testid="settings-provider-connect-default"]')?.getAttribute("aria-checked")).toBe("true");
     act(() => {
       setInputValue(dialog.querySelector<HTMLInputElement>('[data-testid="settings-provider-connect-base-url"]')!, "https://gateway.example.test/v1");
@@ -833,7 +869,7 @@ describe("SettingsView advanced settings", () => {
       ),
     ).toBe(false);
 
-    const inputs = Array.from(container.querySelectorAll("input"));
+    const inputs = Array.from(container.querySelectorAll<HTMLInputElement>(".settings-page input"));
     expect(inputs.length).toBeGreaterThanOrEqual(4);
     const [compactThreshold, compactKeepRecent, providerContextWindow, maxContextTokens] = inputs;
     const commit = async (input: Element) => {

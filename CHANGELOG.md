@@ -12,10 +12,20 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 - Connect ChatGPT directly through official browser sign-in without Codex CLI, with account-scoped model discovery, public Responses inference, protected refresh and sign-out. Unify model connections and account usage in Settings while keeping API keys and local Codex credentials distinct.
 
-### Removed
+## [2026.10.19] - 2026-10-18
 
-- Remove the workspace new page's Continue viewing section, which duplicated
-  files, diffs, and artifacts already available in the tab strip.
+### Contributors
+
+@blueberrycongee
+
+### Highlights
+
+- Import cookies from local browser profiles and manage unpacked extensions in the embedded browser.
+- Add DeepSeek Harness as an external ACP engine with model and reasoning selection, HTTP MCP tools, and conversation recovery; improve ACP session restoration and shutdown.
+- Show independent activity previews for multiple browser tabs and native windows, hide previews behind dialogs, and keep computer-control focus and state isolated between conversations.
+- Search grouped settings pages, use font-relative spacing throughout the desktop, and move subscriptions with observed allowances or balances to the front after loading.
+- Restore follow-up messages in forks created after context-window switches, preserve next-message suggestions over usage hints, and improve right-to-left message selection and alignment.
+- Refine sidebar history and fork controls, keep small image previews usable at large font sizes, and remove duplicate workspace content.
 
 ## [2026.10.18] - 2026-10-18
 

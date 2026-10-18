@@ -1,7 +1,7 @@
-import { act } from "react";
+import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { EngineListResult } from "../shared/protocol";
+import type { EngineListResult, EngineUpdateParams } from "../shared/protocol";
 import { DefaultEngineRow, EngineSettingsSection } from "./EngineSettingsSection";
 
 const inventory: EngineListResult = {
@@ -37,25 +37,74 @@ async function openDefaultPicker(): Promise<HTMLButtonElement[]> {
   return [...document.querySelectorAll<HTMLButtonElement>(".select-menu-item")];
 }
 
-// The default picker lives on the General page and the agent list on the
-// Agents page; both read and write the same inventory.
+// The parent owns list/detail navigation while both settings share inventory.
+function Harness({ result, onUpdate, onRefresh }: {
+  result?: EngineListResult;
+  onUpdate: (params: EngineUpdateParams) => Promise<EngineListResult>;
+  onRefresh: () => Promise<EngineListResult | undefined>;
+}) {
+  const [selectedEngineID, setSelectedEngineID] = useState<string>();
+  return <>
+    <DefaultEngineRow result={result} onUpdate={onUpdate} />
+    <EngineSettingsSection result={result} onRefresh={onRefresh} onUpdate={onUpdate}
+      selectedEngineID={selectedEngineID} onSelectEngine={setSelectedEngineID}
+      onCloseEngine={() => setSelectedEngineID(undefined)} />
+  </>;
+}
+
 function render(result: EngineListResult | undefined, onUpdate = vi.fn(), onRefresh = vi.fn()) {
-  act(() => {
-    root.render(
-      <>
-        <DefaultEngineRow result={result} onUpdate={onUpdate} />
-        <EngineSettingsSection
-          result={result}
-          onRefresh={onRefresh}
-          onUpdate={onUpdate}
-        />
-      </>,
-    );
-  });
+  act(() => root.render(<Harness result={result} onUpdate={onUpdate} onRefresh={onRefresh} />));
   return { onUpdate, onRefresh };
 }
 
 describe("EngineSettingsSection", () => {
+  it("lets the parent navigate from the list into one inline detail and back", async () => {
+    const onSelectEngine = vi.fn();
+    const onCloseEngine = vi.fn();
+    const props = { result: inventory, embedded: true, onUpdate: vi.fn(), onRefresh: vi.fn(), onSelectEngine, onCloseEngine };
+    act(() => root.render(<EngineSettingsSection {...props} />));
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="settings-engine-codex-status"]')!.click());
+    expect(onSelectEngine).toHaveBeenCalledWith("codex");
+    expect(container.querySelector('[data-testid="subscription-engine-codex"]')).toBeNull();
+
+    await act(async () => root.render(<EngineSettingsSection {...props} selectedEngineID="codex" />));
+    expect(container.querySelector('[data-testid="subscription-engine-codex"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="settings-engine-connections"]')).toBeNull();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="settings-connection-back"]')!.click());
+    expect(onCloseEngine).toHaveBeenCalledOnce();
+
+    act(() => root.render(<EngineSettingsSection {...props} />));
+    expect(container.querySelector('[data-testid="settings-engine-codex-status"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="subscription-engine-codex"]')).toBeNull();
+  });
+
+  it("keeps path edits explicit and blocks repeat saves or back navigation while saving", async () => {
+    let resolveSave: ((value: EngineListResult) => void) | undefined;
+    const onUpdate = vi.fn(() => new Promise<EngineListResult>(resolve => { resolveSave = resolve; }));
+    const onCloseEngine = vi.fn();
+    await act(async () => root.render(<EngineSettingsSection result={inventory} selectedEngineID="codex"
+      onSelectEngine={vi.fn()} onCloseEngine={onCloseEngine} onRefresh={vi.fn()} onUpdate={onUpdate} />));
+    const input = container.querySelector<HTMLInputElement>('[data-testid="settings-engine-codex-path"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "/custom/codex");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      input.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+    });
+    expect(onUpdate).not.toHaveBeenCalled();
+    const save = container.querySelector<HTMLButtonElement>('[data-testid="settings-engine-codex-path-save"]')!;
+    const back = container.querySelector<HTMLButtonElement>('[data-testid="settings-connection-back"]')!;
+    await act(async () => save.click());
+    expect(save.disabled).toBe(true);
+    expect(input.disabled).toBe(true);
+    expect(back.disabled).toBe(true);
+    await act(async () => { save.click(); back.click(); });
+    expect(onUpdate).toHaveBeenCalledOnce();
+    expect(onCloseEngine).not.toHaveBeenCalled();
+    await act(async () => resolveSave?.(inventory));
+    expect(back.disabled).toBe(false);
+  });
   it("saves defaults and disables engines discovered outside the native pair", async () => {
     const live: EngineListResult = {
       engines: [{ id: "devin", display_name: "Devin", enabled: true, binary_ok: true }],
@@ -161,7 +210,7 @@ describe("EngineSettingsSection", () => {
     expect(row.querySelector(".settings-engine-detail")).toBeNull();
   });
 
-  it("keeps a configured missing engine recoverable and retains its drawer after disabling", async () => {
+  it("keeps a configured missing engine recoverable and retains its detail page after disabling", async () => {
     let current: EngineListResult = {
       engines: [{ id: "codex", enabled: false, binary_ok: false }],
       settings: { codex: { enabled: true, binary_path: "/missing/codex" } },
@@ -176,15 +225,47 @@ describe("EngineSettingsSection", () => {
     expect(window.wuu.listEngines).not.toHaveBeenCalled();
     await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="settings-engine-codex-enabled"]')!.click());
     expect(container.querySelector('[data-testid="settings-engine-codex-status"]')).toBeNull();
-    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="settings-connection-back"]')).not.toBeNull();
     expect(document.querySelector('[data-testid="subscription-engine-codex"]')).not.toBeNull();
+  });
+
+  it("retains only the selected executable's account snapshot across navigation and disabling", async () => {
+    const active: EngineListResult = {
+      engines: [{ id: "codex", enabled: true, binary_ok: true, binary_path: "/first/codex" }],
+      settings: { codex: { binary_path: "/first/codex" } },
+    };
+    window.wuu.listEngines = vi.fn().mockResolvedValue({ engines: [
+      { ...active.engines[0], quota: { status: "available", kind: "subscription",
+        account: { id: "first-account", label: "First account" } } },
+      { id: "claude", enabled: true, binary_ok: true, quota: { status: "available", kind: "subscription",
+        account: { id: "other-account", label: "Other account" } } },
+    ] });
+    const props = { embedded: true, onUpdate: vi.fn(), onRefresh: vi.fn(), onSelectEngine: vi.fn(), onCloseEngine: vi.fn() };
+    await act(async () => root.render(<EngineSettingsSection {...props} result={active} selectedEngineID="codex" />));
+    expect(container.textContent).toContain("First account");
+    expect(container.textContent).not.toContain("Other account");
+    const disabled: EngineListResult = { ...active,
+      engines: [{ ...active.engines[0], enabled: false }],
+      settings: { codex: { enabled: false, binary_path: "/first/codex" } },
+    };
+    act(() => root.render(<EngineSettingsSection {...props} result={disabled} />));
+    await act(async () => root.render(<EngineSettingsSection {...props} result={disabled} selectedEngineID="codex" />));
+    expect(container.textContent).toContain("First account");
+    expect(window.wuu.listEngines).toHaveBeenCalledOnce();
+    const changed: EngineListResult = { ...disabled,
+      engines: [{ ...disabled.engines[0], binary_path: "/second/codex" }],
+      settings: { codex: { enabled: false, binary_path: "/second/codex" } },
+    };
+    await act(async () => root.render(<EngineSettingsSection {...props} result={changed} selectedEngineID="codex" />));
+    expect(container.textContent).not.toContain("First account");
+    expect(window.wuu.listEngines).toHaveBeenCalledOnce();
   });
 
   it("opens a hidden catalog engine by selection and retains a failed path draft for retry", async () => {
     const missing: EngineListResult = { engines: [{ id: "codex", enabled: false, binary_ok: false }] };
     const onUpdate = vi.fn().mockRejectedValueOnce(new Error("Cannot save path")).mockResolvedValue(missing);
-    await act(async () => root.render(<EngineSettingsSection result={missing} embedded selectedEngineID="codex" onUpdate={onUpdate} onRefresh={vi.fn()} />));
-    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    await act(async () => root.render(<EngineSettingsSection result={missing} embedded selectedEngineID="codex" onSelectEngine={vi.fn()} onCloseEngine={vi.fn()} onUpdate={onUpdate} onRefresh={vi.fn()} />));
+    expect(container.querySelector('[data-testid="settings-connection-back"]')).not.toBeNull();
     const input = document.querySelector<HTMLInputElement>('[data-testid="settings-engine-codex-path"]')!;
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "/custom/codex");
@@ -194,7 +275,7 @@ describe("EngineSettingsSection", () => {
     expect(onUpdate).not.toHaveBeenCalled();
     const save = document.querySelector<HTMLButtonElement>('[data-testid="settings-engine-codex-path-save"]')!;
     await act(async () => save.click());
-    expect(document.querySelector('[role="dialog"] [role="alert"]')?.textContent).toBe("Cannot save path");
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe("Cannot save path");
     expect(input.value).toBe("/custom/codex");
     expect(save.disabled).toBe(false);
     await act(async () => save.click());

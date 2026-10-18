@@ -1,5 +1,6 @@
 import {
   type FormEvent as ReactFormEvent,
+  type ReactNode,
   lazy,
   Suspense,
   useEffect,
@@ -21,7 +22,6 @@ import type {
 import {
   AlertTriangle,
   Check,
-  ChevronLeft,
   ChevronRight,
   Code2,
   MoreHorizontal,
@@ -41,6 +41,7 @@ import { EngineIcon } from "./EngineIcons";
 import { hostSupports } from "./HostCapabilities";
 import { isTouchWebShell } from "./ComposerFocus";
 import { Modal } from "./Modal";
+import { ConnectionPage } from "./ConnectionPage";
 import { ProviderMark } from "./ProviderMarks";
 import {
   chatGPTConnectionModels,
@@ -317,11 +318,33 @@ export function ModelServicesPage({
   const providers = initialized?.providers ?? [];
   const labels = useMemo(() => serviceLabels(providers, t), [providers, t]);
   const [openService, setOpenService] = useState("");
-  const [showAll, setShowAll] = useState(false);
-  const [adding, setAdding] = useState<"type" | "provider" | "engine" | null>(null);
+  const [adding, setAdding] = useState(false);
   const [selectedEngine, setSelectedEngine] = useState<string>();
-  const closeAdding = () => { setAdding(null); addButtonRef.current?.focus(); };
-  const closeService = () => setOpenService("");
+  const focusEngine = useRef("");
+  useEffect(() => {
+    if (!selectedEngine && focusEngine.current) {
+      const id = focusEngine.current;
+      focusEngine.current = "";
+      document.querySelector<HTMLButtonElement>(`[data-testid="${adding ? `settings-connection-catalog-engine-${id}` : `settings-engine-${id}-status`}"]`)?.focus();
+    }
+  }, [selectedEngine, adding]);
+  const focusAdd = useRef(false);
+  const closeAdding = () => { focusAdd.current = true; setAdding(false); };
+  useEffect(() => {
+    if (!adding && focusAdd.current) { focusAdd.current = false; addButtonRef.current?.focus(); }
+  }, [adding]);
+  const focusProvider = useRef("");
+  const closeService = () => { focusProvider.current = openService; setOpenService(""); };
+  useEffect(() => {
+    if (!openService && focusProvider.current) {
+      const name = focusProvider.current;
+      focusProvider.current = "";
+      if (adding) { document.querySelector<HTMLInputElement>(".connection-page.model-browse-dialog input")?.focus(); return; }
+      document.querySelectorAll<HTMLButtonElement>("[data-testid=\"settings-provider-card\"]").forEach(button => {
+        if (button.dataset.provider === name) button.focus();
+      });
+    }
+  }, [openService, adding]);
   const [catalogVersion, setCatalogVersion] = useState(0);
   const [catalogRefreshing, setCatalogRefreshing] = useState(false);
   const catalog = useCatalogProviders(catalogVersion);
@@ -349,53 +372,40 @@ export function ModelServicesPage({
     <div className="model-services" data-testid="settings-providers">
       <SettingsPageHeader
         title={t("settings.providers")}
-        actions={<>
-          <button type="button" className="settings-button settings-button-ghost"
-            data-testid="settings-connections-show-all" aria-pressed={showAll}
-            onClick={() => setShowAll(value => !value)}>{t(showAll ? "provider.showActive" : "provider.showAll")}</button>
+        actions={!adding && !detailProvider && !selectedEngine ? <>
           <button type="button" className="settings-button settings-button-ghost settings-icon-button"
             data-testid="settings-model-catalog-refresh" aria-label={t("settings.modelCatalogUpdate")}
             title={t("settings.modelCatalogUpdate")} aria-busy={catalogRefreshing} disabled={catalogRefreshing}
             onClick={() => void refreshCatalog()}><RefreshCw className={`icon${catalogRefreshing ? " settings-spin" : ""}`} aria-hidden="true" /></button>
           <button type="button" className="settings-button" data-testid="settings-connection-add" ref={addButtonRef} disabled={running}
-            onClick={() => setAdding("type")}><Plus className="icon" aria-hidden="true" />{t("provider.addConnection")}</button>
-        </>}
+            onClick={() => setAdding(true)}><Plus className="icon" aria-hidden="true" />{t("provider.addConnection")}</button>
+        </> : undefined}
       />
-      <ServicesOverview providers={providers} labels={labels} initialized={initialized} running={running}
-        catalog={catalog} defaultOn={!defaultUsable} showAll={showAll}
-        onOpenService={setOpenService} onProvidersChanged={onProvidersChanged} onSave={onSave} />
-      {onRefreshEngines && onUpdateEngines ? <EngineSettingsSection embedded showAll={showAll}
+      {!adding && !detailProvider && !selectedEngine ? <ServicesOverview providers={providers} labels={labels} initialized={initialized}
+        onOpenService={setOpenService} /> : null}
+      {onRefreshEngines && onUpdateEngines && !detailProvider && (!adding || selectedEngine) ? <EngineSettingsSection embedded
         result={inventory} loadError={inventoryError} onRefresh={onRefreshEngines} onUpdate={onUpdateEngines}
-        selectedEngineID={selectedEngine} onCloseEngine={() => { setSelectedEngine(undefined); if (selectedEngine) addButtonRef.current?.focus(); }} /> : null}
-      {adding === "type" ? <Modal title={t("provider.addConnection")} ariaLabel={t("provider.addConnection")}
-        panelClassName="model-dialog connection-type-dialog" onClose={closeAdding}>
-        <div className="connection-type-options">
-          <button type="button" className="model-service-card" data-testid="settings-connection-add-provider" onClick={() => setAdding("provider")}>
-            <ProviderMark id="openai" label="Provider" /><span className="model-service-card-copy"><span>{t("provider.providerConnections")}</span><span className="model-service-card-meta">{t("provider.providerConnectionsHint")}</span></span><ChevronRight className="icon" />
-          </button>
-          {onUpdateEngines ? <button type="button" className="model-service-card" data-testid="settings-connection-add-engine" onClick={() => setAdding("engine")}>
-            <span className="provider-mark"><Code2 className="icon" /></span><span className="model-service-card-copy"><span>{t("provider.engineConnections")}</span><span className="model-service-card-meta">{t("provider.engineConnectionsHint")}</span></span><ChevronRight className="icon" />
-          </button> : null}
-        </div>
-      </Modal> : null}
-      {adding === "provider" ? <ServiceConnector providers={providers} running={running} catalog={catalog}
-        defaultOn={!defaultUsable} onSave={onSave} onProvidersChanged={onProvidersChanged} catalogDialog
-        onDismiss={closeAdding} onConnected={name => { setAdding(null); setOpenService(name); }}
-        onOpenExisting={name => { setAdding(null); setOpenService(name); }} /> : null}
-      {adding === "engine" ? <Modal title={t("provider.engineConnections")} ariaLabel={t("provider.engineConnections")}
-        panelClassName="model-dialog connection-type-dialog" onClose={closeAdding}>
-        <div className="connection-type-options">
-          {inventory?.engines.filter(engine => engine.id !== "wuu").map(engine => <button key={engine.id} type="button"
-            className="model-service-card" data-testid={`settings-connection-catalog-engine-${engine.id}`}
-            onClick={() => { setAdding(null); setSelectedEngine(engine.id); }}>
-            <span className="settings-engine-row-icon"><EngineIcon engine={engine.id} /></span>
-            <span className="model-service-card-copy"><span>{engineLabel(engine.id, engine)}</span>
-              <span className="model-service-card-meta">{t(!engine.binary_ok ? "settings.engineNotInstalled" : !engine.enabled ? "settings.engineDisabled" : "settings.engineReady")}</span></span>
-            <ChevronRight className="icon" />
-          </button>)}
-          {!inventory ? <p role="status">{inventoryError || t("settings.engineDetecting")}</p> : null}
-        </div>
-      </Modal> : null}
+        selectedEngineID={selectedEngine} onSelectEngine={setSelectedEngine}
+        onCloseEngine={() => { focusEngine.current = selectedEngine ?? ""; setSelectedEngine(undefined); }} /> : null}
+      {adding ? <div hidden={!!selectedEngine || !!detailProvider}>
+        <ServiceConnector providers={providers} running={running} catalog={catalog}
+          defaultOn={!defaultUsable} onSave={onSave} onProvidersChanged={onProvidersChanged} catalogDialog inline
+          onDismiss={closeAdding} onConnected={name => { setAdding(false); setOpenService(name); }}
+          onOpenExisting={setOpenService}
+          catalogExtras={query => {
+            const engines = inventory?.engines.filter(engine => engine.id !== "wuu" && `${engine.id} ${engineLabel(engine.id, engine)}`.toLowerCase().includes(query.trim().toLowerCase()));
+            return onUpdateEngines && (!inventory || engines?.length) ? <SettingsSection title={t("provider.engineConnections")}>
+            <SettingsGroup>
+              {engines?.map(engine =>
+                <button key={engine.id} type="button" className="connection-catalog-row" data-testid={`settings-connection-catalog-engine-${engine.id}`}
+                  onClick={() => setSelectedEngine(engine.id)}>
+                  <EngineIcon engine={engine.id} /><span>{engineLabel(engine.id, engine)}</span>
+                  <ChevronRight className="icon" aria-hidden="true" />
+                </button>)}
+              {!inventory ? <p role="status">{inventoryError || t("settings.engineDetecting")}</p> : null}
+            </SettingsGroup>
+          </SettingsSection> : null; }} />
+      </div> : null}
       {detailProvider ? <ServiceDetail key={detailProvider.name} provider={detailProvider}
         onProvidersChanged={onProvidersChanged} onProviderModelsChanged={onProviderModelsChanged}
         label={labels.get(detailProvider.name) ?? detailProvider.name} initialized={initialized} running={running}
@@ -420,6 +430,8 @@ export function ServiceConnector({
   onOpenExisting,
   onProvidersChanged,
   catalogDialog = false,
+  inline = false,
+  catalogExtras,
   onDismiss,
 }: {
   providers: readonly ProviderSummary[];
@@ -430,12 +442,22 @@ export function ServiceConnector({
   onConnected: (name: string) => void;
   onOpenExisting?: (name: string) => void;
   catalogDialog?: boolean;
+  inline?: boolean;
+  catalogExtras?: (query: string) => ReactNode;
   onDismiss?: () => void;
   onProvidersChanged?: (providers: ProviderSummary[]) => void;
 }): JSX.Element {
   const { t, locale } = useI18n();
   const [connectTarget, setConnectTarget] = useState<ConnectTarget | null>(null);
   const [browsing, setBrowsing] = useState(false);
+  const restoreCatalogFocus = useRef(false);
+  useEffect(() => {
+    if (!connectTarget && restoreCatalogFocus.current) {
+      restoreCatalogFocus.current = false;
+      document.querySelector<HTMLInputElement>(".connection-page.model-browse-dialog input")?.focus();
+    }
+  }, [connectTarget]);
+  const closeConfiguration = () => { restoreCatalogFocus.current = true; setConnectTarget(null); };
   const featuredIDs = FEATURED_SERVICES[locale.startsWith("zh") ? "zh" : "en"];
   const featured = featuredIDs
     .map((id) => catalog.providers?.find((provider) => provider.id === id))
@@ -488,32 +510,33 @@ export function ServiceConnector({
         </div>
       </div>
       {catalog.failed ? <p className="settings-section-note">{t("provider.catalogUnavailable")}</p> : null}</> : null}
-      {(browsing || catalogDialog) && !connectTarget ? (
-        <BrowseServicesDialog
+      {(browsing || catalogDialog) && (inline || !connectTarget) ? (
+        <div hidden={!!connectTarget}><BrowseServicesDialog
+          inline={inline} catalogExtras={catalogExtras}
           catalog={catalog}
           providers={providers}
           disabled={running}
           onClose={() => { setBrowsing(false); onDismiss?.(); }}
           onConnect={startConnect}
-        />
+        /></div>
       ) : null}
       {connectTarget?.kind === "chatgpt" ? (
         <Suspense fallback={
-          <Modal title={t("provider.connectTitle", { name: "ChatGPT" })} ariaLabel={t("provider.connectTitle", { name: "ChatGPT" })}
-            panelClassName="model-dialog model-connect-dialog" onClose={() => { setConnectTarget(null); onDismiss?.(); }}>
-            <p className="settings-muted-line" role="status">{t("settings.loading")}</p>
-          </Modal>
+          <p role="status">
+            {t("settings.loading")}
+          </p>
         }>
-          <ChatGPTConnectionDialog onProvidersChanged={onProvidersChanged} providers={providers} running={running} defaultOn={defaultOn}
-            onSave={onSave} onClose={() => { setConnectTarget(null); onDismiss?.(); }} onConnected={(name) => { setConnectTarget(null); onConnected(name); }} />
+          <ChatGPTConnectionDialog inline={inline} onProvidersChanged={onProvidersChanged} providers={providers} running={running} defaultOn={defaultOn}
+            onSave={onSave} onClose={closeConfiguration} onConnected={(name) => { setConnectTarget(null); onConnected(name); }} />
         </Suspense>
       ) : connectTarget ? (
         <ConnectServiceDialog
+          inline={inline}
           target={connectTarget}
           providers={providers}
           running={running}
           defaultOn={defaultOn}
-          onClose={() => { setConnectTarget(null); onDismiss?.(); }}
+          onClose={closeConfiguration}
           onSave={onSave}
           onConnected={(name) => {
             setConnectTarget(null);
@@ -533,24 +556,12 @@ function ServicesOverview({
   providers,
   labels,
   initialized,
-  running,
-  catalog,
-  defaultOn,
-  showAll,
   onOpenService,
-  onSave,
-  onProvidersChanged,
 }: {
   providers: readonly ProviderSummary[];
   labels: ReadonlyMap<string, string>;
   initialized?: InitializeResult;
-  running: boolean;
-  catalog: CatalogState;
-  defaultOn: boolean;
-  showAll: boolean;
   onOpenService: (name: string) => void;
-  onProvidersChanged?: (providers: ProviderSummary[]) => void;
-  onSave: SaveProvider;
 }): JSX.Element {
   const { t } = useI18n();
 
@@ -579,7 +590,6 @@ function ServicesOverview({
                     <ServiceMark identity={identity} />
                     <span className="model-service-card-copy">
                       <span className="model-service-card-title">{label}</span>
-                      <span className="model-service-card-meta">{connectionMethod(provider, t)}</span>
                       <span className="model-service-card-meta" data-attention={identity.attention ? "" : undefined}>
                         {identity.attention ? <AlertTriangle className="icon-sm" aria-hidden="true" /> : null}
                         {meta}
@@ -595,18 +605,6 @@ function ServicesOverview({
         </SettingsSection>
       ) : <SettingsSection title={t("provider.providerConnections")}><p className="settings-muted-line">{t("provider.noService")}</p></SettingsSection>}
 
-      {showAll ? <SettingsSection title={t("provider.addSection")}>
-        <ServiceConnector
-          providers={providers}
-          running={running}
-          catalog={catalog}
-          defaultOn={defaultOn}
-          onSave={onSave}
-          onConnected={onOpenService}
-          onOpenExisting={onOpenService}
-          onProvidersChanged={onProvidersChanged}
-        />
-      </SettingsSection> : null}
     </>
   );
 }
@@ -838,21 +836,9 @@ function ServiceDetail({
   }
 
   return (
-    <Modal ariaLabel={label} panelClassName="model-dialog connection-detail-drawer" closeDisabled={busy} onClose={onBack}>
+    <ConnectionPage title={label} icon={<ServiceMark identity={identity} />} closeDisabled={busy} onClose={onBack} backTestId="settings-provider-back">
       <div className="connection-detail-body">
-      <nav className="settings-page-back" aria-label={t("settings.providers")}>
-        <button type="button" disabled={busy} onClick={onBack} data-testid="settings-provider-back">
-          <ChevronLeft className="icon" aria-hidden="true" />
-          {t("settings.providers")}
-        </button>
-      </nav>
-
-      <header className="model-service-hero">
-        <ServiceMark identity={identity} />
-        <div className="model-service-hero-copy">
-          <h1>{label}</h1>
-          {isDefault ? <span className="model-service-badge">{t("provider.defaultBadge")}</span> : null}
-        </div>
+      {removable || !isDefault ? <header className="model-service-hero">
         <div className="settings-detail-actions model-service-hero-actions">
           {removable ? (
             <button
@@ -888,7 +874,7 @@ function ServiceDetail({
             </button>
           )}
         </div>
-      </header>
+      </header> : null}
 
       {error && !confirmingRemove ? <p className="settings-error" role="alert">{error}</p> : null}
 
@@ -981,7 +967,7 @@ function ServiceDetail({
         </Modal>
       ) : null}
       </div>
-    </Modal>
+    </ConnectionPage>
   );
 }
 
@@ -1573,12 +1559,16 @@ function CatalogServiceGroups({
 }
 
 function BrowseServicesDialog({
+  inline = false,
+  catalogExtras,
   catalog,
   providers,
   disabled,
   onClose,
   onConnect,
 }: {
+  inline?: boolean;
+  catalogExtras?: (query: string) => ReactNode;
   catalog: CatalogState;
   providers: readonly ProviderSummary[];
   disabled: boolean;
@@ -1587,10 +1577,11 @@ function BrowseServicesDialog({
 }): JSX.Element {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
+  const Surface = inline ? ConnectionPage : Modal;
   return (
-    <Modal
+    <Surface
       ariaLabel={t("provider.browseTitle")}
-      title={t("provider.browseTitle")}
+      title={t(inline ? "provider.addConnection" : "provider.browseTitle")}
       panelClassName="model-dialog model-browse-dialog"
       onClose={onClose}
       footer={
@@ -1600,15 +1591,17 @@ function BrowseServicesDialog({
       }
     >
       <CatalogSearchField value={query} placeholder={t("provider.searchServices")} onValueChange={setQuery} />
+      {catalogExtras?.(query)}
       <div className="model-browse-list" data-scroll-fade="">
         {catalog.failed ? <p className="settings-section-note">{t("provider.catalogUnavailable")}</p> : null}
-      <CatalogServiceGroups catalogProviders={catalog.providers ?? []} providers={providers} query={query} grouped disabled={disabled} onConnect={onConnect} />
+      <SettingsSection title={inline ? t("provider.providerConnections") : undefined}><CatalogServiceGroups catalogProviders={catalog.providers ?? []} providers={providers} query={query} grouped={!inline} disabled={disabled} onConnect={onConnect} /></SettingsSection>
       </div>
-    </Modal>
+    </Surface>
   );
 }
 
 function ConnectServiceDialog({
+  inline = false,
   target,
   providers,
   running,
@@ -1617,6 +1610,7 @@ function ConnectServiceDialog({
   onSave,
   onConnected,
 }: {
+  inline?: boolean;
   target: Exclude<ConnectTarget, { kind: "chatgpt" }>;
   providers: readonly ProviderSummary[];
   running: boolean;
@@ -1695,8 +1689,9 @@ function ConnectServiceDialog({
     }
   }
 
+  const Surface = inline ? ConnectionPage : Modal;
   return (
-    <Modal
+    <Surface
       ariaLabel={heading}
       icon={catalogProvider ? <ProviderMark id={catalogProvider.id} label={title} />
         : subscriptionType === "openai-codex" ? <ProviderMark id="openai" label="ChatGPT" /> : subscriptionType ? <span className="provider-mark" aria-hidden="true"><EngineIcon engine="grok" className="provider-mark-engine" /></span>
@@ -1709,9 +1704,9 @@ function ConnectServiceDialog({
       asForm
       onSubmit={() => void submit()}
       footer={<>
-        <button type="button" className="settings-button settings-button-ghost" disabled={pending} onClick={onClose}>
+        {!inline ? <button type="button" className="settings-button settings-button-ghost" disabled={pending} onClick={onClose}>
           {t("common.cancel")}
-        </button>
+        </button> : null}
         <button type="submit" className="settings-button settings-button-primary" data-testid="settings-provider-connect" disabled={!canSubmit}>
           {pending ? t("provider.connecting") : t("provider.connectAction")}
         </button>
@@ -1830,6 +1825,6 @@ function ConnectServiceDialog({
         </details>
         {error ? <p className="environment-dialog-error" role="alert">{error}</p> : null}
       </div>
-    </Modal>
+    </Surface>
   );
 }

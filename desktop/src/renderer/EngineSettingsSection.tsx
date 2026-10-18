@@ -8,7 +8,7 @@ import type {
 } from "../shared/protocol";
 import { clearDraftEngineMemory } from "./DraftEngineMemory";
 import { EngineIcon } from "./EngineIcons";
-import { Modal } from "./Modal";
+import { ConnectionPage } from "./ConnectionPage";
 import { SubscriptionDashboard } from "./SubscriptionDashboard";
 import { engineLabel } from "./EngineDisplay";
 import { useI18n } from "./i18n";
@@ -107,7 +107,7 @@ export function DefaultEngineRow({
   );
 }
 
-/** External runtime connections, with account and executable details in a drawer. */
+/** External runtime connections, with parent-owned list/detail navigation. */
 export function EngineSettingsSection({
   result,
   loadError = "",
@@ -116,6 +116,7 @@ export function EngineSettingsSection({
   embedded = false,
   showAll = false,
   selectedEngineID,
+  onSelectEngine,
   onCloseEngine,
 }: {
   result?: EngineListResult;
@@ -125,18 +126,18 @@ export function EngineSettingsSection({
   embedded?: boolean;
   showAll?: boolean;
   selectedEngineID?: string;
-  onCloseEngine?: () => void;
+  onSelectEngine: (id: string) => void;
+  onCloseEngine: () => void;
 }): JSX.Element {
   const { t } = useI18n();
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [pathDrafts, setPathDrafts] = useState<Record<string, string>>({});
-  const [openedID, setOpenedID] = useState<string | null>(null);
   const [accountSnapshots, setAccountSnapshots] = useState<Record<string, EngineInfo>>({});
   const engines = useMemo(() => result?.engines ?? [], [result]);
   const binarySettings = externalSettings(result);
-  const selected = engines.find(engine => engine.id === (selectedEngineID ?? openedID) && engine.id !== BUILTIN_ENGINE);
+  const selected = engines.find(engine => engine.id === selectedEngineID && engine.id !== BUILTIN_ENGINE);
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
@@ -165,7 +166,7 @@ export function EngineSettingsSection({
     : !engine.binary_ok ? t("settings.engineNotInstalled")
       : engine.quota?.status === "sign_in" ? t("settings.subscriptionSignIn")
       : engine.error || engine.models_error ? t("settings.subscriptionCatalogFailed") : t("settings.engineReady");
-  const close = () => { setOpenedID(null); setError(""); onCloseEngine?.(); };
+  const close = () => { setError(""); onCloseEngine(); };
   const refreshButton = <button
     className="settings-button settings-button-ghost settings-icon-button"
     type="button" disabled={busy || refreshing} aria-busy={refreshing}
@@ -180,10 +181,61 @@ export function EngineSettingsSection({
   const saved = accountSnapshots[accountKey];
   const snapshot = selected && saved && (!selected.binary_path || !saved.binary_path || selected.binary_path === saved.binary_path) ? saved : undefined;
 
+  if (selected) return <ConnectionPage key={selected.id}
+    title={engineLabel(selected.id, selected)} icon={<EngineIcon engine={selected.id} />}
+    onClose={close} closeDisabled={busy}>
+    <SettingsSection actions={refreshButton}>
+      <SettingsGroup>
+        <SettingsRow title={t("settings.engineEnable")} description={status(selected)}>
+          <button type="button" className="settings-switch" role="switch" aria-checked={enabled(selected)}
+            aria-label={`${engineLabel(selected.id, selected)} ${t(enabled(selected) ? "settings.engineDisable" : "settings.engineEnable")}`}
+            data-testid={`settings-engine-${selected.id}-enabled`} disabled={busy}
+            onClick={() => void save({ [selected.id]: { enabled: !enabled(selected) } })}>
+            <span className="settings-switch-thumb" aria-hidden="true" />
+          </button>
+        </SettingsRow>
+        {!selected.binary_ok ? <SettingsRow title={t("settings.engineNotInstalled")}
+          description={selected.error || t("settings.engineNotInstalledHint")}>
+          {selected.install_url ? <button className="settings-button" type="button"
+            onClick={() => void window.wuu.openExternal(selected.install_url!).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))}>
+            {t("settings.engineInstall")}<ExternalLink className="icon" aria-hidden="true" />
+          </button> : null}
+        </SettingsRow> : null}
+      </SettingsGroup>
+      {error || loadError ? <p className="settings-error" role="alert">{error || loadError}</p> : null}
+      {selected.binary_ok && selected.error ? <p className="settings-engine-reason">{selected.error}</p> : null}
+    </SettingsSection>
+    <SubscriptionDashboard key={`account-${accountKey}-${selected.binary_path ?? ""}`}
+      scope={{ kind: "engine", id: selected.id }} inventory={result}
+      initialInventory={snapshot ? { engines: [snapshot] } : undefined}
+      onInventoryLoaded={loaded => {
+        const observed = loaded.engines.find(engine => engine.id === selected.id);
+        if (observed) setAccountSnapshots(current => ({ ...current, [accountKey]: observed }));
+      }} providers={[]} onSelectBuiltinModel={async () => {}} />
+    <details className="connection-engine-advanced">
+      <summary>{t("settings.engineAdvanced")}</summary>
+      <SettingsGroup>
+        <SettingsRow title={t("settings.engineBinaryPath")} block>
+          <input key={`path-${selected.id}-${selectedSettings?.binary_path ?? ""}`} className="settings-input"
+            type="text" aria-label={`${engineLabel(selected.id, selected)} ${t("settings.engineBinaryPath")}`}
+            data-testid={`settings-engine-${selected.id}-path`} placeholder={selected.binary_path || t("settings.engineAutoBinary")}
+            value={pathDrafts[accountKey] ?? selectedSettings?.binary_path ?? ""} spellCheck={false} disabled={busy}
+            onChange={event => setPathDrafts(current => ({ ...current, [accountKey]: event.target.value }))} />
+          <button type="button" className="settings-button"
+            data-testid={`settings-engine-${selected.id}-path-save`}
+            disabled={busy || (pathDrafts[accountKey] ?? selectedSettings?.binary_path ?? "").trim() === (selectedSettings?.binary_path ?? "")}
+            onClick={() => void save({ [selected.id]: { binary_path: (pathDrafts[accountKey] ?? "").trim() } })}>
+            {t("common.save")}
+          </button>
+        </SettingsRow>
+      </SettingsGroup>
+    </details>
+  </ConnectionPage>;
+
   return <>
-    {!embedded ? <SettingsPageHeader title={t("settings.agents")} description={t("settings.agentsDescription")} /> : null}
+    {!embedded ? <SettingsPageHeader title={t("settings.agents")} /> : null}
     <SettingsSection title={t("provider.engineConnections")} actions={refreshButton} testID="settings-engine-connections">
-      {!selected && (error || loadError) ? <p className="settings-error" role="alert">{error || loadError}</p> : null}
+      {error || loadError ? <p className="settings-error" role="alert">{error || loadError}</p> : null}
       {result === undefined ? <SettingsGroup>
         <div className="settings-engine-skeleton" role="status" aria-label={t("settings.engineDetecting")} aria-busy="true">
           <div className="settings-engine-row" aria-hidden="true"><span className="settings-engine-skeleton-line settings-engine-skeleton-title" /></div>
@@ -193,7 +245,7 @@ export function EngineSettingsSection({
           className="settings-engine-row settings-engine-row-toggle connection-engine-row"
           data-testid={`settings-engine-${engine.id}-status`}
           aria-label={`${engineLabel(engine.id, engine)} · ${status(engine)}`}
-          onClick={() => { setError(""); setOpenedID(engine.id); }}>
+          onClick={() => { setError(""); onSelectEngine(engine.id); }}>
           <span className="settings-engine-row-main">
             <span className="settings-engine-row-icon" aria-hidden="true"><EngineIcon engine={engine.id} /></span>
             <span className="settings-engine-row-name">{engineLabel(engine.id, engine)}</span>
@@ -203,52 +255,5 @@ export function EngineSettingsSection({
         </button>)}
       </SettingsGroup> : <p className="settings-muted-line">{t("provider.engineConnectionsEmpty")}</p>}
     </SettingsSection>
-    {selected ? <Modal key={selected.id} ariaLabel={engineLabel(selected.id, selected)}
-      title={engineLabel(selected.id, selected)} icon={<EngineIcon engine={selected.id} />}
-      panelClassName="model-dialog connection-detail-drawer" onClose={close} closeDisabled={busy}>
-      <div className="connection-detail-body">
-        <SettingsRow title={status(selected)}>
-          <button type="button" className="settings-switch" role="switch" aria-checked={enabled(selected)}
-            aria-label={`${engineLabel(selected.id, selected)} ${t(enabled(selected) ? "settings.engineDisable" : "settings.engineEnable")}`}
-            data-testid={`settings-engine-${selected.id}-enabled`} disabled={busy}
-            onClick={() => void save({ [selected.id]: { enabled: !enabled(selected) } })}>
-            <span className="settings-switch-thumb" aria-hidden="true" />
-          </button>
-        </SettingsRow>
-        {error || loadError ? <p className="settings-error" role="alert">{error || loadError}</p> : null}
-        {selected.error || !selected.binary_ok ? <p className="settings-engine-reason">{selected.error || t("settings.engineNotInstalledHint")}</p> : null}
-        {!selected.binary_ok ? <div className="settings-engine-path-row">
-          {selected.install_url ? <button className="settings-button" type="button"
-            onClick={() => void window.wuu.openExternal(selected.install_url!).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))}>
-            {t("settings.engineInstall")}<ExternalLink className="icon" aria-hidden="true" />
-          </button> : null}
-          {refreshButton}
-        </div> : null}
-        <SubscriptionDashboard key={`account-${accountKey}-${selected.binary_path ?? ""}`}
-          scope={{ kind: "engine", id: selected.id }} inventory={result}
-          initialInventory={snapshot ? { engines: [snapshot] } : undefined}
-          onInventoryLoaded={loaded => {
-            const observed = loaded.engines.find(engine => engine.id === selected.id);
-            if (observed) setAccountSnapshots(current => ({ ...current, [accountKey]: observed }));
-          }} providers={[]} onSelectBuiltinModel={async () => {}} />
-        <details className="connection-engine-advanced">
-          <summary>{t("settings.engineAdvanced")}</summary>
-          <label className="settings-field">
-            <span>{t("settings.engineBinaryPath")}</span>
-            <input key={`${selected.id}-${selectedSettings?.binary_path ?? ""}`} className="settings-input"
-              type="text" aria-label={`${engineLabel(selected.id, selected)} ${t("settings.engineBinaryPath")}`}
-              data-testid={`settings-engine-${selected.id}-path`} placeholder={selected.binary_path || t("settings.engineAutoBinary")}
-              value={pathDrafts[accountKey] ?? selectedSettings?.binary_path ?? ""} spellCheck={false} disabled={busy}
-              onChange={event => setPathDrafts(current => ({ ...current, [accountKey]: event.target.value }))} />
-          </label>
-          <button type="button" className="settings-button"
-            data-testid={`settings-engine-${selected.id}-path-save`}
-            disabled={busy || (pathDrafts[accountKey] ?? selectedSettings?.binary_path ?? "").trim() === (selectedSettings?.binary_path ?? "")}
-            onClick={() => void save({ [selected.id]: { binary_path: (pathDrafts[accountKey] ?? "").trim() } })}>
-            {t("common.save")}
-          </button>
-        </details>
-      </div>
-    </Modal> : null}
   </>;
 }
