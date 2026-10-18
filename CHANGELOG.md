@@ -10,6 +10,8 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Added
 
+- Add browser settings for importing cookies from local profiles and managing
+  unpacked extensions in the embedded browser.
 - Add DeepSeek Harness as an external ACP engine, with native model and
   reasoning selection, HTTP MCP tools, and persistent conversation recovery.
 - Keep independent activity previews for multiple browser tabs and native windows

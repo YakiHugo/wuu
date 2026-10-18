@@ -11,6 +11,7 @@ import {
   Copy,
   Folder,
   Gauge,
+  Globe,
   KeyRound,
   LayoutDashboard,
   Loader2,
@@ -85,6 +86,7 @@ import { SettingsInputUnit, SettingsRow } from "./SettingsRow";
 import { SettingsGroup, SettingsPageHeader, SettingsSection, SettingsTitlebarSlot, type SettingsStatusTone } from "./SettingsSection";
 import { ActivityPreviewPreferenceSection } from "./ActivityPreviewPreferenceSection";
 import { AppContextSettingsSection } from "./AppContextSettingsSection";
+import { BrowserSettingsSection } from "./BrowserSettingsSection";
 import { ENABLE_APP_SNAPSHOTS } from "../shared/featureFlags";
 import { SystemPermissionsSection } from "./SystemPermissions";
 import { toastErrorMessage } from "./Toast";
@@ -124,6 +126,7 @@ type NativeSettingsPage =
   | "advanced"
   | "general"
   | "appearance"
+  | "browser"
   | "remote"
   | "mcp"
   | "usage"
@@ -143,6 +146,7 @@ const NATIVE_PAGE_ICONS: Record<NativeSettingsPage, IconComponent> = {
   advanced: Gauge,
   general: Settings,
   appearance: Monitor,
+  browser: Globe,
   remote: Smartphone,
   mcp: Plug,
   usage: BarChart3,
@@ -159,6 +163,7 @@ const NATIVE_PAGE_SEARCH_KEY: Record<NativeSettingsPage, Parameters<Translate>[0
   advanced: "settings.searchKeywords.advanced",
   general: "settings.searchKeywords.general",
   appearance: "settings.searchKeywords.appearance",
+  browser: "settings.searchKeywords.browser",
   remote: "settings.searchKeywords.remote",
   mcp: "settings.searchKeywords.mcp",
   usage: "settings.searchKeywords.usage",
@@ -167,6 +172,17 @@ const NATIVE_PAGE_SEARCH_KEY: Record<NativeSettingsPage, Parameters<Translate>[0
 
 function remoteControlAvailable(): boolean {
   return ENABLE_REMOTE_CONTROL && hostSupports("getRemoteControlSnapshot");
+}
+
+function browserSettingsAvailable(): boolean {
+  return Boolean(
+    window.wuu?.listBrowserProfiles &&
+      window.wuu.importBrowserCookies &&
+      window.wuu.listBrowserExtensions &&
+      window.wuu.addBrowserExtension &&
+      window.wuu.setBrowserExtensionEnabled &&
+      window.wuu.removeBrowserExtension,
+  );
 }
 
 // App-level preferences stay at the top of the rail; less frequent setup follows
@@ -185,6 +201,7 @@ function nativeSettingsGroups(): NativeSettingsGroup[] {
       pages: [
         "general",
         "appearance",
+        ...(browserSettingsAvailable() ? ["browser" as const] : []),
         ...(remoteControlAvailable() ? ["remote" as const] : []),
       ],
     },
@@ -220,6 +237,9 @@ function availableSettingsPage(page: SettingsPage | undefined): SettingsPage {
     return "providers";
   }
   if (next === "remote" && !remoteControlAvailable()) {
+    return "providers";
+  }
+  if (next === "browser" && !browserSettingsAvailable()) {
     return "providers";
   }
   return next;
@@ -953,6 +973,8 @@ export function SettingsView({
                   copyState={copyState}
                   onCopyVersion={copyVersionInfo}
                 />
+              ) : activePage === "browser" ? (
+                <BrowserSettingsSection />
               ) : activePage === "appearance" ? (
                 <SettingsAppearancePage
                   codexPets={codexPets}
@@ -2388,6 +2410,8 @@ function settingsPageTitle(page: NativeSettingsPage, t: Translate): string {
       return t("settings.general");
     case "appearance":
       return t("settings.appearance");
+    case "browser":
+      return t("settings.browser");
     case "remote":
       return t("settings.remote");
     case "mcp":
