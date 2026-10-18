@@ -347,6 +347,8 @@ export function ModelServicesPage({
   }, [openService, adding]);
   const [catalogVersion, setCatalogVersion] = useState(0);
   const [catalogRefreshing, setCatalogRefreshing] = useState(false);
+  // Fixture hosts that only render settings do not expose engine inventory.
+  const subscriptionsAvailable = typeof window.wuu?.listEngines === "function";
   const catalog = useCatalogProviders(catalogVersion);
   const detailProvider = providers.find((provider) => provider.name === openService);
 
@@ -378,7 +380,7 @@ export function ModelServicesPage({
             title={t("settings.modelCatalogUpdate")} aria-busy={catalogRefreshing} disabled={catalogRefreshing}
             onClick={() => void refreshCatalog()}><RefreshCw className={`icon${catalogRefreshing ? " settings-spin" : ""}`} aria-hidden="true" /></button>
           <button type="button" className="settings-button" data-testid="settings-connection-add" ref={addButtonRef} disabled={running}
-            onClick={() => setAdding(true)}><Plus className="icon" aria-hidden="true" />{t("provider.addConnection")}</button>
+            onClick={() => setAdding(true)}><Plus className="icon" aria-hidden="true" /><span className="settings-action-label">{t("provider.addConnection")}</span></button>
         </> : undefined}
       />
       {!adding && !detailProvider && !selectedEngine ? <ServicesOverview providers={providers} labels={labels} initialized={initialized}
@@ -387,6 +389,9 @@ export function ModelServicesPage({
         result={inventory} loadError={inventoryError} onRefresh={onRefreshEngines} onUpdate={onUpdateEngines}
         selectedEngineID={selectedEngine} onSelectEngine={setSelectedEngine}
         onCloseEngine={() => { focusEngine.current = selectedEngine ?? ""; setSelectedEngine(undefined); }} /> : null}
+      {!adding && !detailProvider && !selectedEngine && ENABLE_SUBSCRIPTIONS && subscriptionsAvailable ? <SubscriptionDashboard
+        inventory={inventory} providers={providers}
+        onSelectBuiltinModel={(provider, model) => onSave(provider, model)} /> : null}
       {adding ? <div hidden={!!selectedEngine || !!detailProvider}>
         <ServiceConnector providers={providers} running={running} catalog={catalog}
           defaultOn={!defaultUsable} onSave={onSave} onProvidersChanged={onProvidersChanged} catalogDialog inline
