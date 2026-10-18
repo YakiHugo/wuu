@@ -27,7 +27,7 @@ token，并删除旧 token 对应的环境变量引用。
 
 ## 管理服务和模型
 
-在**设置 → 模型接入**中打开已连接的服务。**添加模型**可直接输入模型 ID，无需重复添加服务或凭据。模型行的垃圾桶图标会从此服务的可选项中删除该模型。删除当前选中的模型前，需要明确选择替代模型；只有一个模型时，请先添加另一个。
+在**设置 → 外部连接**中打开已连接的服务。**添加模型**可直接输入模型 ID，无需重复添加服务或凭据。模型行的垃圾桶图标会从此服务的可选项中删除该模型。删除当前选中的模型前，需要明确选择替代模型；只有一个模型时，请先添加另一个。
 
 删除后的模型不会因重新加载或刷新目录而恢复，可在**已删除的模型**中手动恢复。已有对话、模型角色和别名保留原来的模型选择及元数据；删除可选项不会撤销模型访问权限，也不会清除对话记录。
 
@@ -75,13 +75,23 @@ ChatGPT 登录仅使用公开 Responses API，流式传输且不在服务端保�
 |---|---|
 | 本机 Codex 凭据 | 在模型接入中选择对应方式，明确同意复用已有的文件形式 Codex 登录。Wuu 不启动 CLI 登录或改变其存储设置；仅钥匙串存储的 Codex 登录请使用原生 Codex Agent。 |
 | xAI SuperGrok | 添加 **xAI SuperGrok** 服务，按提示在浏览器登录。CLI 使用 `wuu login xai`，运行时选择 `--provider xai-subscription`。 |
-| Grok Build | 先运行 `grok login`，再在 Wuu 中选择检测到的服务，或传入 `--provider grok-build`。登录过期后重新在 Grok CLI 登录；Wuu 不刷新或修改这类凭据。 |
+| Grok Build | 在桌面端“设置 → 外部连接 → Grok Build”点击**登录**。Wuu 调用已安装的 Grok CLI 执行 `grok --no-auto-update login --oauth`，显示进度、取消和完成状态；在 CLI 打开的浏览器中完成授权。不会自动安装 CLI。凭据文件由 CLI 管理，Wuu 只复用、不复制令牌。网页或手机端请在电脑上登录后重新打开连接页面。也可自行运行 `grok login` 后选择检测到的服务，或传入 `--provider grok-build`。 |
 
 SuperGrok 订阅登录、Grok CLI 登录和 `XAI_API_KEY` 是不同的凭据来源，请选择与你的账号对应的连接。文件编辑和命令执行还要求服务及模型支持工具调用。
 
+### 登录方式与来源
+
+ChatGPT 提供**登录账号**（OpenAI 官方 SIWC 授权给 Wuu）和**使用本机登录**（已有的文件型 Codex 登录）。两种方式保留独立连接；切换查看方式不会更改默认模型，也不会把账号复制到另一凭据库。已有 Wuu SIWC 账号可直接选择，不必重复登录。目前安全 SIWC 存储支持 macOS，其他主机不降级为明文或 Codex 身份。
+
+Grok Build 提供由已安装 Grok CLI 打开浏览器登录，以及检查已有本机鉴权，两者都由 CLI 管理。外部引擎复用自身配置；本机登录操作只重新检查，不导入令牌。只有引擎提供可调用的认证方式才显示实际登录入口。Claude、Codex、OpenCode 当前使用其原生设置说明；DSH 没有 ACP 账号登录方法，Hermes/Pi 的终端设置也不是 Wuu 可调用的登录流程。
+
+Anthropic 允许通过未修改的 Claude Code 登录，但不允许第三方中转 Claude.ai 令牌，参见[官方认证政策](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use)。[DSH ACP 协议](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/acp/acp/README.md#protocol-contract)不代表服务账号登录。没有支持的登录集成时，API Key 服务继续使用 API Key。
+
+已有 xAI 订阅路线独立保留。xAI 公布了与[指定客户端](https://x.ai/news/grok-opencode)的 OAuth 集成，但尚未验证公开的 Wuu 专用应用注册协议；现有静态客户端路线不能表述为 Wuu 独立注册的 OAuth 身份。其已保存 xAI 会话由各 xAI 订阅连接共享，并非每条连接一个账号。
+
 ## 查看账号与用量
 
-**设置 → 模型接入**统一列出模型连接。打开连接中的**账号与用量**，查看对应认证和可用额度详情。**本机 Agent 账号**单独展示外部 Agent 的凭据，避免与 Wuu 的模型接入混淆。不同账号或币种不会合计，Codex 凭据操作仍属于本机 Codex 连接。需要配置账号的 ACP Agent 提供登录按钮；选择登录方式后才开始认证，可能会打开浏览器。模型读取失败不代表缺少凭据，CLI 的静态模型列表也不能证明登录状态。
+**设置 → 外部连接**统一列出模型连接。打开连接中的**账号与用量**，查看对应认证和可用额度详情。**本机 Agent 账号**单独展示外部 Agent 的凭据，避免与 Wuu 的模型接入混淆。不同账号或币种不会合计，Codex 凭据操作仍属于本机 Codex 连接。需要配置账号的 ACP Agent 提供登录按钮；选择登录方式后才开始认证，可能会打开浏览器。模型读取失败不代表缺少凭据，CLI 的静态模型列表也不能证明登录状态。
 
 额度读取使用对应连接的凭据来源。已接入旧 Codex、Grok Build、Anthropic OAuth 或本机 Claude Code、Kimi Code、智谱/Z.ai 套餐，以及 DeepSeek/OpenRouter 余额。浏览器 SuperGrok 和任意兼容端点目前不支持额度详情。
 

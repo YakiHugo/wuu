@@ -108,7 +108,7 @@ export function SubscriptionDashboard({
       return sources.filter((source) => !scope ||
         (scope.kind === "provider" ? source.kind === "builtin" && source.id === scope.name : source.kind === "engine" && source.id === scope.id));
     },
-    [loadedInventory, inventory, providers, revision, authProviders, canRefresh, scope?.kind, scope?.kind === "provider" ? scope.name : scope?.id],
+    [loadedInventory, inventory, providers, revision, authProviders, canRefresh, now, scope?.kind, scope?.kind === "provider" ? scope.name : scope?.id],
   );
 
   // Group presentation only. Every connection keeps its own account snapshot,
@@ -203,7 +203,7 @@ export function SubscriptionDashboard({
             return (
               <article key={key} className={scope ? undefined : "settings-subscription"} aria-label={identity?.label ?? first.label}>
                 {accounts.map((source, index) => {
-                  const showAuthentication = source.engine?.protocol === "acp" && source.engine.enabled && source.engine.binary_ok
+                  const showAuthentication = source.engine?.enabled && source.engine.binary_ok
                     && (scope?.kind === "engine" || source.login !== "ready" || source.catalogFailed);
                   const status = source.login === "unavailable" ? source.engine && !source.engine.binary_ok ? "settings.engineNotInstalled" : source.engine && !source.engine.enabled ? "settings.engineDisabled" : "settings.subscriptionUnavailable"
                     : source.catalogFailed ? "settings.subscriptionCatalogFailed"
@@ -211,7 +211,7 @@ export function SubscriptionDashboard({
                   const observed = source.quota?.status === "available" || source.quota?.status === "stale";
                   const account = observed ? source.quota?.account : undefined;
                   const serviceNamedConnection = source.id.toLowerCase() === identity?.label.toLowerCase();
-                  const accountName = account?.label || (source.provider && (accounts.length > 1 || !serviceNamedConnection) ? source.id : undefined);
+                  const accountName = account?.label || (!scope && source.provider && (accounts.length > 1 || !serviceNamedConnection) ? source.id : undefined);
                   const origin = account?.source;
                   const observedAt = source.quota?.observed_at ?? source.quota?.checked_at;
                   const observedMillis = observedAt ? Date.parse(observedAt) : NaN;
@@ -271,14 +271,16 @@ export function SubscriptionDashboard({
                       {accounts.length > 1 ? controls : null}
                     </div> : null}
                     {sourceLabel ? <span className="sr-only">{t("settings.subscriptionAccountSource", { source: sourceLabel })}</span> : null}
-                    {status && !(scope?.kind === "engine" && source.login === "unavailable" && (!scopedEngine?.enabled || !scopedEngine?.binary_ok)) ? <p className="settings-subscription-status">{t(status)}</p> : null}
+                    {status && !(scope?.kind === "provider" && source.login === "sign_in") && !(scope?.kind === "engine" && source.login === "unavailable" && (!scopedEngine?.enabled || !scopedEngine?.binary_ok)) ? <p className="settings-subscription-status">{t(status)}</p> : null}
                     {quotaLoading && source.engine?.enabled && source.engine.binary_ok && source.engine.capabilities?.includes("account-quota")
                       ? <QuotaSkeleton />
-                      : <Quota source={source} now={now} />}
+                      : <Quota source={source} now={now} hideSignIn={scope?.kind === "provider"} />}
                     {scope?.kind === "engine" && !source.quota && !quotaLoading ? <p className="settings-subscription-status">{t("settings.subscriptionQuotaUnknown")}</p> : null}
                     {(observedLabel && showObservationAge) || showAuthentication ? <div className="settings-subscription-actions">
                       {observedLabel && showObservationAge ? <time className="settings-subscription-age" dateTime={observedAt} title={observationTitle}>{observedLabel}</time> : null}
-                      {showAuthentication ? <EngineAuthentication engineID={source.id} compact onAuthenticated={() => setRefreshVersion((value) => value + 1)} /> : null}
+                      {showAuthentication ? <EngineAuthentication engineID={source.id} protocol={source.engine?.protocol} compact disabled={refreshing}
+                        onAuthenticated={() => setRefreshVersion((value) => value + 1)}
+                        onReuseLocal={() => setRefreshVersion((value) => value + 1)} /> : null}
                     </div> : null}
                     {checkedProvider === source.id ? <p className="settings-subscription-status" role="status">{t("settings.codexLoginVerified")}</p> : null}
                   </section>;
@@ -316,13 +318,13 @@ function QuotaSkeleton(): JSX.Element {
   </div>;
 }
 
-function Quota({ source, now }: { source: SubscriptionSource; now: number }): JSX.Element | null {
+function Quota({ source, now, hideSignIn = false }: { source: SubscriptionSource; now: number; hideSignIn?: boolean }): JSX.Element | null {
   const { t, formatNumber, formatDate } = useI18n();
   const quota = source.quota;
   if (!quota) return null;
   const statusKey = quota.status === "stale" ? "settings.subscriptionQuotaRefreshFailed"
     : quota.status === "unavailable" ? "settings.subscriptionQuotaUnavailable"
-      : quota.status === "sign_in" ? "settings.subscriptionSignIn"
+      : quota.status === "sign_in" && !hideSignIn ? "settings.subscriptionSignIn"
         : quota.status === "unsupported" ? "settings.subscriptionQuotaUnsupported" : null;
   const expiredSnapshot = quota.status === "available" && quota.expires_at !== undefined && Date.parse(quota.expires_at) <= now;
   const windows = quota.status === "available" || quota.status === "stale" ? quota.windows ?? [] : [];

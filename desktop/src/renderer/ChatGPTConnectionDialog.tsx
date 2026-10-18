@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import type { ProviderSummary } from "../shared/protocol";
 import { ChatGPTLogin } from "./ChatGPTLogin";
 import { ConnectionPage } from "./ConnectionPage";
@@ -9,7 +9,7 @@ import { SelectMenu } from "./SelectMenu";
 import type { SaveProvider } from "./ModelServicesPage";
 import { useI18n } from "./i18n";
 
-export function ChatGPTConnectionDialog({ providers, running, defaultOn, onSave, onClose, onConnected, onProvidersChanged, inline = false }: {
+export function ChatGPTConnectionDialog({ providers, running, defaultOn, onSave, onClose, onConnected, onProvidersChanged, inline = false, renderAuthMethods }: {
   providers: readonly ProviderSummary[];
   running: boolean;
   defaultOn: boolean;
@@ -18,6 +18,7 @@ export function ChatGPTConnectionDialog({ providers, running, defaultOn, onSave,
   onConnected: (name: string) => void;
   onProvidersChanged?: (providers: ProviderSummary[]) => void;
   inline?: boolean;
+  renderAuthMethods?: (disabled: boolean) => ReactNode;
 }): JSX.Element {
   const { t } = useI18n();
   const [accounts, setAccounts] = useState<Awaited<ReturnType<typeof window.wuu.listChatGPTAccounts>>["accounts"]>([]);
@@ -78,6 +79,8 @@ export function ChatGPTConnectionDialog({ providers, running, defaultOn, onSave,
     footer={<>{inline ? null : <button type="button" className="settings-button settings-button-ghost" disabled={busy} onClick={onClose}>{t("common.cancel")}</button>}
       <button type="submit" className="settings-button settings-button-primary" data-testid="settings-provider-connect" disabled={!canSave}>{t(busy ? "provider.connecting" : "provider.connectAction")}</button></>}>
     <div className="model-connect-body">
+      {renderAuthMethods?.(busy || signingIn || running)}
+      <small className="connection-auth-source" data-auth-source="wuu-siwc">{t("provider.authAppSource")}</small>
       {accounts.length ? <div className="model-connect-field"><span>{t("provider.chatgptAccount")}</span><SelectMenu value={accountId} disabled={busy || signingIn}
         ariaLabel={t("provider.chatgptAccount")} onChange={setAccountId} options={accounts.map(item => ({ value: item.id, label: `${item.email || "ChatGPT"} · ${item.id}` }))} /></div> : null}
       {account && account.status !== "connected" ? <p role="status">{t(account.status === "permission_required" ? "provider.chatgptPermissionRequired" : "provider.chatgptReconnectRequired")}</p> : null}

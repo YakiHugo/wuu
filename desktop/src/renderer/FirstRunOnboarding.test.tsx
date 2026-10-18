@@ -487,6 +487,9 @@ describe("FirstRunOnboarding", () => {
   });
 
   it.each([false, true])("connects ChatGPT without duplicating an existing provider (%s) and retries failures", async (existing) => {
+    await act(async () => { await import("./ChatGPTConnectionDialog"); });
+    window.wuu.listChatGPTAccounts = vi.fn().mockResolvedValue({ accounts: [] });
+    window.wuu.startChatGPTLogin = vi.fn();
     const reuse = vi.fn(async () => ({ providers: [] }));
     window.wuu.useCodexCredentials = reuse;
     const save = vi.fn().mockRejectedValueOnce(new Error("Codex login is unavailable")).mockResolvedValue(undefined);
@@ -502,8 +505,12 @@ describe("FirstRunOnboarding", () => {
     await clickButton("继续");
     await clickButton("继续");
     await act(async () => {
-      container.querySelector<HTMLButtonElement>(".model-service-tile[data-subscription=openai-codex]")!.click();
+      container.querySelector<HTMLButtonElement>('.model-service-tile[data-connection="chatgpt"]')!.click();
     });
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="settings-auth-method-local"]')!.click());
+    expect(save).not.toHaveBeenCalled();
+    expect(reuse).not.toHaveBeenCalled();
+    expect(window.wuu.startChatGPTLogin).not.toHaveBeenCalled();
     expect(document.querySelector("[data-testid=settings-provider-connect-key]")).toBeNull();
     const connect = () => document.querySelector<HTMLButtonElement>("[data-testid=settings-provider-connect]")!;
     await act(async () => connect().click());
@@ -519,6 +526,10 @@ describe("FirstRunOnboarding", () => {
   });
 
   it("opens an existing ChatGPT connection from settings instead of adding a duplicate", async () => {
+    await act(async () => { await import("./ChatGPTConnectionDialog"); });
+    window.wuu.listChatGPTAccounts = vi.fn().mockResolvedValue({ accounts: [] });
+    window.wuu.startChatGPTLogin = vi.fn();
+    window.wuu.useCodexCredentials = vi.fn();
     const open = vi.fn();
     const save = vi.fn(async () => undefined);
     await act(async () => root.render(<I18nProvider><ServiceConnector
@@ -526,7 +537,11 @@ describe("FirstRunOnboarding", () => {
       running={false} catalog={{ providers: [], failed: false }} defaultOn={false}
       onSave={save} onConnected={vi.fn()} onOpenExisting={open}
     /></I18nProvider>));
-    await act(async () => container.querySelector<HTMLButtonElement>('[data-subscription="openai-codex"]')!.click());
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-connection="chatgpt"]')!.click());
+    expect(open).not.toHaveBeenCalled();
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="settings-auth-method-local"]')!.click());
+    expect(window.wuu.startChatGPTLogin).not.toHaveBeenCalled();
+    expect(window.wuu.useCodexCredentials).not.toHaveBeenCalled();
     expect(open).toHaveBeenCalledWith("work-chatgpt");
     expect(save).not.toHaveBeenCalled();
     expect(document.querySelector('[data-testid="settings-provider-connect"]')).toBeNull();

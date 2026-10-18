@@ -1368,6 +1368,7 @@ export type EngineUpdateParams = EngineSettingsConfig;
 
 export type EngineAuthParams = {
   engine_id: string;
+  /** Agent-advertised method, or local-cli for explicit Grok login on the local desktop only. */
   method_id?: string;
 };
 

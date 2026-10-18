@@ -854,7 +854,10 @@ export class RemoteDesktopBridge {
       updateGeneralSettings: (params) => this.call("config/general/update", params),
       updateEngines: (params) => this.call("engine/update", params),
       listEngineAuthMethods: (engineID) => this.call("engine/auth/methods", { engine_id: engineID }),
-      authenticateEngine: (engineID, methodID) => this.call("engine/authenticate", { engine_id: engineID, method_id: methodID }),
+      authenticateEngine: async (engineID, methodID) => {
+        if (methodID === "local-cli") throw new UnavailableHostOperationError("authenticateEngine");
+        return this.call("engine/authenticate", { engine_id: engineID, method_id: methodID });
+      },
       cancelEngineAuth: (engineID) => this.call("engine/auth/cancel", { engine_id: engineID }),
       updateExtensionPackage: (params) => this.call("extension/package/update", params),
       loadPluginDesktopModule: async (params) => this.pluginAssets.module(await this.call("plugin/desktop-module/read",params)),

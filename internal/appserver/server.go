@@ -220,6 +220,7 @@ type Server struct {
 	// respond with "remote-only" errors; the remote-host package binds
 	// a per-device registrar via WithPushRegistrar in RunStdioForDevice.
 	pushRegistrar PushRegistrar
+	remoteDevice  bool
 
 	mu      sync.Mutex
 	threads map[string]*threadState
@@ -959,7 +960,7 @@ func shutdownExecutionActive(threads []*threadState, controls map[*agentcontrol.
 }
 
 func RunStdio(ctx context.Context, rt *runtime.Session, in io.Reader, out io.Writer) error {
-	return RunStdioForDevice(ctx, rt, in, out, nil)
+	return runStdio(ctx, rt, in, out, nil, false)
 }
 
 // RunStdioForDevice runs the protocol loop for a remote device session,
@@ -967,11 +968,16 @@ func RunStdio(ctx context.Context, rt *runtime.Session, in io.Reader, out io.Wri
 // Local desktop sessions call RunStdio, which leaves the registrar nil so
 // those methods fail explicitly instead of parking tokens nowhere.
 func RunStdioForDevice(ctx context.Context, rt *runtime.Session, in io.Reader, out io.Writer, registrar PushRegistrar) error {
+	return runStdio(ctx, rt, in, out, registrar, true)
+}
+
+func runStdio(ctx context.Context, rt *runtime.Session, in io.Reader, out io.Writer, registrar PushRegistrar, remoteDevice bool) error {
 	if rt == nil {
 		return errors.New("runtime session is required")
 	}
 	s := New(rt, out)
 	s.pushRegistrar = registrar
+	s.remoteDevice = remoteDevice
 	defer s.Close()
 	if s.startupErr != nil {
 		return s.startupErr

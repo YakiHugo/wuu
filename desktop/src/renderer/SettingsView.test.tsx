@@ -443,6 +443,99 @@ async function openProviderCatalog(): Promise<void> {
 }
 
 describe("SettingsView model services", () => {
+  it.each([true, false])("offers one ChatGPT entry and switches methods without auth or mutation, existing local=%s", async (existingLocal) => {
+    await act(async () => { await import("./ChatGPTConnectionDialog"); await import("./ChatGPTAccountRows"); });
+    const api = installServicesStub();
+    api.listChatGPTAccounts = vi.fn().mockResolvedValue({ accounts: [] });
+    api.startChatGPTLogin = vi.fn();
+    api.useCodexCredentials = vi.fn();
+    const onSave = vi.fn();
+    const initialized = servicesInitialized();
+    Object.assign(initialized.providers![0], { reuse_codex_credentials: true, codex_credential_source: "codex-cli" });
+    if (!existingLocal) initialized.providers = initialized.providers?.filter(provider => provider.type !== "openai-codex");
+    const original = structuredClone(initialized);
+    renderSettings({ initialized, initialPage: "providers", onSave });
+    await flush();
+    await openProviderCatalog();
+    expect(document.querySelectorAll('[data-connection="chatgpt"]')).toHaveLength(1);
+    expect(document.querySelector('[data-subscription="openai-codex"]')).toBeNull();
+    click(document.querySelector('[data-connection="chatgpt"]'));
+    await flush();
+    expect(document.querySelector('[data-testid="settings-auth-method-login"]')?.getAttribute("aria-pressed")).toBe("true");
+    click(document.querySelector('[data-testid="settings-auth-method-local"]'));
+    await flush();
+    expect(document.querySelector('[data-testid="settings-auth-method-local"]')?.getAttribute("aria-pressed")).toBe("true");
+    expect(api.startChatGPTLogin).not.toHaveBeenCalled();
+    expect(api.useCodexCredentials).not.toHaveBeenCalled();
+    expect(onSave).not.toHaveBeenCalled();
+    click(document.querySelector('[data-testid="settings-auth-method-login"]'));
+    await flush();
+    expect(document.querySelector('[data-testid="chatgpt-login-start"]')).not.toBeNull();
+    expect(api.startChatGPTLogin).not.toHaveBeenCalled();
+    expect(onSave).not.toHaveBeenCalled();
+    expect(initialized).toEqual(original);
+  });
+
+  it("returns from an alternative account method form to its original bound connection without saving", async () => {
+    await act(async () => { await import("./ChatGPTConnectionDialog"); await import("./ChatGPTAccountRows"); });
+    const api = installServicesStub();
+    api.listChatGPTAccounts = vi.fn().mockResolvedValue({ accounts: [{ id: "official-account", status: "connected" }] });
+    api.listChatGPTModels = vi.fn().mockResolvedValue({ models: [{ id: "official-model", name: "Official model" }] });
+    api.startChatGPTLogin = vi.fn();
+    api.useCodexCredentials = vi.fn();
+    const initialized = servicesInitialized();
+    initialized.provider = "official";
+    initialized.model = "official-model";
+    initialized.providers = [{ name: "official", type: "chatgpt", model: "official-model", chatgpt_account_id: "official-account", auth_status: "connected", api_key_configured: true }];
+    const original = structuredClone(initialized);
+    const onSave = vi.fn();
+    renderSettings({ initialized, initialPage: "providers", onSave });
+    await flush();
+    click(document.querySelector('[data-provider="official"]'));
+    await flush();
+    click(document.querySelector('[data-testid="settings-auth-method-local"]'));
+    await flush();
+    expect(document.querySelector('[data-testid="settings-auth-method-local"]')?.getAttribute("aria-pressed")).toBe("true");
+    click(document.querySelector('.model-connect-dialog [data-testid="settings-connection-back"]'));
+    await flush();
+    expect(document.querySelector('[data-testid="settings-provider-back"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="settings-auth-method-login"]')?.getAttribute("aria-pressed")).toBe("true");
+    expect(document.querySelector('[data-testid="settings-provider-model"][data-model="official-model"]')?.getAttribute("aria-pressed")).toBe("true");
+    expect(api.startChatGPTLogin).not.toHaveBeenCalled();
+    expect(api.useCodexCredentials).not.toHaveBeenCalled();
+    expect(onSave).not.toHaveBeenCalled();
+    expect(initialized).toEqual(original);
+  });
+
+  it("locks account method navigation during explicit account login and unlocks after cancel", async () => {
+    await act(async () => { await import("./ChatGPTAccountRows"); });
+    const api = installServicesStub();
+    api.listChatGPTAccounts = vi.fn().mockResolvedValue({ accounts: [{ id: "official-account", status: "reauth_required" }] });
+    api.startChatGPTLogin = vi.fn().mockResolvedValue({ login_id: "method-login", interval_ms: 60000 });
+    api.cancelChatGPTLogin = vi.fn().mockResolvedValue(undefined);
+    const initialized = servicesInitialized();
+    initialized.providers!.push({ name: "official", type: "chatgpt", model: "official-model", chatgpt_account_id: "official-account", auth_status: "reauth_required" });
+    const onSave = vi.fn();
+    renderSettings({ initialized, initialPage: "providers", onSave });
+    await flush();
+    click(document.querySelector('[data-provider="official"]'));
+    await flush();
+    click(document.querySelector('[data-testid="chatgpt-login-start"]'));
+    await flush();
+    expect(api.startChatGPTLogin).toHaveBeenCalledExactlyOnceWith("official-account", false);
+    const local = document.querySelector<HTMLButtonElement>('[data-testid="settings-auth-method-local"]')!;
+    expect(local.disabled).toBe(true);
+    expect(document.querySelector<HTMLButtonElement>('[data-testid="settings-provider-back"]')!.disabled).toBe(true);
+    click(local);
+    expect(document.querySelector('[data-testid="chatgpt-login-cancel"]')).not.toBeNull();
+    click(document.querySelector('[data-testid="chatgpt-login-cancel"]'));
+    await flush();
+    expect(api.cancelChatGPTLogin).toHaveBeenCalledExactlyOnceWith("method-login");
+    expect(local.disabled).toBe(false);
+    expect(document.querySelector<HTMLButtonElement>('[data-testid="settings-provider-back"]')!.disabled).toBe(false);
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
   it("finds consolidated engine and subscription controls through settings search", async () => {
     installServicesStub();
     renderSettings({ initialized: servicesInitialized(), initialPage: "general", locale: "en-US" });
@@ -700,7 +793,13 @@ describe("SettingsView model services", () => {
     renderSettings({ initialized: servicesInitialized(), initialPage: "providers", onSave });
     await flush();
     click(document.querySelector('[data-provider="deepseek"]'));
-    click(document.querySelector('[aria-label="删除 DeepSeek V4 Flash"]'));
+    const modelActions = document.querySelector<HTMLButtonElement>('[data-testid="settings-provider-model-actions"][data-model="deepseek-v4-flash"]')!;
+    expect(modelActions.getAttribute("aria-haspopup")).toBe("menu");
+    expect(modelActions.getAttribute("aria-label")?.trim()).toBeTruthy();
+    modelActions.focus();
+    click(modelActions);
+    expect(onSave).not.toHaveBeenCalled();
+    click(document.querySelector('[role="menuitem"][data-tone="danger"]'));
     expect(document.querySelector('.model-remove-dialog')).not.toBeNull();
     act(() => document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     expect(document.querySelector('.model-remove-dialog')).toBeNull();
@@ -781,14 +880,21 @@ describe("SettingsView model services", () => {
     await flush();
     click(document.querySelector('[data-provider="deepseek"]'));
 
-    click(document.querySelector('[aria-label="删除 DeepSeek V4 Flash"]'));
+    const modelActions = document.querySelector<HTMLButtonElement>('[data-testid="settings-provider-model-actions"][data-model="deepseek-v4-flash"]')!;
+    expect(modelActions.getAttribute("aria-haspopup")).toBe("menu");
+    expect(modelActions.getAttribute("aria-label")?.trim()).toBeTruthy();
+    modelActions.focus();
+    click(modelActions);
+    expect(onSave).not.toHaveBeenCalled();
+    click(document.querySelector('[role="menuitem"][data-tone="danger"]'));
     expect(onSave).not.toHaveBeenCalled();
     await act(async () => {
       document.querySelector<HTMLButtonElement>('[data-testid="settings-provider-remove-model-confirm"]')!.click();
     });
     expect(onSave).toHaveBeenLastCalledWith("deepseek", "deepseek-v4-pro", undefined, { remove_model: "deepseek-v4-flash", keep_selection: true }, undefined);
 
-    click(document.querySelector('[aria-label="删除 DeepSeek V4 Pro"]'));
+    click(document.querySelector('[data-testid="settings-provider-model-actions"][data-model="deepseek-v4-pro"]'));
+    click(document.querySelector('[role="menuitem"][data-tone="danger"]'));
     expect(document.querySelector<HTMLButtonElement>('[data-testid="settings-provider-remove-model-confirm"]')!.disabled).toBe(true);
     click(document.querySelector('[data-testid="settings-provider-replacement-model"]'));
     click(document.querySelector('[data-value="deepseek-v4-flash"]'));
@@ -799,7 +905,8 @@ describe("SettingsView model services", () => {
 
     // Removing the workspace default model atomically saves the chosen replacement.
     renderSettings({ initialized: { ...initialized, provider: "deepseek", model: "deepseek-v4-pro" }, initialPage: "providers", onSave });
-    click(document.querySelector('[aria-label="删除 DeepSeek V4 Pro"]'));
+    click(document.querySelector('[data-testid="settings-provider-model-actions"][data-model="deepseek-v4-pro"]'));
+    click(document.querySelector('[role="menuitem"][data-tone="danger"]'));
     click(document.querySelector('[data-testid="settings-provider-replacement-model"]'));
     click(document.querySelector('[data-value="deepseek-v4-flash"]'));
     onSave.mockRejectedValueOnce(new Error("Unable to save model choices"));
@@ -821,7 +928,8 @@ describe("SettingsView model services", () => {
     // The last model cannot disappear while the provider still needs a selection.
     const sole = initialized.providers!.find((provider) => provider.name === "deepseek")!;
     renderSettings({ initialized: { ...initialized, provider: "deepseek", model: sole.model, providers: [{ ...sole, models: [{ id: sole.model }] }] }, initialPage: "providers", onSave });
-    click(document.querySelector('[data-testid="settings-provider-remove-model"]'));
+    click(document.querySelector('[data-testid="settings-provider-model-actions"]'));
+    click(document.querySelector('[role="menuitem"][data-tone="danger"]'));
     expect(document.querySelector('[data-testid="settings-provider-replacement-model"]')).toBeNull();
     expect(document.querySelector<HTMLButtonElement>('[data-testid="settings-provider-remove-model-confirm"]')!.disabled).toBe(true);
   });

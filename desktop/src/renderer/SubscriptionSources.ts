@@ -77,9 +77,10 @@ function engineSource(engine: EngineInfo): SubscriptionSource {
 
 function engineLogin(engine: EngineInfo): SubscriptionLogin {
   if (!engine.binary_ok || !engine.enabled) return "unavailable";
-  // Only an ACP catalog was read from an accepted session. Static CLI model
-  // lists and Codex model/list do not establish an authenticated account.
-  if (engine.protocol === "acp" && (engine.models ?? []).length > 0) return "ready";
+  // Model catalogs can be static or available before provider authentication.
+  // Only a current account observation establishes an authenticated account.
+  if (engine.quota?.status === "available" && engine.quota.account
+    && (!engine.quota.expires_at || Date.parse(engine.quota.expires_at) > Date.now())) return "ready";
   // Catalog failures can be cancellations or transport errors, not proof that
   // credentials are missing. Authentication remains an explicit user action.
   return "unknown";
@@ -127,7 +128,7 @@ function isXAI(type: string | undefined): boolean {
   return normalized === "xai-subscription" || normalized === "xai-oauth" || normalized === "grok-subscription" || normalized === "supergrok";
 }
 
-function isGrokBuild(type: string | undefined): boolean {
+export function isGrokBuild(type: string | undefined): boolean {
   const normalized = normalize(type);
   return normalized === "grok-build" || normalized === "xai-grok-build" || normalized === "grok-cli";
 }

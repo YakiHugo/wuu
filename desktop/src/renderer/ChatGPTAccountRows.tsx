@@ -4,14 +4,16 @@ import { ChatGPTLogin } from "./ChatGPTLogin";
 import { SettingsRow } from "./SettingsRow";
 import { useI18n } from "./i18n";
 
-export function ChatGPTAccountRows({ provider, disabled, onProvidersChanged, onRefresh }: {
+export function ChatGPTAccountRows({ provider, disabled, onProvidersChanged, onRefresh, onBusyChange }: {
   provider: ProviderSummary;
   disabled: boolean;
   onProvidersChanged?: (providers: ProviderSummary[]) => void;
   onRefresh: () => void;
+  onBusyChange?: (busy: boolean) => void;
 }): JSX.Element {
   const { t } = useI18n();
   const [busy, setBusy] = useState(false);
+  useEffect(() => { onBusyChange?.(busy); return () => onBusyChange?.(false); }, [busy, onBusyChange]);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const accountId = provider.chatgpt_account_id;
@@ -38,9 +40,8 @@ export function ChatGPTAccountRows({ provider, disabled, onProvidersChanged, onR
   }
   return <>
     {accountLabel ? <SettingsRow title={t("provider.chatgptAccount")}><span className="settings-row-control-value model-service-value">{accountLabel}</span></SettingsRow> : null}
-    <SettingsRow title={t("provider.chatgptAccountId")}><span className="settings-row-control-value model-service-value">{accountId}</span></SettingsRow>
-    {provider.auth_status !== "connected" ? <p className="settings-muted-line">{t(provider.auth_status === "permission_required" ? "provider.chatgptPermissionRequired" : "provider.chatgptReconnectRequired")}</p> : null}
     <ChatGPTLogin onAdvisory={setNotice} accountId={accountId} enablePlanUsage={provider.auth_status === "permission_required"} disabled={disabled || busy} onBusyChange={setBusy} onProvidersChanged={onProvidersChanged} onAuthenticated={() => { setNotice(""); onRefresh(); }} />
+    <SettingsRow title={t("provider.chatgptAccountId")}><span className="settings-row-control-value model-service-value">{accountId}</span></SettingsRow>
     <SettingsRow title={t("provider.modelsSection")}><button type="button" className="settings-button" disabled={disabled || busy || provider.auth_status !== "connected"} onClick={onRefresh}>{t("provider.chatgptRefreshModels")}</button></SettingsRow>
     <SettingsRow title={t("provider.accountUsage")} description={t("provider.chatgptUsageHint")}><button type="button" className="settings-button" onClick={() => void window.wuu.openExternal("https://chatgpt.com/settings/usage").catch(cause => setError(String(cause)))}>{t("provider.chatgptManageUsage")}</button></SettingsRow>
     <SettingsRow title={t("provider.chatgptSignOut")}><button type="button" className="settings-button" disabled={disabled || busy || !accountId} onClick={() => void signOut()}>{t("provider.chatgptSignOut")}</button></SettingsRow>

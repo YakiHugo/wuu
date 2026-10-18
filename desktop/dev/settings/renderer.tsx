@@ -56,6 +56,22 @@ const providers: ProviderSummary[] = empty ? [] : [
   },
 ];
 
+// Explicit synthetic login scenarios; no process, browser or credentials are used.
+const loginFixture = params.get("connections") === "login";
+if (loginFixture && providers[1]) {
+  providers[1].api_key_configured = false;
+  if (long) {
+    const id = "grok-build/selected-model-with-a-long-readable-identifier-for-narrow-layout-review";
+    providers[1].model = id;
+    providers[1].models = [{ id, display_name: "Grok Build selected model with a long descriptive name for narrow layout review" }, ...(providers[1].models ?? [])];
+  }
+}
+if (params.get("connections") === "methods") providers.push({
+  name: "chatgpt-personal", type: "chatgpt", model: "official-model", api_key_configured: true,
+  auth_status: "connected", chatgpt_account_id: "fixture-app-account", models: [{ id: "official-model", display_name: "Official account model" }],
+});
+let cancelFixtureLogin: (() => void) | undefined;
+
 const catalogProviders: CatalogProviderSummary[] = [
   ["deepseek", "DeepSeek", "openai-compatible", "https://api.deepseek.com", 4, "deepseek-v4-pro"],
   ["moonshotai-cn", "Moonshot AI (China)", "openai-compatible", "https://api.moonshot.cn/v1", 4, "kimi-k3"],
@@ -226,7 +242,33 @@ window.wuu = {
         : catalogProviders,
     };
   },
+  listChatGPTAccounts: async () => ({ accounts: params.get("connections") === "methods" ? [{ id: "fixture-app-account", email: "account@example.test", status: "connected" }] : [] }),
+  listChatGPTModels: async () => ({ models: [{ id: "official-model", name: "Official account model" }] }),
+  startChatGPTLogin: async () => ({ login_id: "fixture-login", interval_ms: 1000 }),
+  pollChatGPTLogin: async () => ({ status: "pending" }),
+  cancelChatGPTLogin: async () => ({ ok: true }),
+  loadCodexModels: async () => ({ providers: structuredClone(providers) }),
+  useCodexCredentials: async (name: string) => {
+    const provider = providers.find(item => item.name === name);
+    if (provider) { provider.reuse_codex_credentials = true; provider.codex_credential_source = "codex-cli"; }
+    return { providers: structuredClone(providers) };
+  },
   listEngineAuthMethods: async () => ({ methods: [], authenticated: true }),
+  authenticateEngine: async (engine: string, method: string) => {
+    if (!loginFixture || engine !== "grok" || method !== "local-cli") throw new Error("Unsupported fixture operation");
+    await new Promise<void>((resolve, reject) => {
+      const timer = params.get("login") === "pending" ? undefined : window.setTimeout(() => {
+        cancelFixtureLogin = undefined;
+        if (params.get("login") === "failed") reject(new Error("Synthetic login failure"));
+        else resolve();
+      }, 1200);
+      cancelFixtureLogin = () => { window.clearTimeout(timer); cancelFixtureLogin = undefined; reject(new Error("Synthetic cancellation")); };
+    });
+    providers[1].api_key_configured = true;
+    return { methods: [], authenticated: true };
+  },
+  cancelEngineAuth: async () => { cancelFixtureLogin?.(); },
+  refreshModelCatalog: async () => ({ providers: structuredClone(providers), model_count: providers.reduce((count, provider) => count + (provider.models?.length ?? 0), 0) }),
   openExternal: async () => undefined,
   getRemoteControlSnapshot: async () => ({ status: { fingerprint: "AB12-CD34", store: "", devices: [] }, host_running: false }),
   onRemoteControlEvent: () => () => undefined,
@@ -340,6 +382,12 @@ function Fixture(): JSX.Element {
         onBack={() => undefined}
         onSave={save}
         onRemoveProvider={async (name) => setState((current) => ({ ...current, providers: current.providers?.filter((item) => item.name !== name) }))}
+        onProvidersChanged={updated => setState(current => ({ ...current,
+          providers: current.providers?.map(provider => {
+            const next = updated.find(item => item.name === provider.name && item.type === provider.type && item.base_url === provider.base_url);
+            return next ? { ...provider, api_key_configured: next.api_key_configured, auth_status: next.auth_status, reuse_codex_credentials: next.reuse_codex_credentials, codex_credential_source: next.codex_credential_source } : provider;
+          }),
+        }))}
         onRefreshModelCatalog={async () => undefined}
         onRefreshEngineInventory={async () => engineInventory}
         onUpdateEngineInventory={updateEngines}

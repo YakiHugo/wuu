@@ -1,3 +1,4 @@
+import { GrokLogin } from "./GrokLogin";
 import {
   type FormEvent as ReactFormEvent,
   type ReactNode,
@@ -273,6 +274,16 @@ function errorMessage(error: unknown, t: Translate): string {
   return error instanceof Error && error.message ? error.message : t("provider.saveFailed");
 }
 
+type AccountMethod = "login" | "local";
+function AccountMethods({ selected, disabled, onSelect }: { selected: AccountMethod | undefined; disabled: boolean; onSelect: (method: AccountMethod) => void }): JSX.Element {
+  const { t } = useI18n();
+  return <div className="connection-auth-methods" role="group" aria-label={t("provider.authMethod")}>
+    {(["login", "local"] as const).map(method => <button key={method} type="button" className="settings-button settings-button-ghost"
+      data-testid={`settings-auth-method-${method}`} aria-pressed={selected === method} disabled={disabled}
+      onClick={() => onSelect(method)}>{t(method === "login" ? "provider.authSignIn" : "provider.authUseLocal")}</button>)}
+  </div>;
+}
+
 type CatalogState = { providers?: CatalogProviderSummary[]; failed: boolean };
 
 export function useCatalogProviders(version: number): CatalogState {
@@ -345,6 +356,7 @@ export function ModelServicesPage({
   }) } : inventory;
   const [openService, setOpenService] = useState("");
   const [adding, setAdding] = useState(false);
+  const [methodOrigin, setMethodOrigin] = useState<{ name: string; target: ConnectTarget }>();
   const [selectedEngine, setSelectedEngine] = useState<string>();
   const focusEngine = useRef("");
   useEffect(() => {
@@ -355,7 +367,7 @@ export function ModelServicesPage({
     }
   }, [selectedEngine, adding]);
   const focusAdd = useRef(false);
-  const closeAdding = () => { focusAdd.current = true; setAdding(false); };
+  const closeAdding = () => { focusAdd.current = true; setAdding(false); setMethodOrigin(undefined); };
   useEffect(() => {
     if (!adding && focusAdd.current) { focusAdd.current = false; addButtonRef.current?.focus(); }
   }, [adding]);
@@ -413,9 +425,11 @@ export function ModelServicesPage({
         selectedEngineID={selectedEngine} onSelectEngine={setSelectedEngine}
         onCloseEngine={() => { focusEngine.current = selectedEngine ?? ""; setSelectedEngine(undefined); }} /> : null}
       {adding ? <div hidden={!!selectedEngine || !!detailProvider}>
-        <ServiceConnector providers={providers} running={running} catalog={catalog}
+        <ServiceConnector key={methodOrigin?.name ?? "catalog"} providers={providers} running={running} catalog={catalog}
           defaultOn={!defaultUsable} onSave={onSave} onProvidersChanged={onProvidersChanged} catalogDialog inline
-          onDismiss={closeAdding} onConnected={name => { setAdding(false); setOpenService(name); }}
+          initialTarget={methodOrigin?.target}
+          onCloseConfiguration={methodOrigin ? () => { setOpenService(methodOrigin.name); setAdding(false); setMethodOrigin(undefined); } : undefined}
+          onDismiss={closeAdding} onConnected={name => { setAdding(false); setMethodOrigin(undefined); setOpenService(name); }}
           onOpenExisting={setOpenService}
           catalogExtras={query => {
             const engines = inventory?.engines.filter(engine => engine.id !== "wuu" && `${engine.id} ${engineLabel(engine.id, engine)}`.toLowerCase().includes(query.trim().toLowerCase()));
@@ -432,6 +446,24 @@ export function ModelServicesPage({
           </SettingsSection> : null; }} />
       </div> : null}
       {detailProvider ? <ServiceDetail key={detailProvider.name} provider={detailProvider}
+        onChooseMethod={method => {
+          const candidates = providers.filter(provider => method === "login" ? isChatGPTProvider(provider) : isCodexType(provider.type));
+          if (candidates.length === 1) { setOpenService(candidates[0].name); return; }
+          setMethodOrigin({ name: detailProvider.name, target: method === "login" ? { kind: "chatgpt" } : { kind: "subscription", type: "openai-codex" } });
+          setOpenService(""); setAdding(true);
+        }}
+        onRefreshConnection={async () => {
+          const result = await window.wuu.refreshModelCatalog();
+          const refreshed = result.providers.find(item => item.name === detailProvider.name
+            && item.type === detailProvider.type && item.base_url === detailProvider.base_url);
+          if (!refreshed?.api_key_configured) throw new Error("Login is not available to this connection");
+          onProvidersChanged?.([refreshed]);
+          setQuotaSnapshot(current => current ? { ...current,
+            subscription_providers: current.subscription_providers?.filter(item => item.name !== detailProvider.name),
+          } : current);
+          setCatalogVersion(value => value + 1);
+          setQuotaVersion(value => value + 1);
+        }}
         onQuotaLoaded={snapshot => { setQuotaSnapshot(snapshot); setQuotaFailed(false); setQuotaNow(Date.now()); }}
         onProvidersChanged={onProvidersChanged} onProviderModelsChanged={onProviderModelsChanged}
         label={labels.get(detailProvider.name) ?? detailProvider.name} initialized={initialized} running={running}
@@ -459,6 +491,8 @@ export function ServiceConnector({
   inline = false,
   catalogExtras,
   onDismiss,
+  initialTarget,
+  onCloseConfiguration,
 }: {
   providers: readonly ProviderSummary[];
   running: boolean;
@@ -471,10 +505,12 @@ export function ServiceConnector({
   inline?: boolean;
   catalogExtras?: (query: string) => ReactNode;
   onDismiss?: () => void;
+  initialTarget?: ConnectTarget;
+  onCloseConfiguration?: () => void;
   onProvidersChanged?: (providers: ProviderSummary[]) => void;
 }): JSX.Element {
   const { t, locale } = useI18n();
-  const [connectTarget, setConnectTarget] = useState<ConnectTarget | null>(null);
+  const [connectTarget, setConnectTarget] = useState<ConnectTarget | null>(initialTarget ?? null);
   const [browsing, setBrowsing] = useState(false);
   const restoreCatalogFocus = useRef(false);
   useEffect(() => {
@@ -483,7 +519,7 @@ export function ServiceConnector({
       document.querySelector<HTMLInputElement>(".connection-page.model-browse-dialog input")?.focus();
     }
   }, [connectTarget]);
-  const closeConfiguration = () => { restoreCatalogFocus.current = true; setConnectTarget(null); };
+  const closeConfiguration = () => { if (onCloseConfiguration) { onCloseConfiguration(); return; } restoreCatalogFocus.current = true; setConnectTarget(null); };
   const featuredIDs = FEATURED_SERVICES[locale.startsWith("zh") ? "zh" : "en"];
   const featured = featuredIDs
     .map((id) => catalog.providers?.find((provider) => provider.id === id))
@@ -494,7 +530,7 @@ export function ServiceConnector({
     setBrowsing(false);
     const existing = target.kind === "subscription" && target.type === "openai-codex"
       ? providers.find((provider) => isCodexType(provider.type)) : undefined;
-    if (existing && onOpenExisting) onOpenExisting(existing.name);
+    if (existing && onOpenExisting) { setConnectTarget(null); onOpenExisting(existing.name); }
     else setConnectTarget(target);
   }
 
@@ -552,11 +588,12 @@ export function ServiceConnector({
             {t("settings.loading")}
           </p>
         }>
-          <ChatGPTConnectionDialog inline={inline} onProvidersChanged={onProvidersChanged} providers={providers} running={running} defaultOn={defaultOn}
+          <ChatGPTConnectionDialog renderAuthMethods={disabled => <AccountMethods selected="login" disabled={disabled} onSelect={method => { if (method === "local") startConnect({ kind: "subscription", type: "openai-codex" }); }} />} inline={inline} onProvidersChanged={onProvidersChanged} providers={providers} running={running} defaultOn={defaultOn}
             onSave={onSave} onClose={closeConfiguration} onConnected={(name) => { setConnectTarget(null); onConnected(name); }} />
         </Suspense>
       ) : connectTarget ? (
         <ConnectServiceDialog
+          renderAuthMethods={connectTarget.kind === "subscription" && connectTarget.type === "openai-codex" ? disabled => <AccountMethods selected="local" disabled={disabled} onSelect={method => { if (method === "login") setConnectTarget({ kind: "chatgpt" }); }} /> : undefined}
           inline={inline}
           target={connectTarget}
           providers={providers}
@@ -774,6 +811,8 @@ function ServiceDetail({
   onProvidersChanged,
   onProviderModelsChanged,
   onQuotaLoaded,
+  onRefreshConnection,
+  onChooseMethod,
   label,
   initialized,
   running,
@@ -786,6 +825,8 @@ function ServiceDetail({
   onProvidersChanged?: (providers: ProviderSummary[]) => void;
   onProviderModelsChanged?: (name: string, accountId: string, models: ProviderModelSummary[]) => void;
   onQuotaLoaded: (snapshot: EngineListResult) => void;
+  onRefreshConnection: () => Promise<void>;
+  onChooseMethod: (method: AccountMethod) => void;
   label: string;
   initialized?: InitializeResult;
   running: boolean;
@@ -801,6 +842,15 @@ function ServiceDetail({
   const direct = isChatGPTProvider(configuredProvider);
   const provider = direct ? { ...configuredProvider, models: liveModels } : configuredProvider;
   const identity = serviceIdentity(provider, t);
+  const detectedLocalCodex = ["codex-cli", "codex-cli-readonly"].includes(provider.codex_credential_source ?? "");
+  const usingLocalCodex = Boolean(provider.reuse_codex_credentials) && provider.codex_credential_source !== "explicit";
+  const authSource = direct ? "wuu-siwc" : usingLocalCodex ? "codex-local" : detectedLocalCodex ? "codex-local-available" : provider.codex_credential_source === "explicit" ? "codex-explicit" : "codex-saved";
+  const authSourceLabel = {
+    "wuu-siwc": "provider.authAppSource", "codex-local": "provider.authCodexSource", "codex-local-available": "provider.authCodexAvailable",
+    "codex-explicit": "settings.codexSourceExplicit", "codex-saved": "settings.codexSourceSaved",
+  } as const;
+  const attention = provider.quota?.status === "sign_in" ? t("provider.loginRequired") : identity.attention;
+  const [authBusy, setAuthBusy] = useState(false);
   const isDefault = provider.name === initialized?.provider;
   // The workspace model is the default service's model.
   const serviceModel = isDefault ? initialized?.model ?? provider.model : provider.model;
@@ -814,7 +864,8 @@ function ServiceDetail({
   const fallbackProviders = (initialized?.providers ?? []).filter((item) => !item.auto_discovered && item.name !== provider.name);
   const fallback = fallbackProviders.find((item) => item.name === fallbackProvider);
   const lastProvider = fallbackProviders.length === 0;
-  const disabled = running || busy;
+  const disabled = running || busy || authBusy;
+  const canMakeDefault = !isDefault && !attention && (!direct || liveModels.some(model => model.id === provider.model));
 
   async function run(action: () => Promise<void>): Promise<boolean> {
     setError("");
@@ -870,9 +921,12 @@ function ServiceDetail({
   }
 
   return (
-    <ConnectionPage title={label} icon={<ServiceMark identity={identity} />} closeDisabled={busy} onClose={onBack} backTestId="settings-provider-back">
-      <div className="connection-detail-body">
-      {removable || !isDefault ? <header className="model-service-hero">
+    <ConnectionPage title={label} icon={<ServiceMark identity={identity} />}
+      subtitle={<span className="connection-status-row"><span>{attention || t(isDefault ? "provider.defaultBadge" : "settings.subscriptionReady")}</span>
+        {isGrokBuildType(provider.type) ? <GrokLogin disabled={running || busy} onBusyChange={setAuthBusy} onAuthenticated={onRefreshConnection} onReuseLocal={onRefreshConnection} /> : null}
+        {isGrokBuildType(provider.type) ? <small className="connection-auth-source" data-auth-source="grok-cli">{t("provider.authGrokSource")}</small> : null}
+      </span>}
+      actions={removable || canMakeDefault ?
         <div className="settings-detail-actions model-service-hero-actions">
           {removable ? (
             <button
@@ -890,12 +944,12 @@ function ServiceDetail({
               <MoreHorizontal className="icon" aria-hidden="true" />
             </button>
           ) : null}
-          {isDefault ? null : (
+          {!canMakeDefault ? null : (
             <button
               type="button"
               className="settings-button"
               data-testid="settings-provider-make-default"
-              disabled={disabled || !!identity.attention || (direct && !liveModels.some(model => model.id === provider.model))}
+              disabled={disabled}
               onClick={() => void run(() => onSave(
                 provider.name,
                 provider.model,
@@ -908,19 +962,34 @@ function ServiceDetail({
             </button>
           )}
         </div>
-      </header> : null}
-
+      : null}
+      closeDisabled={busy || authBusy} onClose={onBack} backTestId="settings-provider-back">
+      <div className="connection-detail-body">
+      {direct || isCodexType(provider.type) ? <>
+        <AccountMethods selected={direct ? "login" : usingLocalCodex ? "local" : undefined} disabled={disabled}
+          onSelect={method => {
+            if (method === "local" && isCodexType(provider.type)) {
+              void run(async () => {
+                const reused = await window.wuu.useCodexCredentials(provider.name);
+                onProvidersChanged?.(reused.providers);
+                const checked = await window.wuu.loadCodexModels(provider.name);
+                onProvidersChanged?.(checked.providers);
+              });
+            } else onChooseMethod(method);
+          }} />
+        {direct || usingLocalCodex || provider.codex_credential_source ? <small className="connection-auth-source" data-auth-source={authSource}>{t(authSourceLabel[authSource])}</small> : null}
+      </> : null}
       {error && !confirmingRemove ? <p className="settings-error" role="alert">{error}</p> : null}
 
       {!isGrokBuildType(provider.type) ? <SettingsSection title={t("provider.connectionSection")}>
         <div className="connection-fields">
           {direct ? <Suspense fallback={<p className="settings-muted-line" role="status">{t("settings.loading")}</p>}>
-            <ChatGPTAccountRows provider={provider} disabled={disabled} onProvidersChanged={onProvidersChanged} onRefresh={() => setCatalogRevision(value => value + 1)} />
+            <ChatGPTAccountRows onBusyChange={setAuthBusy} provider={provider} disabled={disabled} onProvidersChanged={onProvidersChanged} onRefresh={() => setCatalogRevision(value => value + 1)} />
           </Suspense> : <ConnectionRows provider={provider} identity={identity} disabled={disabled} onSave={saveConnection} onRun={run} />}
         </div>
       </SettingsSection> : null}
 
-      {ENABLE_SUBSCRIPTIONS && (provider.quota || hasBuiltInSubscriptionControls(provider)) ? <SubscriptionDashboard scope={{ kind: "provider", name: provider.name }} providers={[provider]} onProvidersChanged={onProvidersChanged} onInventoryLoaded={onQuotaLoaded} onSelectBuiltinModel={(name, model) => onSave(name, model)} /> : null}
+      {ENABLE_SUBSCRIPTIONS && !(isGrokBuildType(provider.type) && attention) && (provider.quota || hasBuiltInSubscriptionControls(provider)) ? <SubscriptionDashboard scope={{ kind: "provider", name: provider.name }} providers={[provider]} onProvidersChanged={onProvidersChanged} onInventoryLoaded={onQuotaLoaded} onSelectBuiltinModel={(name, model) => onSave(name, model)} /> : null}
 
       <ModelChoices
         provider={provider}
@@ -1038,13 +1107,13 @@ function ConnectionRows({
   if (identity.subscription) {
     return (
       <>
-        <SettingsRow title={t("provider.chatgptLogin")}>
+        {provider.api_key_configured ? <SettingsRow title={t("provider.chatgptLogin")}>
           <StatusValue
             ok={Boolean(provider.api_key_configured)}
             okLabel={t(provider.codex_credential_source === "explicit" ? "settings.codexSourceExplicit" : provider.reuse_codex_credentials ? "settings.codexSourceLocal" : "settings.codexSourceSaved")}
             missingLabel={identity.attention ?? ""}
           />
-        </SettingsRow>
+        </SettingsRow> : null}
         {!ENABLE_SUBSCRIPTIONS ? <SettingsRow title={t("settings.codexUseLocal")}>
           <button type="button" className="settings-button" disabled={disabled} onClick={() => void onRun(async () => {
             await window.wuu.useCodexCredentials(provider.name);
@@ -1276,6 +1345,7 @@ function ModelChoices({
   const [draft, setDraft] = useState("");
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<ProviderModelSummary | null>(null);
+  const [modelMenu, setModelMenu] = useState<{ model: ProviderModelSummary; x: number; y: number } | null>(null);
   const [replacement, setReplacement] = useState("");
   const [removeError, setRemoveError] = useState("");
   const models = providerModels(provider);
@@ -1297,17 +1367,22 @@ function ModelChoices({
         ) : null}
         {!managedCatalog ? <button
           type="button"
-          className="settings-button settings-button-ghost settings-icon-button"
+          className="settings-button settings-button-ghost"
           aria-label={t("provider.addModel")}
           title={t("provider.addModel")}
           data-testid="settings-provider-add-model-open"
           disabled={disabled || adding}
           onClick={() => setAdding(true)}
         >
-          <Plus className="icon" aria-hidden="true" />
+          <Plus className="icon" aria-hidden="true" />{t("provider.addModel")}
         </button> : null}
       </>}
     >
+      {modelMenu ? <ThreadContextMenu x={modelMenu.x} y={modelMenu.y} onClose={() => setModelMenu(null)} items={[{
+        label: t("provider.removeModel", { model: providerModelDisplayName(modelMenu.model) }),
+        icon: <Trash2 className="icon" aria-hidden="true" />, danger: true, disabled,
+        onSelect: () => { setRemoving(modelMenu.model); setReplacement(""); setRemoveError(""); },
+      }]} /> : null}
       <div className="settings-group model-choice-list" role="group" aria-label={t("provider.modelsSection")}>
         {visible.map((model) => {
           const name = providerModelDisplayName(model);
@@ -1324,25 +1399,25 @@ function ModelChoices({
                 disabled={disabled}
                 onClick={() => onChoose(model.id)}
               >
-                <span className="model-choice-name">{name}</span>
+                <span className="model-choice-label"><span className="model-choice-name">{name}</span>{selected ? <Check className="icon model-choice-selected" aria-hidden="true" /> : null}</span>
                 {name !== model.id ? <code className="model-choice-id">{model.id}</code> : null}
               </button>
-              <span className="model-choice-check" aria-hidden="true">{selected ? <Check className="icon" /> : null}</span>
               {!managedCatalog ? <button
                 type="button"
                 className="icon-button model-choice-action"
-                data-testid="settings-provider-remove-model"
+                data-testid="settings-provider-model-actions"
                 data-model={model.id}
-                aria-label={t("provider.removeModel", { model: name })}
-                title={t("provider.removeModel", { model: name })}
+                aria-label={t("provider.moreActions", { name })}
+                title={t("provider.moreActions", { name })}
+                aria-haspopup="menu"
+                aria-expanded={modelMenu?.model.id === model.id}
                 disabled={disabled}
-                onClick={() => {
-                  setRemoving(model);
-                  setReplacement("");
-                  setRemoveError("");
+                onClick={event => {
+                  const bounds = event.currentTarget.getBoundingClientRect();
+                  setModelMenu({ model, x: bounds.right, y: bounds.bottom + 4 });
                 }}
               >
-                <Trash2 className="icon" aria-hidden="true" />
+                <MoreHorizontal className="icon" aria-hidden="true" />
               </button> : null}
             </div>
           );
@@ -1499,11 +1574,11 @@ function CatalogServiceGroups({
     ambiguous: names.indexOf(names[index]) !== names.lastIndexOf(names[index]),
     connected: providers.filter((item) => item.catalog_id === provider.id),
   })).filter((entry) => !normalized || `${entry.name} ${entry.provider.name} ${entry.provider.id} ${entry.host}`.toLocaleLowerCase().includes(normalized));
-  const subscriptions = isTouchWebShell() ? [] : (["openai-codex", "xai-subscription", "grok-build"] as const)
+  const subscriptions = isTouchWebShell() ? [] : (["xai-subscription", "grok-build"] as const)
     .map((type) => ({
       type,
-      name: type === "openai-codex" ? t("provider.methodLocalCodex") : type === "grok-build" ? t("provider.grokBuild") : t("provider.xaiSubscription"),
-      connected: providers.filter((provider) => type === "openai-codex" ? isCodexType(provider.type) : type === "grok-build" ? isGrokBuildType(provider.type) : isXAISubscriptionType(provider.type)),
+      name: type === "grok-build" ? t("provider.grokBuild") : t("provider.xaiSubscription"),
+      connected: providers.filter((provider) => type === "grok-build" ? isGrokBuildType(provider.type) : isXAISubscriptionType(provider.type)),
     }))
     .filter((entry) => !normalized || `${entry.name} ${entry.type}`.toLocaleLowerCase().includes(normalized));
   const groups = [
@@ -1522,7 +1597,7 @@ function CatalogServiceGroups({
     </span>;
   }
 
-  const directTile = !isTouchWebShell() && (!normalized || "chatgpt openai".includes(normalized)) ? <button type="button" className="model-service-tile" data-connection="chatgpt" disabled={disabled} onClick={() => onConnect({ kind: "chatgpt" })}><ProviderMark id="openai" label="ChatGPT" /><span className="model-browse-copy"><span className="model-service-tile-name">ChatGPT</span><small>{t("provider.methodChatGPT")}</small></span></button> : null;
+  const directTile = !isTouchWebShell() && (!normalized || `chatgpt openai codex ${t("provider.authUseLocal")}`.toLocaleLowerCase().includes(normalized)) ? <button type="button" className="model-service-tile" data-connection="chatgpt" disabled={disabled} onClick={() => onConnect({ kind: "chatgpt" })}><ProviderMark id="openai" label="ChatGPT" /><span className="model-browse-copy"><span className="model-service-tile-name">ChatGPT</span><small>{t("provider.methodChatGPT")}</small></span></button> : null;
   const subscriptionTiles = subscriptions.map((entry) => (
     <button
       key={entry.type}
@@ -1532,7 +1607,7 @@ function CatalogServiceGroups({
       disabled={disabled}
       onClick={() => onConnect({ kind: "subscription", type: entry.type })}
     >
-      {entry.type === "openai-codex" ? <ProviderMark id="openai" label="ChatGPT" /> : <span className="provider-mark" aria-hidden="true"><EngineIcon engine="grok" className="provider-mark-engine" /></span>}
+      {<span className="provider-mark" aria-hidden="true"><EngineIcon engine="grok" className="provider-mark-engine" /></span>}
       <span className="model-catalog-name-line"><span className="model-service-tile-name">{entry.name}</span>{connectionState(entry.connected)}</span>
     </button>
   ));
@@ -1635,6 +1710,7 @@ function BrowseServicesDialog({
 
 function ConnectServiceDialog({
   inline = false,
+  renderAuthMethods,
   target,
   providers,
   running,
@@ -1645,6 +1721,7 @@ function ConnectServiceDialog({
 }: {
   inline?: boolean;
   target: Exclude<ConnectTarget, { kind: "chatgpt" }>;
+  renderAuthMethods?: (disabled: boolean) => ReactNode;
   providers: readonly ProviderSummary[];
   running: boolean;
   defaultOn: boolean;
@@ -1659,7 +1736,7 @@ function ConnectServiceDialog({
   const existingCodex = subscriptionType === "openai-codex" ? providers.find((provider) => isCodexType(provider.type)) : undefined;
   const title = catalogProvider
     ? catalogServiceName(catalogProvider.id, catalogProvider.name, t)
-    : subscriptionType === "openai-codex" ? t("provider.methodLocalCodex") : subscriptionType === "grok-build"
+    : subscriptionType === "openai-codex" ? "ChatGPT" : subscriptionType === "grok-build"
       ? t("provider.grokBuild")
       : subscriptionType
         ? t("provider.xaiSubscription")
@@ -1746,7 +1823,8 @@ function ConnectServiceDialog({
       </>}
     >
       <div className="model-connect-body">
-        {subscriptionType === "openai-codex" ? <p className="settings-muted-line">{t("provider.localCodexHint")}</p> : null}
+        {renderAuthMethods?.(pending || running)}
+        {subscriptionType === "openai-codex" ? <small className="connection-auth-source" data-auth-source="codex-local">{t("provider.authCodexSource")}</small> : null}
         {target.kind === "custom" ? (
           <div className="model-connect-field">
             <span>{t("provider.protocol")}</span>

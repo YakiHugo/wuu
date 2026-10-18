@@ -115,6 +115,14 @@ describe("browser host contract", () => {
     }, 30_000, expect.any(String));
   });
 
+  it("does not forward the desktop-only local CLI login", async () => {
+    const host = await api();
+    await expect(host.authenticateEngine("grok", "local-cli")).rejects.toMatchObject({
+      code: "host_operation_unavailable", operation: "authenticateEngine",
+    });
+    expect(remote.call).not.toHaveBeenCalled();
+  });
+
   it("does not open executable URL schemes", async () => {
     const host = await api();
     await expect(host.openExternal("javascript:alert(1)")).rejects.toThrow("HTTP");

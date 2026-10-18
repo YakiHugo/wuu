@@ -9,6 +9,7 @@ import type { DesktopZoomAction } from "../shared/DesktopPageZoom";
 import { readCatalogSkill } from "./remoteSkills";
 import { inheritSystemProxy } from "./systemProxy";
 import { RemoteAppServerBridge } from "./remoteAppServerBridge";
+import { GrokLogin } from "./grokLogin";
 import { PhoneAccess } from "./phoneAccess";
 import {
   app,
@@ -713,6 +714,7 @@ function unregisterWindow(windowID: number): void {
 // Window and remote-peer requests share one ownership rule. A cancellation
 // targets the exact process admitted for the original request, even if the
 // workspace moves or is re-registered before its response arrives.
+const grokLogin = new GrokLogin();
 const pluginRuntimeRequests = new Map<string, Map<string, {
   id: string;
   fingerprint: string;
@@ -2035,12 +2037,17 @@ app.whenReady().then(async () => {
   ipcMain.handle("wuu:engine-auth-methods", (event, engineID: string) =>
     appServerRequest<EngineAuthResult>(event, "engine/auth/methods", { engine_id: engineID }),
   );
-  ipcMain.handle("wuu:engine-authenticate", (event, params: EngineAuthParams) =>
-    appServerRequest<EngineAuthResult>(event, "engine/authenticate", params),
-  );
-  ipcMain.handle("wuu:engine-auth-cancel", (event, engineID: string) =>
-    appServerRequest<{ ok: boolean }>(event, "engine/auth/cancel", { engine_id: engineID }),
-  );
+  ipcMain.handle("wuu:engine-authenticate", (event, params: EngineAuthParams) => {
+    if (params?.method_id === "local-cli") {
+      if (params.engine_id !== "grok") throw new Error("Local CLI sign-in is not supported for this engine");
+      return grokLogin.start(event.sender, () => appServerClientPool.bindContextRequest(runtimeContextForEvent(event)));
+    }
+    return appServerRequest<EngineAuthResult>(event, "engine/authenticate", params);
+  });
+  ipcMain.handle("wuu:engine-auth-cancel", (event, engineID: string) => {
+    if (engineID === "grok" && grokLogin.active) return grokLogin.cancel(event.sender.id);
+    return appServerRequest<{ ok: boolean }>(event, "engine/auth/cancel", { engine_id: engineID });
+  });
   ipcMain.handle(
     "wuu:extension-package-update",
     (event, params: ExtensionPackageUpdateParams) =>

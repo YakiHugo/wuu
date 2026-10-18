@@ -8,7 +8,7 @@ import { forgetLocalTurnTiming } from "./LocalTurnTiming";
 import { subscribeServerEvents } from "./ServerEvents";
 import { AccountScreen } from "./AccountScreen";
 import { hostSupports } from "./HostCapabilities";
-import { isCodexSubscription } from "./SubscriptionSources";
+import { isCodexSubscription, isGrokBuild } from "./SubscriptionSources";
 import { focusComposerTextarea, isTouchWebShell } from "./ComposerFocus";
 import { readThreadReadState, writeThreadReadState } from "./ThreadReadState";
 import { FileSelectionProvider, type FileSelectionPart } from "./FileSelectionContext";
@@ -3597,7 +3597,7 @@ export function App(): JSX.Element {
       initialized: {
         ...current.initialized,
         providers: current.initialized.providers?.map(provider => {
-          if (isCodexSubscription(provider.type)) {
+          if (isCodexSubscription(provider.type) || isGrokBuild(provider.type)) {
             const snapshot = providers.find(item => item.name === provider.name
               && item.type === provider.type && item.base_url === provider.base_url);
             return snapshot ? {

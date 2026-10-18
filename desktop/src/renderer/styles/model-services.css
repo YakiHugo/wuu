@@ -863,3 +863,30 @@
   overflow-wrap: anywhere;
   text-overflow: clip;
 }
+
+/* One content column keeps actions attached to their connection and section. */
+.connection-page { width: 100%; max-width: 680px; align-self: flex-start; }
+.connection-page-header { flex-wrap: wrap; align-items: center; row-gap: var(--space-2); }
+.connection-page-heading { flex: 1 1 180px; }
+.connection-page-actions { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.connection-page-actions .model-service-hero-actions { gap: var(--space-1); }
+.connection-page-body { max-width: none; }
+.connection-page .settings-section-header { justify-content: flex-start; gap: var(--space-3); flex-wrap: wrap; }
+.connection-page .settings-section-heading { flex: 0 1 auto; }
+.connection-page .settings-section-actions { margin-inline-start: 0; }
+.connection-page .model-choice-label { display: flex; align-items: center; gap: var(--space-2); min-width: 0; max-width: 100%; }
+.connection-page .model-choice-selected { flex: 0 0 auto; width: 16px; height: 16px; }
+.connection-page .model-choice-main { padding-inline-start: 0; }
+.connection-page .model-choice-action { margin-inline-end: 0; }
+@media (hover: hover) and (pointer: fine) {
+  .connection-page .model-choice-action { opacity: 0; }
+  .connection-page .model-choice:hover .model-choice-action,
+  .connection-page .model-choice:focus-within .model-choice-action,
+  .connection-page .model-choice-action[aria-expanded="true"] { opacity: 1; }
+}
+.connection-status-row, .connection-login { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.connection-login-feedback { flex-basis: 100%; font-size: var(--font-sm); color: var(--ink-soft); }
+.connection-page .model-choice-label .model-choice-name { flex: 0 1 auto; min-width: 0; }
+.connection-auth-source { display: block; flex-basis: 100%; color: var(--ink-soft); font-size: var(--font-sm); }
+.connection-auth-methods { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.connection-auth-methods [aria-pressed="true"] { color: var(--ink); background: var(--ink-overlay-6); }

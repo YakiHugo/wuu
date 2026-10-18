@@ -100,7 +100,6 @@ export function ChatGPTLogin({ onAuthenticated, onBusyChange, disabled = false, 
   if (!hostSupports("startChatGPTLogin")) return <p className="settings-muted-line" role="status">{t("provider.chatgptDesktopLoginRequired")}</p>;
 
   return <div className="settings-engine-auth" aria-busy={busy}>
-    <p className="settings-muted-line">{t("provider.chatgptDirectHint")}</p>
     <div className="settings-engine-auth-actions">
       <button type="button" className="settings-button" data-testid="chatgpt-login-start" disabled={busy || disabled} onClick={() => void start()}>{t("provider.chatgptContinue")}</button>
       {busy ? <button type="button" className="settings-button" data-testid="chatgpt-login-cancel" onClick={() => void cancel()}>{t("common.cancel")}</button> : null}

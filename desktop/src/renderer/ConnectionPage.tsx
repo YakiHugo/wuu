@@ -7,6 +7,7 @@ export type ConnectionPageProps = {
   ariaLabel?: string;
   icon?: ReactNode;
   subtitle?: ReactNode;
+  actions?: ReactNode;
   children?: ReactNode;
   footer?: ReactNode;
   onClose: () => void;
@@ -23,6 +24,7 @@ export function ConnectionPage({
   ariaLabel,
   icon,
   subtitle,
+  actions,
   children,
   footer,
   onClose,
@@ -57,8 +59,9 @@ export function ConnectionPage({
       {icon ? <span className="connection-page-icon">{icon}</span> : null}
       <div className="connection-page-heading">
         <h2 ref={heading} tabIndex={-1} id={titleId} className="connection-page-title">{title}</h2>
-        {subtitle ? <p className="connection-page-subtitle">{subtitle}</p> : null}
+        {subtitle ? <div className="connection-page-subtitle">{subtitle}</div> : null}
       </div>
+      {actions ? <div className="connection-page-actions">{actions}</div> : null}
     </header>
     <div className="connection-page-body">{children}</div>
     {footer ? <div className="connection-page-footer">{footer}</div> : null}

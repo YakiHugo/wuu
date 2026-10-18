@@ -69,6 +69,12 @@ const click = (win, selector) => evaluate(win, target => {
   if (!element) throw new Error(`missing ${target}`);
   element.click();
 }, selector);
+async function openModelRemoval(win, model) {
+  await evaluate(win, id => document.querySelector(`[data-testid="settings-provider-model-actions"][data-model="${id}"]`).click(), model);
+  await waitFor(win, () => document.querySelector('[role="menuitem"][data-tone="danger"]'));
+  await click(win, '[role="menuitem"][data-tone="danger"]');
+  await waitFor(win, () => document.querySelector('.model-remove-dialog'));
+}
 async function openSettingsPage(win, page) {
   await click(win, `.settings-nav [data-wuu-page="${page}"]`);
   await waitFor(win, target => document.querySelector('.settings-page')?.dataset.wuuPage === target, page);
@@ -250,13 +256,13 @@ async function run() {
 
   // Removing a choice persists so catalog refreshes cannot bring it back.
   const hidden = catalogModels.find(model => model.id !== nextModel).id;
-  await evaluate(main, id => document.querySelector(`[data-model="${id}"]`).closest('.model-choice').querySelector('[data-testid="settings-provider-remove-model"]').click(), hidden);
+  await openModelRemoval(main, hidden);
   await waitFor(main, () => document.querySelector('[data-testid="settings-provider-remove-model-confirm"]'));
   main.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' });
   main.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' });
   await waitFor(main, () => !document.querySelector('.model-remove-dialog'));
   assert.ok(await evaluate(main, () => Boolean(document.querySelector('[data-testid="settings-provider-back"]'))), 'Dismissing a confirmation keeps the connection details open.');
-  await evaluate(main, id => document.querySelector(`[data-model="${id}"]`).closest('.model-choice').querySelector('[data-testid="settings-provider-remove-model"]').click(), hidden);
+  await openModelRemoval(main, hidden);
   await waitFor(main, () => document.querySelector('[data-testid="settings-provider-remove-model-confirm"]'));
   await click(main, '[data-testid="settings-provider-remove-model-confirm"]');
   await waitFor(main, id => !document.querySelector(`[data-testid="settings-provider-model"][data-model="${id}"]`) && document.querySelector('.model-choice-hidden'), hidden);
@@ -296,7 +302,7 @@ async function run() {
   await type(main, '[data-testid="settings-provider-add-model"]', 'fixture-extra');
   await click(main, '.model-choice-add button[type="submit"]');
   await waitFor(main, () => document.querySelector('[data-testid="settings-provider-model"][data-model="fixture-extra"]'));
-  await click(main, '[data-testid="settings-provider-remove-model"][data-model="fixture-b"]');
+  await openModelRemoval(main, 'fixture-b');
   assert.equal(await evaluate(main, () => document.querySelector('[data-testid="settings-provider-remove-model-confirm"]').disabled), true);
   await click(main, '[data-testid="settings-provider-replacement-model"]');
   await click(main, '[data-value="fixture-extra"]');
@@ -397,6 +403,13 @@ async function run() {
         const content = button.getBoundingClientRect();
         if (text.scrollWidth > text.clientWidth + 1 || text.scrollHeight > text.clientHeight + 1) controls.push(`truncated model text: ${text.textContent}`);
         if (bounds.left < content.left - 1 || bounds.right > content.right + 1 || bounds.top < content.top - 1 || bounds.bottom > content.bottom + 1) controls.push(`model text outside control: ${text.textContent}`);
+      }
+      for (const label of panel.querySelectorAll('.model-choice-label')) {
+        const tick = label.querySelector('.model-choice-selected');
+        const name = label.querySelector('.model-choice-name');
+        if (!tick || !name) continue;
+        const bounds = label.getBoundingClientRect(), mark = tick.getBoundingClientRect(), text = name.getBoundingClientRect();
+        if (mark.right > bounds.right + 1 || mark.left < text.right - 1) controls.push('selected model mark overlaps or escapes its label');
       }
       return { horizontal: panel.scrollWidth > panel.clientWidth + 1, outside: rect.left < -1 || rect.right > innerWidth + 1, controls };
     });

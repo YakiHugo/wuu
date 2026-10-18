@@ -10,6 +10,10 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Added
 
+- Offer account sign-in and local authentication as explicit connection methods, keeping official ChatGPT app authorization separate from Codex credentials and native-engine account ownership.
+
+- Sign in to Grok Build from its connection page using the installed Grok CLI, with cancellation and verified completion. Keep connection status and actions together, and group model management beside readable model names.
+
 - Connect ChatGPT directly through official browser sign-in without Codex CLI, with account-scoped model discovery, public Responses inference, protected refresh and sign-out. Unify model connections and account usage in Settings while keeping API keys and local Codex credentials distinct.
 - Monitor plugin for background scripts, event delivery into the active conversation,
   timeout and persistent watches, output inspection, and per-task stop controls.
