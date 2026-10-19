@@ -9,7 +9,9 @@ import type { DesktopZoomAction } from "../shared/DesktopPageZoom";
 import { readCatalogSkill } from "./remoteSkills";
 import { inheritSystemProxy } from "./systemProxy";
 import { RemoteAppServerBridge } from "./remoteAppServerBridge";
-import { GrokLogin } from "./grokLogin";
+import { EngineLogin } from "./engineLogin";
+import { XAILoginCoordinator } from "./xaiLogin";
+import { authWindowReturn } from "./authWindowReturn";
 import { PhoneAccess } from "./phoneAccess";
 import {
   app,
@@ -78,8 +80,6 @@ import type {
   MCPAuthRemoveResult,
   MCPAuthStartResult,
   MCPAuthStatusResult,
-  AuthXAILoginStartResult,
-  AuthXAILoginPollResult,
   MCPServerActionResult,
   ManagedProcessActionResult,
   ManagedProcessListResult,
@@ -702,13 +702,19 @@ function unregisterWindow(windowID: number): void {
   windowRegistry.unregisterWindow(windowID);
 }
 
+function returnToAuthWindow(senderID: number): void {
+  const window = BrowserWindow.getAllWindows().find(candidate =>
+    !candidate.isDestroyed() && candidate.webContents.id === senderID,
+  );
+  authWindowReturn(window ?? null)();
+}
+const engineLogins = new Map<string, EngineLogin>();
+const pluginRuntimeRequests = new PluginRuntimeRequests(appServerClientPool);
+
 // Remote-control host: one machine-global daemon serving paired phones,
 // independent of the per-workdir app-server pool. Events (pairing URI,
 // paired, exit) fan out to every window; the settings panel re-pulls its
 // snapshot on each one.
-const grokLogin = new GrokLogin();
-const pluginRuntimeRequests = new PluginRuntimeRequests(appServerClientPool);
-
 const remoteTerminals = new TerminalSessionManager((owner,event)=>remoteAppServerBridge.notifyPeer(owner,"desktop/terminal/event",event));
 const remoteAppServerBridge = new RemoteAppServerBridge(async (workdir, method, params, reply, peerID) => {
   const pluginOwner = `remote:${peerID}`;
@@ -1964,14 +1970,19 @@ app.whenReady().then(async () => {
     appServerRequest<EngineAuthResult>(event, "engine/auth/methods", { engine_id: engineID }),
   );
   ipcMain.handle("wuu:engine-authenticate", (event, params: EngineAuthParams) => {
-    if (params?.method_id === "local-cli") {
-      if (params.engine_id !== "grok") throw new Error("Local CLI sign-in is not supported for this engine");
-      return grokLogin.start(event.sender, () => appServerClientPool.bindContextRequest(runtimeContextForEvent(event)));
+    if (params?.method_id === "local-cli" && params.engine_id !== "grok") {
+      throw new Error("Local CLI sign-in is not supported for this engine");
     }
-    return appServerRequest<EngineAuthResult>(event, "engine/authenticate", params);
+    let login = engineLogins.get(params.engine_id);
+    if (!login) {
+      login = new EngineLogin(returnToAuthWindow);
+      engineLogins.set(params.engine_id, login);
+    }
+    return login.start(event.sender, () => appServerClientPool.bindContextRequest(runtimeContextForEvent(event)), params);
   });
   ipcMain.handle("wuu:engine-auth-cancel", (event, engineID: string) => {
-    if (engineID === "grok" && grokLogin.active) return grokLogin.cancel(event.sender.id);
+    const login = engineLogins.get(engineID);
+    if (login?.active) return login.cancel(event.sender.id);
     return appServerRequest<{ ok: boolean }>(event, "engine/auth/cancel", { engine_id: engineID });
   });
   ipcMain.handle(
@@ -2184,6 +2195,7 @@ app.whenReady().then(async () => {
   const chatgptLogin = new ChatGPTLoginCoordinator(
     (context, method, params) => appServerClientPool.requestInContext(context, method, params),
     (url) => shell.openExternal(url),
+    returnToAuthWindow,
   );
   ipcMain.handle("wuu:auth-chatgpt-login-start", (event, accountId?: string, enablePlanUsage?: boolean) =>
     chatgptLogin.start(event.sender, runtimeContextForEvent(event), accountId, enablePlanUsage),
@@ -2193,19 +2205,12 @@ app.whenReady().then(async () => {
   ipcMain.handle("wuu:auth-chatgpt-accounts", (event) => appServerRequest(event, "auth/chatgpt/accounts"));
   ipcMain.handle("wuu:auth-chatgpt-signout", (event, accountId: string) => appServerRequest(event, "auth/chatgpt/signout", { account_id: accountId }));
   ipcMain.handle("wuu:auth-chatgpt-models", (event, accountId: string) => appServerRequest(event, "auth/chatgpt/models", { account_id: accountId }));
+  const xaiLogin = new XAILoginCoordinator(returnToAuthWindow);
   ipcMain.handle("wuu:auth-xai-login-start", (event) =>
-    appServerRequest<AuthXAILoginStartResult>(event, "auth/xai/login/start"),
+    xaiLogin.start(event.sender, () => appServerClientPool.bindContextRequest(runtimeContextForEvent(event))),
   );
-  ipcMain.handle("wuu:auth-xai-login-poll", (event, loginId: string) =>
-    appServerRequest<AuthXAILoginPollResult>(event, "auth/xai/login/poll", {
-      login_id: loginId,
-    }),
-  );
-  ipcMain.handle("wuu:auth-xai-login-cancel", (event, loginId: string) =>
-    appServerRequest<{ ok: boolean }>(event, "auth/xai/login/cancel", {
-      login_id: loginId,
-    }),
-  );
+  ipcMain.handle("wuu:auth-xai-login-poll", (event, loginId: string) => xaiLogin.poll(event.sender.id, loginId));
+  ipcMain.handle("wuu:auth-xai-login-cancel", (event, loginId: string) => xaiLogin.cancel(event.sender.id, loginId));
   ipcMain.handle("wuu:mcp-auth-remove", (event, name: string) =>
     appServerRequest<MCPAuthRemoveResult>(event, "mcp/auth/remove", { name }),
   );

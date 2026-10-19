@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { useI18n } from "./i18n";
 
 /** The installed CLI owns browser authorization and its credential file. */
-export function GrokLogin({ disabled = false, onAuthenticated, onBusyChange, onReuseLocal }: {
+export function GrokLogin({ disabled = false, nested = false, onAuthenticated, onBusyChange, onReuseLocal }: {
   disabled?: boolean;
+  nested?: boolean;
   onAuthenticated: () => Promise<void>;
   onBusyChange?: (busy: boolean) => void;
   onReuseLocal?: () => void | Promise<void>;
@@ -71,7 +72,7 @@ export function GrokLogin({ disabled = false, onAuthenticated, onBusyChange, onR
   const busy = Boolean(operation.current);
   return <span className="connection-login" aria-busy={busy}>
     <button type="button" className="settings-button settings-button-primary" data-testid="grok-login-start" disabled={disabled || busy} onClick={() => void start()}>{t("provider.authSignIn")}</button>
-    {onReuseLocal ? <button type="button" className="settings-button" data-testid="grok-login-local" disabled={disabled || busy} onClick={() => void start(true)}>{t("provider.authUseLocal")}</button> : null}
+    {onReuseLocal ? <button type="button" className="settings-button" data-testid="grok-login-local" disabled={disabled || busy} onClick={() => void start(true)}>{t(nested ? "provider.authCheckLocal" : "provider.authUseLocal")}</button> : null}
     {busy && !operation.current?.processDone ? <button type="button" className="settings-button settings-button-ghost" data-testid="grok-login-cancel" onClick={() => void cancel()}>{t("common.cancel")}</button> : null}
     {state !== "idle" ? <span className="connection-login-feedback" role={state === "failed" || state === "local-failed" ? "alert" : "status"}>{t(state === "local-failed" ? "provider.authLocalUnavailable" : state === "checking" ? "settings.loading" : state === "running" ? "provider.grokLoginWaiting" : state === "done" ? "provider.grokLoginComplete" : "provider.grokLoginFailed")}</span> : null}
   </span>;

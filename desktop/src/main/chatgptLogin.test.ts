@@ -105,3 +105,50 @@ describe("ChatGPT login ownership", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 });
+
+it("returns to the owning window once and suppresses concurrent late successes", async () => {
+  vi.useFakeTimers();
+  const results: Array<(value: AuthChatGPTLoginResult) => void> = [];
+  const request = vi.fn().mockResolvedValueOnce(pending).mockImplementation(() => new Promise<AuthChatGPTLoginResult>(resolve => results.push(resolve)));
+  const done = vi.fn();
+  const flow = new ChatGPTLoginCoordinator(request, vi.fn(), done);
+  await flow.start(new Owner(1), context);
+  const first = flow.poll(1, "fixture");
+  const second = flow.poll(1, "fixture");
+  results[0]({ ...pending, status: "success" });
+  await first;
+  results[1]({ ...pending, status: "success" });
+  await second;
+  expect(done).toHaveBeenCalledExactlyOnceWith(1);
+});
+
+it.each(["cancel", "destroy", "expiry"])("does not return after %s even when an in-flight poll succeeds", async (action) => {
+  vi.useFakeTimers();
+  let finish!: (value: AuthChatGPTLoginResult) => void;
+  const request = vi.fn().mockResolvedValueOnce(pending).mockImplementationOnce(() => new Promise<AuthChatGPTLoginResult>(resolve => { finish = resolve; })).mockResolvedValue({ ok: true });
+  const done = vi.fn();
+  const flow = new ChatGPTLoginCoordinator(request, vi.fn(), done);
+  const owner = new Owner(1);
+  await flow.start(owner, context);
+  const polling = flow.poll(1, "fixture");
+  if (action === "cancel") await flow.cancel(1, "fixture");
+  if (action === "destroy") owner.destroy();
+  if (action === "expiry") await vi.advanceTimersByTimeAsync(905_000);
+  finish({ ...pending, status: "success" });
+  await polling;
+  expect(done).not.toHaveBeenCalled();
+});
+
+it("revokes return immediately even if cancellation cannot reach the service", async () => {
+  vi.useFakeTimers();
+  let finish!: (value: AuthChatGPTLoginResult) => void;
+  const request = vi.fn().mockResolvedValueOnce(pending).mockImplementationOnce(() => new Promise<AuthChatGPTLoginResult>(resolve => { finish = resolve; })).mockRejectedValue(new Error("offline"));
+  const done = vi.fn();
+  const flow = new ChatGPTLoginCoordinator(request, vi.fn(), done);
+  await flow.start(new Owner(1), context);
+  const poll = flow.poll(1, "fixture");
+  await expect(flow.cancel(1, "fixture")).rejects.toThrow("offline");
+  finish({ ...pending, status: "success" });
+  await poll;
+  expect(done).not.toHaveBeenCalled();
+});

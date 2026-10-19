@@ -1,3 +1,5 @@
+import { useConnectionDisplayPreferences } from "./ConnectionDisplayPreferences";
+import { ConnectionUsageSummary } from "./ConnectionUsageSummary";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { MoreHorizontal, RefreshCw } from "./WuuIcons";
 import type { EngineListResult, ProviderSummary } from "../shared/protocol";
@@ -17,6 +19,7 @@ import {
 } from "./SubscriptionSources";
 
 export function SubscriptionDashboard({
+  detailOnly = false,
   inventory,
   providers,
   onSelectBuiltinModel,
@@ -26,6 +29,7 @@ export function SubscriptionDashboard({
   onInventoryLoaded,
   onProvidersChanged,
 }: {
+  detailOnly?: boolean;
   onAddService?: () => void;
   scope?: { kind: "provider"; name: string } | { kind: "engine"; id: string };
   inventory?: EngineListResult;
@@ -36,6 +40,7 @@ export function SubscriptionDashboard({
   onSelectBuiltinModel: (provider: string, model: string) => Promise<void>;
 }): JSX.Element {
   const { t, formatDate } = useI18n();
+  const displayPreferences = useConnectionDisplayPreferences();
   const scopedEngine = scope?.kind === "engine" ? inventory?.engines.find(engine => engine.id === scope.id) : undefined;
   const canRefresh = scope?.kind !== "engine" || Boolean(scopedEngine?.enabled && scopedEngine.binary_ok);
   const [error, setError] = useState<"" | "settings.subscriptionRefreshFailed" | "settings.subscriptionModelFailed">("");
@@ -108,7 +113,7 @@ export function SubscriptionDashboard({
       return sources.filter((source) => !scope ||
         (scope.kind === "provider" ? source.kind === "builtin" && source.id === scope.name : source.kind === "engine" && source.id === scope.id));
     },
-    [loadedInventory, inventory, providers, revision, authProviders, canRefresh, now, scope?.kind, scope?.kind === "provider" ? scope.name : scope?.id],
+    [displayPreferences, loadedInventory, inventory, providers, revision, authProviders, canRefresh, now, scope?.kind, scope?.kind === "provider" ? scope.name : scope?.id],
   );
 
   // Group presentation only. Every connection keeps its own account snapshot,
@@ -168,6 +173,22 @@ export function SubscriptionDashboard({
       setRefreshVersion((value) => value + 1);
     }
   }
+
+  if (detailOnly) return <SettingsSection testID="settings-subscriptions" title={t("connection.subscriptionQuota")}
+    actions={<button type="button" className="settings-button settings-button-ghost settings-icon-button" aria-label={t("settings.subscriptionRefresh")} title={t("settings.subscriptionRefresh")} disabled={refreshing || !canRefresh} onClick={() => setRefreshVersion(value => value + 1)}><RefreshCw className="icon" /></button>}>
+    <div className="connection-detail-quota" aria-busy={refreshing}>
+      {error ? <p className="settings-error" role="alert">{t(error)}</p> : null}
+      {quotaLoading ? <p role="status">{t("settings.subscriptionRefreshing")}</p> : null}
+      {sources.map(source => <div key={source.key} data-testid={`subscription-${source.kind}-${source.id}`}>
+        {source.quota && ["available", "stale"].includes(source.quota.status) && source.quota.account?.label ? <p className="settings-muted-line">{source.quota.account.label}</p> : null}
+        {source.quota && ["available", "stale"].includes(source.quota.status) && source.quota.account?.source ? <span className="sr-only">{source.quota.account.source}</span> : null}
+        <ConnectionUsageSummary quota={source.quota} now={now} loading={refreshing} />
+        {source.quota && ["available", "stale"].includes(source.quota.status) && source.quota.reset_credits !== undefined ? <p className="settings-muted-line">{t("settings.subscriptionResetCredits", { count: source.quota.reset_credits })}</p> : null}
+        {source.quota && ["available", "stale"].includes(source.quota.status) && !(source.quota.windows ?? []).some(window => window.unlimited || window.display?.trim() || (typeof window.used_percent === "number" && Number.isFinite(window.used_percent) && window.used_percent >= 0)) && !source.quota.balances?.length ? <p className="settings-muted-line">{t("settings.subscriptionQuotaUnknown")}</p> : null}
+        {!source.quota || !["available", "stale"].includes(source.quota.status) ? <p className="settings-muted-line">{t(source.quota?.status === "sign_in" ? "settings.subscriptionSignIn" : source.quota?.status === "unsupported" ? "settings.subscriptionQuotaUnsupported" : source.quota?.status === "unavailable" ? "settings.subscriptionQuotaUnavailable" : "settings.subscriptionQuotaUnknown")}</p> : null}
+      </div>)}
+    </div>
+  </SettingsSection>;
 
   return (
     <SettingsSection testID="settings-subscriptions" ariaBusy={refreshing}

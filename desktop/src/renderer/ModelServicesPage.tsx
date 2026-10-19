@@ -1,3 +1,5 @@
+import { ConnectionTitle } from "./ConnectionTitle";
+import { useConnectionDisplayPreferences } from "./ConnectionDisplayPreferences";
 import { GrokLogin } from "./GrokLogin";
 import {
   type FormEvent as ReactFormEvent,
@@ -24,6 +26,9 @@ import type {
   SubscriptionQuota,
 } from "../shared/protocol";
 import {
+  ArrowUp,
+  ArrowDown,
+  GripHorizontal,
   AlertTriangle,
   Check,
   ChevronRight,
@@ -322,7 +327,8 @@ export function ModelServicesPage({
   const rootRef = useRef<HTMLDivElement>(null);
   const addButtonRef = useRef<HTMLButtonElement>(null);
   const providers = initialized?.providers ?? [];
-  const labels = useMemo(() => serviceLabels(providers, t), [providers, t]);
+  const displayPreferences = useConnectionDisplayPreferences();
+  const labels = new Map(providers.map(provider => [provider.name, displayPreferences.label(`provider:${provider.name}`, serviceIdentity(provider, t).label)]));
   const [quotaSnapshot, setQuotaSnapshot] = useState<EngineListResult>();
   const [quotaLoading, setQuotaLoading] = useState(false);
   const [quotaFailed, setQuotaFailed] = useState(false);
@@ -689,7 +695,8 @@ export function DefaultModelRows({
 }): JSX.Element {
   const { t } = useI18n();
   const providers = initialized?.providers ?? [];
-  const labels = useMemo(() => serviceLabels(providers, t), [providers, t]);
+  const displayPreferences = useConnectionDisplayPreferences();
+  const labels = new Map(providers.map(provider => [provider.name, displayPreferences.label(`provider:${provider.name}`, serviceIdentity(provider, t).label)]));
   const [error, setError] = useState("");
   const [pending, setPending] = useState<{ provider: string; model: string; variant: string } | null>(null);
   const providerName = pending?.provider ?? initialized?.provider ?? "";
@@ -703,7 +710,7 @@ export function DefaultModelRows({
     const label = labels.get(item.name) ?? itemIdentity.label;
     return {
       label,
-      options: providerModels(item).map((model) => ({
+      options: displayPreferences.visibleModels(`provider:${item.name}`, providerModels(item), item.name === initialized?.provider ? [initialized.model] : [item.model]).map((model) => ({
         value: `${item.name}\n${model.id}`,
         label: providerModelDisplayName(model),
         keywords: [label, item.name, model.id],
@@ -847,7 +854,6 @@ function ServiceDetail({
   const currentVariant = initialized?.variant ?? initialized?.effort ?? "";
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   const [fallbackProvider, setFallbackProvider] = useState("");
   const removable = !provider.auto_discovered && !isCodexType(provider.type);
@@ -911,50 +917,14 @@ function ServiceDetail({
   }
 
   return (
-    <ConnectionPage title={label} icon={<ServiceMark identity={identity} />}
-      subtitle={<span className="connection-status-row"><span>{attention || t(isDefault ? "provider.defaultBadge" : "settings.subscriptionReady")}</span>
-        {isGrokBuildType(provider.type) ? <GrokLogin disabled={running || busy} onBusyChange={setAuthBusy} onAuthenticated={onRefreshConnection} onReuseLocal={onRefreshConnection} /> : null}
-        {isGrokBuildType(provider.type) ? <small className="connection-auth-source" data-auth-source="grok-cli">{t("provider.authGrokSource")}</small> : null}
+    <ConnectionPage title={<ConnectionTitle connectionKey={`provider:${provider.name}`} fallback={identity.label} disabled={disabled} />} icon={<ServiceMark identity={identity} />}
+      subtitle={<span className="connection-status-row">
+        {provider.quota?.plan ? <span>{t("connection.subscriptionPlan", { provider: identity.label, plan: provider.quota.plan })}</span> : null}
+        <span className="connection-status-pill" data-attention={Boolean(attention)}>{attention || t("settings.subscriptionReady")}</span>
       </span>}
-      actions={removable || canMakeDefault ?
-        <div className="settings-detail-actions model-service-hero-actions">
-          {removable ? (
-            <button
-              type="button"
-              className="settings-button settings-button-ghost settings-icon-button"
-              aria-label={t("provider.moreActions", { name: label })}
-              title={t("provider.moreActions", { name: label })}
-              aria-haspopup="menu"
-              disabled={disabled}
-              onClick={(event) => {
-                const bounds = event.currentTarget.getBoundingClientRect();
-                setMenu({ x: bounds.right, y: bounds.bottom + 4 });
-              }}
-            >
-              <MoreHorizontal className="icon" aria-hidden="true" />
-            </button>
-          ) : null}
-          {!canMakeDefault ? null : (
-            <button
-              type="button"
-              className="settings-button"
-              data-testid="settings-provider-make-default"
-              disabled={disabled}
-              onClick={() => void run(() => onSave(
-                provider.name,
-                provider.model,
-                undefined,
-                undefined,
-                normalizedVariantForProviderModel(currentVariant, provider, provider.model),
-              ))}
-            >
-              {t("provider.makeDefault")}
-            </button>
-          )}
-        </div>
-      : null}
-      closeDisabled={busy || authBusy} onClose={onBack} backTestId="settings-provider-back">
-      <div className="connection-detail-body">
+      actions={<details className="connection-credential-menu">
+        <summary className="settings-button">{t(direct ? "provider.authSignIn" : isCodexType(provider.type) || isGrokBuildType(provider.type) ? "connection.credentials" : "connection.connectionSettings")}</summary>
+        <div className="connection-credential-panel">
       {direct || isCodexType(provider.type) ? <>
         <AccountMethods selected={direct ? "login" : usingLocalCodex ? "local" : undefined} disabled={disabled}
           onSelect={method => {
@@ -968,9 +938,9 @@ function ServiceDetail({
             } else onChooseMethod(method);
           }} />
         {direct || usingLocalCodex || provider.codex_credential_source ? <small className="connection-auth-source" data-auth-source={authSource}>{t(authSourceLabel[authSource])}</small> : null}
+        {isCodexType(provider.type) ? <button type="button" className="settings-button settings-button-ghost" disabled={disabled} data-testid="settings-check-codex-login" onClick={() => void run(async () => { const result = await window.wuu.loadCodexModels(provider.name); onProvidersChanged?.(result.providers); })}>{t("settings.codexCheckLogin")}</button> : null}
       </> : null}
-      {error && !confirmingRemove ? <p className="settings-error" role="alert">{error}</p> : null}
-
+        {isGrokBuildType(provider.type) ? <GrokLogin disabled={running || busy} onBusyChange={setAuthBusy} onAuthenticated={onRefreshConnection} onReuseLocal={onRefreshConnection} /> : null}
       {!isGrokBuildType(provider.type) ? <SettingsSection title={t("provider.connectionSection")}>
         <div className="connection-fields">
           {direct ? <Suspense fallback={<p className="settings-muted-line" role="status">{t("settings.loading")}</p>}>
@@ -979,7 +949,13 @@ function ServiceDetail({
         </div>
       </SettingsSection> : null}
 
-      {ENABLE_SUBSCRIPTIONS && !(isGrokBuildType(provider.type) && attention) && (provider.quota || hasBuiltInSubscriptionControls(provider)) ? <SubscriptionDashboard scope={{ kind: "provider", name: provider.name }} providers={[provider]} onProvidersChanged={onProvidersChanged} onInventoryLoaded={onQuotaLoaded} onSelectBuiltinModel={(name, model) => onSave(name, model)} /> : null}
+        </div>
+      </details>}
+      closeDisabled={busy || authBusy} onClose={onBack} backTestId="settings-provider-back">
+      <div className="connection-detail-body">
+      {error && !confirmingRemove ? <p className="settings-error" role="alert">{error}</p> : null}
+
+      {ENABLE_SUBSCRIPTIONS && !(isGrokBuildType(provider.type) && attention) && (provider.quota || hasBuiltInSubscriptionControls(provider)) ? <SubscriptionDashboard detailOnly scope={{ kind: "provider", name: provider.name }} providers={[provider]} onProvidersChanged={onProvidersChanged} onInventoryLoaded={onQuotaLoaded} onSelectBuiltinModel={(name, model) => onSave(name, model)} /> : null}
 
       <ModelChoices
         provider={provider}
@@ -991,27 +967,14 @@ function ServiceDetail({
         onAdd={(model) => saveConnection({ add_model: model })}
       />
 
-      {menu ? (
-        <ThreadContextMenu
-          x={menu.x}
-          y={menu.y}
-          onClose={() => setMenu(null)}
-          items={[{
-            label: t("provider.removeAction"),
-            icon: <Trash2 className="icon" aria-hidden="true" />,
-            danger: true,
-            onSelect: () => {
-              if (inUse) {
-                setError(t("provider.inUse"));
-                return;
-              }
-              setError("");
-              setFallbackProvider("");
-              setConfirmingRemove(true);
-            },
-          }]}
-        />
-      ) : null}
+      <details className="connection-engine-advanced">
+        <summary>{t("connection.advanced")}</summary>
+        <p className="settings-muted-line">{t("connection.localPreferences")}</p>
+        {canMakeDefault ? <button type="button" className="settings-button" data-testid="settings-provider-make-default" disabled={disabled}
+          onClick={() => void run(() => onSave(provider.name, provider.model, undefined, undefined, normalizedVariantForProviderModel(currentVariant, provider, provider.model)))}>{t("provider.makeDefault")}</button> : null}
+        {removable ? <button type="button" className="settings-button settings-button-danger" data-testid="settings-provider-remove" disabled={disabled}
+          onClick={() => { if (inUse) { setError(t("provider.inUse")); return; } setError(""); setFallbackProvider(""); setConfirmingRemove(true); }}>{t("provider.removeAction")}</button> : null}
+      </details>
       {confirmingRemove ? (
         <Modal
           ariaLabel={t("provider.removeTitle", { name: label })}
@@ -1338,7 +1301,11 @@ function ModelChoices({
   const [modelMenu, setModelMenu] = useState<{ model: ProviderModelSummary; x: number; y: number } | null>(null);
   const [replacement, setReplacement] = useState("");
   const [removeError, setRemoveError] = useState("");
-  const models = providerModels(provider);
+  const preferences = useConnectionDisplayPreferences();
+  const preferenceKey = `provider:${provider.name}`;
+  const models = preferences.orderModels(preferenceKey, providerModels(provider));
+  const [preferenceError, setPreferenceError] = useState("");
+  function updatePreference(action: () => void): void { try { action(); setPreferenceError(""); } catch (cause) { setPreferenceError(errorMessage(cause, t)); } }
   const managedCatalog = isChatGPTProvider(provider);
   const hidden = provider.hidden_models ?? [];
   const removingSelected = removing?.id === serviceModel;
@@ -1373,12 +1340,14 @@ function ModelChoices({
         icon: <Trash2 className="icon" aria-hidden="true" />, danger: true, disabled,
         onSelect: () => { setRemoving(modelMenu.model); setReplacement(""); setRemoveError(""); },
       }]} /> : null}
-      <div className="settings-group model-choice-list" role="group" aria-label={t("provider.modelsSection")}>
+      {preferenceError ? <p role="alert" className="settings-error">{preferenceError}</p> : null}
+      <div className="connection-model-table-heading"><span>{t("connection.modelName")}</span><span>{t("connection.modelID")}</span><span>{t("connection.enabled")}</span><span /></div>
+      <div className="settings-group model-choice-list connection-model-table" role="group" aria-label={t("provider.modelsSection")}>
         {visible.map((model) => {
           const name = providerModelDisplayName(model);
           const selected = model.id === serviceModel;
           return (
-            <div className="model-choice" key={model.id} data-selected={selected ? "" : undefined}>
+            <div className="model-choice connection-model-row" key={model.id} data-selected={selected ? "" : undefined}>
               <button
                 type="button"
                 className="model-choice-main"
@@ -1390,8 +1359,15 @@ function ModelChoices({
                 onClick={() => onChoose(model.id)}
               >
                 <span className="model-choice-label"><span className="model-choice-name">{name}</span>{selected ? <Check className="icon model-choice-selected" aria-hidden="true" /> : null}</span>
-                {name !== model.id ? <code className="model-choice-id">{model.id}</code> : null}
               </button>
+              <code className="connection-model-id">{model.id}</code>
+              <button type="button" className="settings-switch connection-model-enabled" role="switch" aria-label={`${t("connection.enabled")} ${name}`} aria-checked={!preferences.get(preferenceKey).hiddenModels.includes(model.id)} disabled={disabled || selected}
+                onClick={() => updatePreference(() => preferences.setModelVisible(preferenceKey, model.id, preferences.get(preferenceKey).hiddenModels.includes(model.id)))}><span className="settings-switch-thumb" /></button>
+              <span className="connection-model-order">
+                <GripHorizontal className="icon" aria-hidden="true" />
+                <button type="button" className="settings-button settings-button-ghost settings-icon-button" aria-label={t("connection.moveUp", { name })} disabled={disabled || models[0]?.id === model.id} onClick={() => updatePreference(() => preferences.moveModel(preferenceKey, models, model.id, -1))}><ArrowUp className="icon" /></button>
+                <button type="button" className="settings-button settings-button-ghost settings-icon-button" aria-label={t("connection.moveDown", { name })} disabled={disabled || models.at(-1)?.id === model.id} onClick={() => updatePreference(() => preferences.moveModel(preferenceKey, models, model.id, 1))}><ArrowDown className="icon" /></button>
+              </span>
               {!managedCatalog ? <button
                 type="button"
                 className="icon-button model-choice-action"
@@ -1407,7 +1383,7 @@ function ModelChoices({
                   setModelMenu({ model, x: bounds.right, y: bounds.bottom + 4 });
                 }}
               >
-                <MoreHorizontal className="icon" aria-hidden="true" />
+                <Trash2 className="icon" aria-hidden="true" />
               </button> : null}
             </div>
           );

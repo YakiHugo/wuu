@@ -64,3 +64,26 @@ it.each(["wuu-auth-store", "codex-cli", "codex-cli-readonly", "explicit", undefi
     expect(container.querySelector('[data-model="chosen-model"]')?.getAttribute("aria-pressed")).toBe("true");
   } finally { act(() => root.unmount()); container.remove(); window.wuu = previous; }
 });
+
+it("keeps alias and display ordering separate from configuration identity and selection", async () => {
+  localStorage.removeItem("wuu.connectionDisplay.v1");
+  const container = document.createElement("div"); document.body.appendChild(container);
+  const root = createRoot(container); const previous = window.wuu;
+  const save = vi.fn();
+  window.wuu = { listEngines: vi.fn().mockResolvedValue({ engines: [] }) } as unknown as WuuDesktopApi;
+  try {
+    await act(async () => root.render(<ModelServicesPage initialized={{ protocol_version: "wuu-app-server/v0.1", workspace_root: "/tmp/project", provider: "api-stable-id", model: "model-a", providers: [{ name: "api-stable-id", type: "openai", model: "model-a", api_key_configured: true, models: [{ id: "model-a", display_name: "A" }, { id: "model-b", display_name: "B" }] }] }} running={false} runningProviderNames={new Set()} onSave={save} onRemoveProvider={vi.fn()} onRefreshModelCatalog={vi.fn()} />));
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="settings-provider-card"]')!.click());
+    await act(async () => container.querySelector<HTMLButtonElement>('.connection-title-edit button')!.click());
+    const input = container.querySelector<HTMLInputElement>('.connection-title-form input')!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "Personal account"); input.dispatchEvent(new Event("input", { bubbles: true })); });
+    await act(async () => container.querySelector<HTMLButtonElement>('.connection-title-form button')!.click());
+    expect(container.querySelector('.connection-page-title')?.textContent).toContain("Personal account");
+    const rows = () => [...container.querySelectorAll<HTMLButtonElement>('[data-testid="settings-provider-model"]')].map(button => button.dataset.model);
+    await act(async () => container.querySelector<HTMLButtonElement>('.connection-model-row:last-child .connection-model-order button')!.click());
+    expect(rows()).toEqual(["model-b", "model-a"]);
+    expect(save).not.toHaveBeenCalled();
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="settings-provider-model"][data-model="model-b"]')!.click());
+    expect(save.mock.calls[0].slice(0, 2)).toEqual(["api-stable-id", "model-b"]);
+  } finally { act(() => root.unmount()); container.remove(); window.wuu = previous; localStorage.removeItem("wuu.connectionDisplay.v1"); }
+});

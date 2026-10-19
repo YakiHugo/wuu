@@ -13,25 +13,28 @@ type LoginOwner = {
   senderID: number;
   context: RuntimeContext;
   dispose: () => void;
+  returnAllowed: boolean;
 };
 
 // The credential store is user-wide although each project has its own server.
 // Ownership survives transport errors until cancellation or backend expiry.
 export class ChatGPTLoginCoordinator {
   private current: LoginOwner | undefined;
-  constructor(private readonly request: LoginRequest, private readonly openBrowser: (url: string) => Promise<unknown>) {}
+  constructor(private readonly request: LoginRequest, private readonly openBrowser: (url: string) => Promise<unknown>, private readonly onSuccess: (senderID: number) => void = () => {}) {}
 
   async start(window: LoginWindow, context: RuntimeContext, accountID?: string, enablePlanUsage?: boolean): Promise<AuthChatGPTLoginResult> {
     if (this.current) throw new Error("A ChatGPT login is already running; finish or cancel it first.");
-    const owner: LoginOwner = { loginID: "", senderID: window.id, context, dispose: () => {} };
+    const owner: LoginOwner = { loginID: "", senderID: window.id, context, dispose: () => {}, returnAllowed: true };
     this.current = owner;
     let expiry: ReturnType<typeof setTimeout> | undefined;
     const cancel = () => {
+      owner.returnAllowed = false;
       if (!owner.loginID) return;
       void this.request(context, "auth/chatgpt/login/cancel", { login_id: owner.loginID })
         .then(() => owner.dispose()).catch(() => {});
     };
     owner.dispose = () => {
+      owner.returnAllowed = false;
       clearTimeout(expiry);
       window.removeListener("destroyed", cancel);
       if (this.current === owner) this.current = undefined;
@@ -62,7 +65,7 @@ export class ChatGPTLoginCoordinator {
           throw new AppServerResponseError("Could not open ChatGPT sign-in. Please retry.");
         }
       }
-      if (result.status !== "pending") owner.dispose();
+      this.finish(owner, result);
       return this.publicResult(result);
     } catch (error) {
       if (error instanceof AppServerResponseError) {
@@ -80,9 +83,10 @@ export class ChatGPTLoginCoordinator {
     }
     try {
       const result = await this.request(owner.context, "auth/chatgpt/login/poll", { login_id: loginID }) as AuthChatGPTLoginResult;
-      if (result.status !== "pending") owner.dispose();
+      this.finish(owner, result);
       return this.publicResult(result);
     } catch (error) {
+      owner.returnAllowed = false;
       // A failed poll does not mean the login attempt stopped.
       try {
         await this.request(owner.context, "auth/chatgpt/login/cancel", { login_id: loginID });
@@ -90,6 +94,13 @@ export class ChatGPTLoginCoordinator {
       } catch { /* The expiry timer retains responsibility for cleanup. */ }
       throw error;
     }
+  }
+
+  private finish(owner: LoginOwner, result: AuthChatGPTLoginResult): void {
+    if (result.status === "pending") return;
+    const shouldReturn = result.status === "success" && this.current === owner && owner.returnAllowed;
+    owner.dispose();
+    if (shouldReturn) this.onSuccess(owner.senderID);
   }
 
   private publicResult(result: AuthChatGPTLoginResult): AuthChatGPTLoginResult {
@@ -100,6 +111,7 @@ export class ChatGPTLoginCoordinator {
   async cancel(senderID: number, loginID: string): Promise<{ ok: boolean }> {
     const owner = this.current;
     if (!owner || owner.loginID !== loginID || owner.senderID !== senderID) return { ok: true };
+    owner.returnAllowed = false;
     const result = await this.request(owner.context, "auth/chatgpt/login/cancel", { login_id: loginID }) as { ok: boolean };
     owner.dispose();
     return result;

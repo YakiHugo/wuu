@@ -130,6 +130,20 @@ if (!empty && params.get("connections") === "quota") {
   engines.subscription_providers = providers;
 }
 
+// Approved detail review fixture. All values and authentication are synthetic.
+if (params.has("detail")) {
+  const now = Date.now();
+  const quota = { status: "available" as const, kind: "subscription" as const, plan: "Pro", checked_at: new Date(now).toISOString(), expires_at: new Date(now + 3600000).toISOString(), account: { id: "fixture-account", source: "claude-code" }, windows: [
+    { id: "short", window_minutes: 300, used_percent: 44, resets_at: new Date(now + 7200000).toISOString() },
+    { id: "weekly", window_minutes: 10080, used_percent: 86, resets_at: new Date(now + 172800000).toISOString() },
+  ] };
+  const engine = engines.engines.find(item => item.id === "claude");
+  if (engine) Object.assign(engine, { enabled: true, cli_version: "2.1.302", update_url: "https://code.claude.com/docs/en/setup#update-claude-code", quota, models: [{ id: "claude-sonnet", display_name: "Claude Sonnet", is_default: true }, { id: "claude-opus", display_name: "Claude Opus" }, { id: "claude-haiku", display_name: "Claude Haiku" }] });
+  if (engines.settings) engines.settings.claude = { enabled: true };
+  if (providers[0]) providers[0].quota = quota;
+  engines.subscription_providers = providers;
+}
+
 const mcpServers: MCPServerStatus[] = empty ? [] : [
   { name: "github", state: "connected", connected: true, tool_count: 26, auth_status: "oauth" },
   { name: "linear", state: "needs_auth", connected: false, tool_count: 0, auth_status: "not_logged_in" },
@@ -322,6 +336,12 @@ function Fixture(): JSX.Element {
     document.documentElement.dataset.theme = params.get("theme") || "light";
     document.documentElement.dataset.platform = "darwin";
     applyMessageFlowFontSize(Number(params.get("size")) || 14.5);
+    const detail = params.get("detail");
+    if (detail) {
+      const selector = detail === "engine" ? '[data-testid="settings-engine-claude-status"]' : '[data-testid="settings-provider-card"]';
+      const open = () => { const button = document.querySelector<HTMLButtonElement>(selector); if (!button) return false; button.click(); return true; };
+      if (!open()) { const observer = new MutationObserver(() => { if (open()) observer.disconnect(); }); observer.observe(document.body, { childList: true, subtree: true }); return () => observer.disconnect(); }
+    }
   }, []);
   // Mirrors the core's settings contract closely enough to review flows:
   // keep_selection edits a service without choosing it.

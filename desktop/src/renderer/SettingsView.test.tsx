@@ -1016,14 +1016,12 @@ describe("SettingsView model services", () => {
     renderSettings({ initialized: servicesInitialized(), initialPage: "providers", onRemoveProvider, runningProviderNames: ["deepseek"] });
     await flush();
     click(document.querySelector('[data-provider="deepseek"]'));
-    click(document.querySelector('[aria-label="deepseek 的更多操作"], [aria-label="DeepSeek 的更多操作"]'));
-    click([...document.querySelectorAll('[role="menuitem"]')].find((item) => item.textContent?.includes("删除服务")));
+    click(document.querySelector('[data-testid="settings-provider-remove"]'));
     expect(document.body.textContent).toContain("这个模型服务正在被运行中的对话使用");
     expect(onRemoveProvider).not.toHaveBeenCalled();
 
     renderSettings({ initialized: servicesInitialized(), initialPage: "providers", onRemoveProvider, runningProviderNames: [] });
-    click(document.querySelector('[aria-label="DeepSeek 的更多操作"]'));
-    click([...document.querySelectorAll('[role="menuitem"]')].find((item) => item.textContent?.includes("删除服务")));
+    click(document.querySelector('[data-testid="settings-provider-remove"]'));
     await act(async () => {
       document.querySelector<HTMLButtonElement>('[data-testid="settings-provider-remove-confirm"]')!.click();
     });
@@ -1032,8 +1030,7 @@ describe("SettingsView model services", () => {
     const initialized = { ...servicesInitialized(), provider: "deepseek", model: "deepseek-v4-pro" };
     renderSettings({ initialized, initialPage: "providers", onRemoveProvider });
     click(document.querySelector('[data-provider="deepseek"]'));
-    click(document.querySelector('[aria-label="DeepSeek 的更多操作"]'));
-    click([...document.querySelectorAll('[role="menuitem"]')].find((item) => item.textContent?.includes("删除服务")));
+    click(document.querySelector('[data-testid="settings-provider-remove"]'));
     expect(document.querySelector<HTMLButtonElement>('[data-testid="settings-provider-remove-confirm"]')!.disabled).toBe(true);
     click(document.querySelector('[data-testid="settings-provider-removal-fallback"]'));
     click(document.querySelector('[data-value="openai-codex"]'));
@@ -1049,8 +1046,7 @@ describe("SettingsView model services", () => {
 
     renderSettings({ initialized: { ...initialized, providers: initialized.providers!.filter((provider) => provider.name === "deepseek") }, initialPage: "providers", onRemoveProvider });
     click(document.querySelector('[data-provider="deepseek"]'));
-    click(document.querySelector('[aria-label="DeepSeek 的更多操作"]'));
-    click([...document.querySelectorAll('[role="menuitem"]')].find((item) => item.textContent?.includes("删除服务")));
+    click(document.querySelector('[data-testid="settings-provider-remove"]'));
     expect(document.querySelector<HTMLButtonElement>('[data-testid="settings-provider-remove-confirm"]')!.disabled).toBe(true);
   });
 

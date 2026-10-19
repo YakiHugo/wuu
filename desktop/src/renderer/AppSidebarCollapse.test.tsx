@@ -307,10 +307,7 @@ describe("sidebar collapse-state independence", () => {
     await click('[data-provider="codex-account"]');
     const sourceValue = () => container.querySelector('.connection-fields .model-service-status')?.textContent;
     expect(sourceValue()).toContain(translateCurrent("settings.codexSourceSaved"));
-    await click('[data-testid="subscription-account-actions"]');
-    const useLocal = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(button => button.textContent === translateCurrent("settings.codexUseLocal"));
-    expect(useLocal).toBeDefined();
-    await act(async () => useLocal!.click());
+    await click('[data-testid="settings-auth-method-local"]');
     await flushAsync();
     expect(window.wuu.useCodexCredentials).toHaveBeenCalledWith("codex-account");
     expect(window.wuu.loadCodexModels).toHaveBeenCalledWith("codex-account");

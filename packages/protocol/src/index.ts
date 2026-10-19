@@ -1257,7 +1257,12 @@ export type EngineInfo = {
   display_name?: string;
   protocol?: string;
   install_url?: string;
+  /** Legacy descriptor version; not necessarily the installed CLI version. */
   version?: string;
+  /** Observed installed CLI version; omitted when unknown or unsupported. */
+  cli_version?: string;
+  /** Vendor guide only; Wuu does not manage the CLI installation. */
+  update_url?: string;
   capabilities?: string[];
   enabled: boolean;
   binary_path?: string;

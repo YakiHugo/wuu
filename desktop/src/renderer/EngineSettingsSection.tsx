@@ -1,4 +1,4 @@
-import { ChevronRight, ExternalLink, RefreshCw } from "./WuuIcons";
+import { ArrowUp, ArrowDown, ChevronRight, ExternalLink, RefreshCw } from "./WuuIcons";
 import { useCallback, useId, useMemo, useState } from "react";
 import type {
   EngineInfo,
@@ -8,6 +8,10 @@ import type {
 } from "../shared/protocol";
 import { clearDraftEngineMemory } from "./DraftEngineMemory";
 import { EngineIcon } from "./EngineIcons";
+import { ConnectionTitle } from "./ConnectionTitle";
+import { useConnectionDisplayPreferences } from "./ConnectionDisplayPreferences";
+import { EngineAuthentication } from "./EngineAuthentication";
+import { selectSubscriptionModel, subscriptionSources } from "./SubscriptionSources";
 import { ConnectionPage } from "./ConnectionPage";
 import { ConnectionUsageSummary } from "./ConnectionUsageSummary";
 import { SubscriptionDashboard } from "./SubscriptionDashboard";
@@ -138,6 +142,9 @@ export function EngineSettingsSection({
 }): JSX.Element {
   const { t } = useI18n();
   const usageID = useId();
+  const display = useConnectionDisplayPreferences();
+  const [accountRevision, setAccountRevision] = useState(0);
+  const [, setSelectionRevision] = useState(0);
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -204,13 +211,43 @@ export function EngineSettingsSection({
   const accountKey = selected ? `${selected.id}:${selectedSettings?.binary_path ?? ""}` : "";
   const snapshot = selected ? accountSnapshot(selected) : undefined;
 
+  const observedEngine = selected ? { ...selected, ...(snapshot && enabled(selected) ? snapshot : {}), enabled: selected.enabled, quota: quotaFor(selected) } : undefined;
+  const modelSource = observedEngine ? subscriptionSources({ engines: [observedEngine] }, [], observedEngine.id)[0] : undefined;
+  const displayKey = selected ? `engine:${selected.id}` : "";
+  const models = display.orderModels(displayKey, (observedEngine?.models ?? []).map(model => ({ id: model.id, label: model.display_name?.trim() || model.id })));
+  const headerStatus = selected && enabled(selected) && selected.binary_ok && !selected.error && !selected.models_error
+    && quotaFor(selected)?.status !== "sign_in" && modelSource?.login !== "ready"
+    ? t("settings.subscriptionUnknown") : selected ? status(selected) : "";
+  const hiddenModels = display.get(displayKey).hiddenModels;
+  const updateDisplay = (change: () => void) => {
+    try { change(); setError(""); }
+    catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+  };
+  const refreshAccount = async () => {
+    const loaded = await window.wuu.listEngines({ include_quota: true });
+    const observed = loaded.engines.find(engine => engine.id === selected?.id);
+    if (observed) setAccountSnapshots(current => ({ ...current, [accountKey]: observed }));
+    setAccountRevision(value => value + 1);
+  };
+
   if (selected) return <ConnectionPage key={selected.id}
-    title={engineLabel(selected.id, selected)} icon={<EngineIcon engine={selected.id} />}
-    subtitle={enabled(selected) && selected.binary_ok && quotaFor(selected)?.status === "sign_in" ? undefined : status(selected)}
+    title={<ConnectionTitle connectionKey={displayKey} fallback={engineLabel(selected.id, selected)} disabled={busy}
+      suffix={selected.cli_version ? <span className="connection-engine-version">{selected.cli_version}</span> : undefined} />}
+    icon={<EngineIcon engine={selected.id} />}
+    subtitle={<>{quotaFor(selected)?.plan?.trim() ? <span>{t("connection.subscriptionPlan", { provider: selected.id === "codex" ? "ChatGPT" : selected.id === "claude" ? "Claude" : engineLabel(selected.id, selected), plan: quotaFor(selected)!.plan! })}</span> : null}
+      <span className="connection-status-pill" data-attention={headerStatus !== t("settings.engineReady")}>{headerStatus}</span></>}
+    actions={<>
+      {selected.binary_ok && (selected.update_url || selected.install_url) ? <button className="settings-button" type="button" data-testid="engine-update-guide"
+        title={t("settings.engineUpdateGuideHint")} disabled={busy}
+        onClick={() => void window.wuu.openExternal((selected.update_url || selected.install_url)!).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))}>
+        {t("settings.engineUpdateGuide")}
+      </button> : null}
+      <EngineAuthentication key={`auth-${accountKey}`} entry engineID={selected.id} protocol={selected.protocol}
+        disabled={busy || !enabled(selected) || !selected.binary_ok} onReuseLocal={refreshAccount} onAuthenticated={refreshAccount} />
+    </>}
     onClose={close} closeDisabled={busy}>
-    <SettingsSection>
+    <SettingsSection title={t("settings.engineRuntime")}>
       <SettingsRow title={t("settings.engineEnable")}>
-        {refreshButton}
         <button type="button" className="settings-switch" role="switch" aria-checked={enabled(selected)}
           aria-label={`${engineLabel(selected.id, selected)} ${t(enabled(selected) ? "settings.engineDisable" : "settings.engineEnable")}`}
           data-testid={`settings-engine-${selected.id}-enabled`} disabled={busy}
@@ -218,25 +255,6 @@ export function EngineSettingsSection({
           <span className="settings-switch-thumb" aria-hidden="true" />
         </button>
       </SettingsRow>
-      {!selected.binary_ok ? <SettingsRow title={t("settings.engineInstall")}
-        description={selected.error || t("settings.engineNotInstalledHint")}>
-        {selected.install_url ? <button className="settings-button" type="button"
-          onClick={() => void window.wuu.openExternal(selected.install_url!).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))}>
-          {t("settings.engineInstall")}<ExternalLink className="icon" aria-hidden="true" />
-        </button> : null}
-      </SettingsRow> : null}
-      {error || loadError ? <p className="settings-error" role="alert">{error || loadError}</p> : null}
-      {selected.binary_ok && selected.error ? <p className="settings-engine-reason">{selected.error}</p> : null}
-    </SettingsSection>
-    <SubscriptionDashboard key={`account-${accountKey}-${selected.binary_path ?? ""}`}
-      scope={{ kind: "engine", id: selected.id }} inventory={result}
-      initialInventory={snapshot ? { engines: [snapshot] } : undefined}
-      onInventoryLoaded={loaded => {
-        const observed = loaded.engines.find(engine => engine.id === selected.id);
-        if (observed) setAccountSnapshots(current => ({ ...current, [accountKey]: observed }));
-      }} providers={[]} onSelectBuiltinModel={async () => {}} />
-    <details className="connection-engine-advanced">
-      <summary>{t("settings.engineAdvanced")}</summary>
       <SettingsRow title={t("settings.engineBinaryPath")} block>
         <input key={`path-${selected.id}-${selectedSettings?.binary_path ?? ""}`} className="settings-input"
           type="text" aria-label={`${engineLabel(selected.id, selected)} ${t("settings.engineBinaryPath")}`}
@@ -250,6 +268,56 @@ export function EngineSettingsSection({
           {t("common.save")}
         </button>
       </SettingsRow>
+      {!selected.binary_ok ? <SettingsRow title={t("settings.engineInstall")}
+        description={selected.error || t("settings.engineNotInstalledHint")}>
+        {selected.install_url ? <button className="settings-button" type="button"
+          onClick={() => void window.wuu.openExternal(selected.install_url!).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))}>
+          {t("settings.engineInstall")}<ExternalLink className="icon" aria-hidden="true" />
+        </button> : null}
+      </SettingsRow> : null}
+      {error || loadError ? <p className="settings-error" role="alert">{error || loadError}</p> : null}
+      {selected.binary_ok && selected.error ? <p className="settings-engine-reason">{selected.error}</p> : null}
+    </SettingsSection>
+    <SettingsSection title={t("settings.engineModels")}>
+      {models.length ? <div className="connection-model-table" role="table" aria-label={t("settings.engineModels")}>
+        <div className="connection-model-row connection-model-head" role="row">
+          <span role="columnheader">{t("settings.engineModelName")}</span><span role="columnheader">{t("settings.engineModelID")}</span>
+          <span role="columnheader">{t("settings.engineModelEnabled")}</span><span role="columnheader" className="sr-only">{t("settings.engineModelOrder")}</span>
+        </div>
+        {models.map((model, index) => <div key={model.id} className="connection-model-row" role="row" data-model-id={model.id}>
+          <span className="connection-model-name" role="cell">{model.label}</span>
+          <span className="connection-model-id" role="cell">{model.id}</span>
+          <span className="connection-model-enabled" role="cell"><button type="button" className="settings-switch" role="switch"
+            aria-label={`${model.label} ${t("settings.engineModelEnabled")}`} aria-checked={!hiddenModels.includes(model.id)} disabled={busy}
+            onClick={() => updateDisplay(() => display.setModelVisible(displayKey, model.id, hiddenModels.includes(model.id)))}>
+            <span className="settings-switch-thumb" aria-hidden="true" />
+          </button></span>
+          <span className="connection-model-order" role="cell">
+            <button type="button" className="settings-button settings-button-ghost settings-icon-button" disabled={busy || index === 0}
+              aria-label={t("settings.engineModelUp", { name: model.label })} onClick={() => updateDisplay(() => display.moveModel(displayKey, models, model.id, -1))}><ArrowUp className="icon" /></button>
+            <button type="button" className="settings-button settings-button-ghost settings-icon-button" disabled={busy || index === models.length - 1}
+              aria-label={t("settings.engineModelDown", { name: model.label })} onClick={() => updateDisplay(() => display.moveModel(displayKey, models, model.id, 1))}><ArrowDown className="icon" /></button>
+          </span>
+        </div>)}
+      </div> : <p className="settings-muted-line">{t("settings.subscriptionModelUnset")}</p>}
+      {observedEngine?.models_error ? <p className="settings-error" role="alert">{observedEngine.models_error}</p> : null}
+    </SettingsSection>
+    <details className="connection-engine-advanced">
+      <summary>{t("settings.engineAdvanced")}</summary>
+      <SettingsRow title={t("settings.engineModelCurrent")}>
+        {refreshButton}
+        {modelSource && models.length ? <SelectMenu triggerClassName="settings-select-trigger"
+          ariaLabel={t("settings.engineModelCurrent")} value={modelSource.selectedModel} disabled={busy || !enabled(selected) || !selected.binary_ok}
+          options={display.visibleModels(displayKey, models, [modelSource.selectedModel]).map(model => ({ value: model.id, label: model.label }))}
+          placeholder={t("settings.subscriptionModelUnset")} onChange={id => { selectSubscriptionModel(modelSource, id); setSelectionRevision(value => value + 1); }} /> : null}
+      </SettingsRow>
+      <SubscriptionDashboard key={`account-${accountKey}-${selected.binary_path ?? ""}-${accountRevision}`} detailOnly
+        scope={{ kind: "engine", id: selected.id }} inventory={result}
+        initialInventory={snapshot ? { engines: [snapshot] } : undefined}
+        onInventoryLoaded={loaded => {
+          const observed = loaded.engines.find(engine => engine.id === selected.id);
+          if (observed) setAccountSnapshots(current => ({ ...current, [accountKey]: observed }));
+        }} providers={[]} onSelectBuiltinModel={async () => {}} />
     </details>
   </ConnectionPage>;
 
@@ -265,12 +333,12 @@ export function EngineSettingsSection({
           return <button key={engine.id} type="button"
             className="connection-summary-row"
             data-testid={`settings-engine-${engine.id}-status`}
-            aria-label={`${engineLabel(engine.id, engine)} · ${status(engine)}`}
+            aria-label={`${display.label(`engine:${engine.id}`, engineLabel(engine.id, engine))} · ${status(engine)}`}
             aria-describedby={`${usageID}-${engine.id} ${usageID}-${engine.id}-quota`}
             onClick={() => { setError(""); onSelectEngine(engine.id); }}>
             <span className="connection-summary-icon" aria-hidden="true"><EngineIcon engine={engine.id} /></span>
             <span className="connection-summary-copy" id={`${usageID}-${engine.id}`}>
-              <span className="connection-summary-name">{engineLabel(engine.id, engine)}</span>
+              <span className="connection-summary-name">{display.label(`engine:${engine.id}`, engineLabel(engine.id, engine))}</span>
               <span className="connection-summary-meta"><span>{quota?.plan?.trim() || t("provider.localEngine")}</span><span aria-hidden="true"> · </span>
                 <span className="connection-summary-status">{status(engine)}</span>
               </span>

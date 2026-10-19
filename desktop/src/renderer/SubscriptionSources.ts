@@ -1,3 +1,4 @@
+import { connectionDisplayPreferences as display } from "./ConnectionDisplayPreferences";
 import type {
   EngineInfo,
   EngineListResult,
@@ -65,10 +66,10 @@ function engineSource(engine: EngineInfo): SubscriptionSource {
     key: `engine:${engine.id}`,
     kind: "engine",
     id: engine.id,
-    label: engine.display_name?.trim() || engine.id,
+    label: display.label(`engine:${engine.id}`, engine.display_name?.trim() || engine.id),
     login: engineLogin(engine),
     catalogFailed: !!(engine.models_error || engine.error),
-    models,
+    models: display.visibleModels(`engine:${engine.id}`, models, [selected]),
     selectedModel: selected,
     quota: engine.quota,
     engine,
@@ -92,10 +93,10 @@ function providerSource(provider: ProviderSummary): SubscriptionSource {
     key: `provider:${provider.name}`,
     kind: "builtin",
     id: provider.name,
-    label: provider.name,
+    label: display.label(`provider:${provider.name}`, provider.name),
     login: provider.api_key_configured ? "ready" : "sign_in",
     catalogFailed: false,
-    models,
+    models: display.visibleModels(`provider:${provider.name}`, models, [provider.model]),
     selectedModel: provider.model,
     quota: provider.quota,
     provider,
@@ -105,7 +106,9 @@ function providerSource(provider: ProviderSummary): SubscriptionSource {
 function uniqueModels(provider: ProviderSummary): { id: string; label: string }[] {
   const seen = new Set<string>();
   const models: { id: string; label: string }[] = [];
-  for (const id of [provider.model, ...(provider.models ?? []).map((model) => model.id)]) {
+  const catalogIDs = (provider.models ?? []).map(model => model.id);
+  const ids = catalogIDs.includes(provider.model) ? catalogIDs : [provider.model, ...catalogIDs];
+  for (const id of ids) {
     const trimmed = id.trim();
     if (!trimmed || seen.has(trimmed)) continue;
     seen.add(trimmed);

@@ -4,20 +4,23 @@ import { GrokLogin } from "./GrokLogin";
 import { useI18n } from "./i18n";
 
 /** Discovery never starts login. Credentials stay with the installed engine. */
-export function EngineAuthentication({ engineID, protocol, compact = false, disabled = false, onAuthenticated, onReuseLocal }: {
+export function EngineAuthentication({ engineID, protocol, compact = false, disabled = false, entry = false, onAuthenticated, onReuseLocal }: {
   engineID: string;
   protocol?: string;
   compact?: boolean;
   disabled?: boolean;
+  entry?: boolean;
   onAuthenticated?: () => void | Promise<void>;
   onReuseLocal: () => void | Promise<void>;
 }): JSX.Element {
   const { t } = useI18n();
+  const [expanded, setExpanded] = useState(false);
   const [methods, setMethods] = useState<EngineAuthResult["methods"]>();
   const [busy, setBusy] = useState<"auth" | "local" | null>(null);
   const [error, setError] = useState("");
   const operation = useRef<{ kind: "auth" | "local"; cancelled: boolean } | undefined>(undefined);
   useEffect(() => {
+    setExpanded(false);
     setMethods(undefined);
     setBusy(null);
     setError("");
@@ -97,15 +100,15 @@ export function EngineAuthentication({ engineID, protocol, compact = false, disa
 
   const canSignIn = protocol === "acp" && !["dsh", "hermes", "pi"].includes(engineID);
   const cliCommand = engineID === "codex" ? "codex login" : engineID === "claude" ? "claude auth login" : engineID === "opencode" ? "opencode auth login" : undefined;
-  return (
+  const controls = (
     <div className={`settings-engine-auth${compact ? " settings-engine-auth-compact" : ""}`} aria-busy={Boolean(busy)}>
-      {engineID === "grok" ? <GrokLogin disabled={disabled} onAuthenticated={async () => { await onAuthenticated?.(); }} onReuseLocal={onReuseLocal} /> : <>
+      {engineID === "grok" ? <GrokLogin nested={entry} disabled={disabled} onBusyChange={value => setBusy(value ? "auth" : null)} onAuthenticated={async () => { await onAuthenticated?.(); }} onReuseLocal={onReuseLocal} /> : <>
         <div className="settings-engine-auth-actions">
           {canSignIn ? <button className="settings-button" type="button" disabled={disabled || Boolean(busy)} data-testid="engine-auth-discover" onClick={() => void run()}>
             {t("provider.authSignIn")}
           </button> : null}
           <button className="settings-button" type="button" disabled={disabled || Boolean(busy)} data-testid="engine-auth-local" onClick={() => void reuseLocal()}>
-            {t("provider.authUseLocal")}
+            {t(entry ? "provider.authCheckLocal" : "provider.authUseLocal")}
           </button>
           {busy === "auth" ? <button className="settings-button" type="button" data-testid="engine-auth-cancel" onClick={() => void cancel()}>{t("common.cancel")}</button> : null}
           {methods?.map((method) => (
@@ -124,4 +127,12 @@ export function EngineAuthentication({ engineID, protocol, compact = false, disa
       </>}
     </div>
   );
+  if (!entry) return controls;
+  return <div className="connection-credential-entry">
+    <button type="button" className="settings-button" data-testid="engine-auth-entry"
+      aria-expanded={expanded} disabled={disabled || Boolean(busy)} onClick={() => setExpanded(value => !value)}>
+      {t("connection.credentials")}
+    </button>
+    {expanded ? <div className="connection-credential-menu">{controls}</div> : null}
+  </div>;
 }

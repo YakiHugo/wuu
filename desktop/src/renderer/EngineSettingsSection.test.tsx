@@ -2,6 +2,7 @@ import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EngineListResult, EngineUpdateParams } from "../shared/protocol";
+import { readDraftEngineMemory, writeDraftEngineMemory } from "./DraftEngineMemory";
 import { DefaultEngineRow, EngineSettingsSection } from "./EngineSettingsSection";
 
 const inventory: EngineListResult = {
@@ -17,6 +18,7 @@ let container: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
+  localStorage.clear();
   window.wuu = { ...window.wuu, listEngines: vi.fn().mockResolvedValue(inventory) };
   container = document.createElement("div");
   document.body.appendChild(container);
@@ -306,4 +308,39 @@ describe("EngineSettingsSection", () => {
     expect(onUpdate).toHaveBeenLastCalledWith({ codex: { binary_path: "/custom/codex" } });
   });
 
+});
+
+it("opens an official update guide without changing engine configuration or starting authentication", async () => {
+  const live: EngineListResult = { engines: [{ id: "claude", enabled: true, binary_ok: true,
+    cli_version: "2.1.302", update_url: "https://code.claude.com/docs/en/setup" }] };
+  const openExternal = vi.fn().mockResolvedValue(undefined);
+  const onUpdate = vi.fn();
+  window.wuu = { ...window.wuu, openExternal, listEngines: vi.fn().mockResolvedValue(live), authenticateEngine: vi.fn() };
+  await act(async () => root.render(<EngineSettingsSection result={live} selectedEngineID="claude"
+    onSelectEngine={vi.fn()} onCloseEngine={vi.fn()} onRefresh={vi.fn()} onUpdate={onUpdate} />));
+  expect(container.textContent).toContain("2.1.302");
+  await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="engine-update-guide"]')!.click());
+  expect(openExternal).toHaveBeenCalledExactlyOnceWith(live.engines[0].update_url);
+  expect(onUpdate).not.toHaveBeenCalled();
+  expect(window.wuu.authenticateEngine).not.toHaveBeenCalled();
+});
+
+it("keeps disabled models recoverable and preserves model selection while reordering", async () => {
+  const live: EngineListResult = { engines: [{ id: "claude", enabled: true, binary_ok: true, models: [
+    { id: "sonnet", display_name: "Sonnet", is_default: true }, { id: "opus", display_name: "Opus" },
+  ] }] };
+  window.wuu.listEngines = vi.fn().mockResolvedValue(live);
+  writeDraftEngineMemory({ engine: "claude", model: "sonnet", effort: "high" });
+  const onUpdate = vi.fn();
+  const props = { result: live, selectedEngineID: "claude", onSelectEngine: vi.fn(), onCloseEngine: vi.fn(), onRefresh: vi.fn(), onUpdate };
+  await act(async () => root.render(<EngineSettingsSection {...props} />));
+  await act(async () => container.querySelector<HTMLButtonElement>('[data-model-id="opus"] [role="switch"]')!.click());
+  expect(container.querySelector('[data-model-id="opus"] [role="switch"]')?.getAttribute("aria-checked")).toBe("false");
+  await act(async () => container.querySelector<HTMLButtonElement>('[data-model-id="opus"] .connection-model-order button')!.click());
+  expect([...container.querySelectorAll('[data-model-id]')].map(row => row.getAttribute("data-model-id"))).toEqual(["opus", "sonnet"]);
+  expect(readDraftEngineMemory()).toMatchObject({ engine: "claude", model: "sonnet", effort: "high" });
+  expect(onUpdate).not.toHaveBeenCalled();
+  await act(async () => root.render(<EngineSettingsSection {...props} selectedEngineID={undefined} />));
+  await act(async () => root.render(<EngineSettingsSection {...props} />));
+  expect(container.querySelector('[data-model-id="opus"] [role="switch"]')?.getAttribute("aria-checked")).toBe("false");
 });

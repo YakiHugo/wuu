@@ -183,3 +183,16 @@ it("does not cancel a completed engine login while its account refresh is pendin
   expect(cancel).not.toHaveBeenCalled();
   await act(async () => finishRefresh());
 });
+
+it("opening the credential entry never discovers methods or starts login", async () => {
+  const local = vi.fn();
+  act(() => root!.render(<EngineAuthentication entry engineID="devin" protocol="acp" onReuseLocal={local} />));
+  expect(container.querySelector('[data-testid="engine-auth-discover"]')).toBeNull();
+  await click("engine-auth-entry");
+  expect(discover).not.toHaveBeenCalled();
+  expect(authenticate).not.toHaveBeenCalled();
+  expect(local).not.toHaveBeenCalled();
+  await click("engine-auth-local");
+  expect(local).toHaveBeenCalledOnce();
+  expect(authenticate).not.toHaveBeenCalled();
+});

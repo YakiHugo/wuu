@@ -440,3 +440,15 @@ it.each([false, true])("switches the Codex credential source without changing th
    expect(source.querySelector('[role="status"]')).toBeNull();
  }
 });
+
+it("preserves reset credits, account context and rechecking in compact connection details", async () => {
+  const snapshot: EngineListResult = { engines: [{ id: "codex", enabled: true, binary_ok: true, quota: quota({ windows: [], reset_credits: 0 }) }] };
+  const read = vi.fn().mockResolvedValue(snapshot);
+  window.wuu = { ...window.wuu, listEngines: read };
+  await act(async () => root.render(<SubscriptionDashboard detailOnly scope={{ kind: "engine", id: "codex" }} inventory={snapshot} providers={[]} onSelectBuiltinModel={vi.fn()} />));
+  expect(container.querySelector('[data-testid="subscription-engine-codex"]')?.textContent).toContain("Example account");
+  expect(container.querySelector('[data-testid="subscription-engine-codex"]')?.textContent).toContain("0");
+  expect(container.querySelector("meter")).toBeNull();
+  await act(async () => container.querySelector<HTMLButtonElement>('.settings-section-actions button')!.click());
+  expect(read).toHaveBeenCalledTimes(2);
+});
