@@ -18,7 +18,10 @@ async function mount(driver?: AccountDriver, onOpenAccount = vi.fn()) {
   return navigate;
 }
 const trigger = () => container.querySelector("button")!;
-async function open() { await act(async () => trigger().click()); }
+async function open() {
+  await act(async () => trigger().click());
+  await act(async () => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
+}
 function item(key: Parameters<typeof translateCurrent>[0]) {
   const result = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')).find(button => button.textContent === translateCurrent(key));
   if (!result) throw new Error(`Missing menu item ${key}`);

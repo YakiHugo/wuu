@@ -20,6 +20,7 @@ export type CodexModelLoadState = {
 export type CodexRuntimeMenu = "model" | null;
 export type ComposerVariant = "dock" | "document" | "hero";
 export type FloatingMenuOwner =
+  | "web-workspace-address"
   | "web-workspace-downloads"
   | "web-workspace-options"
   | "sidebar-account"

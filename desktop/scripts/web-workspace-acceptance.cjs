@@ -74,7 +74,8 @@ async function runWebsiteAcceptance(h, fixture) {
   const formName = '.ribbon-website-form label:first-child input';
   const formURL = '.ribbon-website-form label:nth-child(2) input';
   const webRoot = '[data-wuu-component="web-workspace"]';
-  const address = `${webRoot} .workspace-browser-url-input`;
+  const address = `${webRoot} .web-workspace-toolbar .workspace-browser-url-input`;
+  const startInput = '.web-workspace-stage:not([hidden]) .web-workspace-start-search input';
   const toolbar = name => `${webRoot} button[aria-label="${name}"]`;
   const ribbon = name => `.sidebar-ribbon-main button[aria-label="${name}"]`;
   const prefs = () => evaluate(() => JSON.parse(localStorage.getItem('wuu.navigation-ribbon.v1')));
@@ -169,6 +170,28 @@ async function runWebsiteAcceptance(h, fixture) {
     assert.ok(colors.size > 12, 'Snapshot has actual nonblank page content, not a flat placeholder');
     report.actions.push({ label: `${label}-snapshot`, atMs: Date.now() - started, image: image.getSize(), sampledColors: colors.size, sha256: createHash('sha256').update(image.toPNG()).digest('hex') });
     save();
+  }
+  async function profileMenu(label, wc) {
+    await click('.sidebar-account-trigger', `open-profile-${label}`);
+    await waitFor(() => document.querySelector('.sidebar-account-menu[role="menu"]'));
+    if (wc) await assertMenuBackdrop(`profile-${label}`);
+    const geometry = await evaluate(() => {
+      const menu = document.querySelector('.sidebar-account-menu'), r = menu.getBoundingClientRect();
+      return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, viewport: { width: innerWidth, height: innerHeight },
+        hit: [r.left + 8, r.right - 8].every(x => menu.contains(document.elementFromPoint(x, r.top + r.height / 2))),
+        items: [...menu.querySelectorAll('[role="menuitem"]')].map(item => {
+          const b = item.getBoundingClientRect();
+          return { text: item.textContent, hit: item.contains(document.elementFromPoint(b.right - 8, b.top + b.height / 2)) };
+        }) };
+    });
+    assert.ok(geometry.left >= 0 && geometry.top >= 0 && geometry.right <= geometry.viewport.width
+      && geometry.bottom <= geometry.viewport.height && geometry.hit && geometry.items.every(item => item.hit),
+    `Full account panel stays above the browser and is hit-testable: ${JSON.stringify(geometry)}`);
+    await capture(`profile-over-${label}`);
+    xinput(['key', '--clearmodifiers', 'Escape']);
+    await waitFor(() => !document.querySelector('.sidebar-account-menu'));
+    if (wc) await until(() => !wc.isDestroyed() && win.contentView.children.some(view => view.webContents === wc && view.getVisible()), 'Profile dismissal restores the same native page');
+    return geometry;
   }
   async function openSite(name, pathname) {
     await click(ribbon(name), `open-${name}`);
@@ -522,6 +545,15 @@ async function runWebsiteAcceptance(h, fixture) {
           }
         }
         await capture(`bounds-${theme}-${width}-zoom-${zoom}`);
+        if (width === 440 || theme === 'dark') {
+          await click('.web-workspace-stage:not([hidden]) .web-workspace-new-tab', `new-tab-${theme}-${width}`);
+          await waitFor(selector => document.activeElement?.matches(selector), startInput);
+          await hidden('new-tab start page');
+          await capture(`new-tab-${theme}-${width}-font-${size}`);
+          if (width === 440) await profileMenu('narrow-new-tab');
+          await click('.web-workspace-stage:not([hidden]) .web-workspace-tab[data-active] .web-workspace-tab-close', 'return-from-visual-new-tab');
+          await until(() => nativeView('/alpha')?.getVisible(), 'Closing visual new tab restores website');
+        }
         samples.push({ theme, size, width, zoom, bounds, chrome });
       }
     } finally { win.webContents.setZoomFactor(1); await appearance('light', 15, 1280); }
@@ -593,9 +625,12 @@ async function runWebsiteAcceptance(h, fixture) {
       { stage: liveStage, count: before });
     await until(() => nativeView('/alpha')?.getVisible(), 'Native tab buttons remain clickable inside the draggable strip');
     await pageClick(wc, '#draft', 'native-tab-shortcut-focus'); xinput(['key', '--clearmodifiers', 'ctrl+t']);
-    await waitFor(({ stage, count }) => document.querySelectorAll(`${stage} [role=tab]`).length === count && document.activeElement?.matches('.workspace-browser-url-input'), { stage: liveStage, count: before + 1 });
+    await waitFor(({ stage, count, input }) => document.querySelectorAll(`${stage} [role=tab]`).length === count && document.activeElement?.matches(input), { stage: liveStage, count: before + 1, input: startInput });
     await hidden('new blank tab');
-    await navigateAddress('/tab-two', 'new-tab'); wc = nativeView('/tab-two').webContents;
+    await fill(startInput, origin + '/tab-two');
+    await capture('new-tab-central-address'); xinput(['key', '--clearmodifiers', 'Return']);
+    await until(() => nativeView('/tab-two')?.getVisible() && !nativeView('/tab-two').webContents.isLoading(), 'Central new-tab input navigates on native Return');
+    wc = nativeView('/tab-two').webContents;
     report.nativeFindEvents ||= [];
     wc.on('found-in-page', (_event, result) => { report.nativeFindEvents.push({ contentsID: wc.id, result, atMs: Date.now() - started }); save(); });
     await pageClick(wc, '#draft', 'native-find-shortcut-focus'); xinput(['key', '--clearmodifiers', 'ctrl+f']);
@@ -667,6 +702,44 @@ async function runWebsiteAcceptance(h, fixture) {
     await click('[data-browser-bookmark-current]', 'bookmark-local-page');
     await waitFor(() => document.querySelector('[data-browser-bookmark-current]')?.getAttribute('aria-pressed') === 'true');
     await navigateAddress('/history-target', 'history-page');
+    const tabsBeforeStart = (await readSite()).tabs.length;
+    await click(`${liveStage} .web-workspace-new-tab`, 'saved-history-new-tab');
+    await waitFor(selector => document.activeElement?.matches(selector), startInput);
+    await waitFor(() => {
+      const mascot = document.querySelector('.web-workspace-start-mascot');
+      return mascot?.getBoundingClientRect().width > 0 && (!(mascot instanceof HTMLImageElement) || mascot.complete && mascot.naturalWidth > 0);
+    });
+    await capture('mascot-new-tab-ready');
+    await fill(startInput, 'fixture');
+    const suggestion = url => `[data-address-suggestion-url="${url}"]`;
+    await waitFor(({ alpha, history }) => document.querySelector(`[data-address-suggestion-url="${alpha}"]`)?.dataset.addressSuggestionSource === 'bookmark'
+      && document.querySelector(`[data-address-suggestion-url="${history}"]`)?.dataset.addressSuggestionSource === 'history', { alpha: origin + '/alpha', history: origin + '/history-target' });
+    await capture('central-history-and-bookmark-suggestions');
+    xinput(['key', '--clearmodifiers', 'Escape']);
+    await waitFor(selector => !document.querySelector('[data-web-workspace-address-suggestions]') && document.activeElement?.matches(selector) && document.activeElement.value === 'fixture', startInput);
+    await fill(startInput, 'alpha');
+    await waitFor(selector => document.querySelector(selector), suggestion(origin + '/alpha'));
+    xinput(['key', '--clearmodifiers', 'Down']);
+    await waitFor(url => document.querySelector(`[data-address-suggestion-url="${url}"]`)?.getAttribute('aria-selected') === 'true', origin + '/alpha');
+    xinput(['key', '--clearmodifiers', 'Return']);
+    await until(() => nativeView('/alpha')?.getVisible() && !nativeView('/alpha').webContents.isLoading(), 'Keyboard selection opens the saved bookmark');
+    await fill(address, 'history-target');
+    await waitFor(selector => document.querySelector(selector), suggestion(origin + '/history-target'));
+    await assertMenuBackdrop('toolbar-address-suggestions');
+    await capture('toolbar-history-suggestion-over-page');
+    xinput(['key', '--clearmodifiers', 'Escape']);
+    await waitFor(selector => !document.querySelector('[data-web-workspace-address-suggestions]') && document.activeElement?.matches(selector) && document.activeElement.value === 'history-target', address);
+    await until(() => nativeView('/alpha')?.getVisible(), 'Escape restores native page while retaining address draft');
+    xinput(['key', '--clearmodifiers', 'Down']);
+    await waitFor(selector => document.querySelector(selector), suggestion(origin + '/history-target'));
+    await click(suggestion(origin + '/history-target'), 'choose-history-with-pointer');
+    await until(() => nativeView('/history-target')?.getVisible() && !nativeView('/history-target').webContents.isLoading(), 'Pointer selection opens stored history URL');
+    const selectedPage = nativeView('/history-target').webContents;
+    const profile = await profileMenu('live-website', selectedPage);
+    assert.equal(selectedPage.getURL(), origin + '/history-target');
+    await capture('profile-dismissed-native-page-restored');
+    await click(`${liveStage} .web-workspace-tab[data-active] .web-workspace-tab-close`, 'close-suggestion-journey-tab');
+    await until(async () => (await readSite()).tabs.length === tabsBeforeStart && nativeView('/history-target')?.getVisible(), 'Close journey tab restores original browsing state');
     await click('[data-browser-library-trigger]', 'open-browser-library'); await assertMenuBackdrop('browser library');
     await fill('[data-browser-library] input[type=search]', 'history-target');
     await waitFor(url => document.querySelector(`[data-library-url="${url}"]`), origin + '/history-target');
@@ -685,7 +758,7 @@ async function runWebsiteAcceptance(h, fixture) {
     assert.ok(state.bookmarks.some(bookmark => bookmark.url === origin + '/alpha'), 'Clearing history retains bookmarks');
     clearedHistoryURL = origin + '/history-target';
     await capture('cleared-history-retained-bookmark'); xinput(['key', 'Escape']);
-    return { history: state.history.length, bookmarks: state.bookmarks.length };
+    return { history: state.history.length, bookmarks: state.bookmarks.length, keyboardAndPointerSuggestions: true, profile };
   });
 
   await testNative('failed website navigation retries requested destination', async () => {

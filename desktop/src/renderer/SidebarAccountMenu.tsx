@@ -7,6 +7,7 @@ import { hostSupports } from "./HostCapabilities";
 import { ENABLE_ACCOUNT } from "./FeatureFlags";
 import { useI18n } from "./i18n";
 import { moveMenuFocus } from "./MenuKeyboardNavigation";
+import { composerMenuWidth, FloatingMenuPortal, useFloatingMenuFocus } from "./ComposerFloatingMenu";
 import "./SidebarAccountMenu.css";
 
 export function SidebarAccountMenu({ disabled, localOnly = false, compact = false, onOpenSettings, onOpenAccount }: {
@@ -53,9 +54,9 @@ export function SidebarAccountMenu({ disabled, localOnly = false, compact = fals
     };
   }, [driver, disabled, open]);
 
+  useFloatingMenuFocus(panel, "account", open);
   useEffect(() => {
     if (!open) return;
-    panel.current?.querySelector<HTMLButtonElement>("[role=menuitem]")?.focus();
     const outside = (event: PointerEvent) => {
       if (!panel.current?.contains(event.target as Node) && !anchor.current?.contains(event.target as Node)) setOpen(false);
     };
@@ -89,7 +90,8 @@ export function SidebarAccountMenu({ disabled, localOnly = false, compact = fals
       {avatar}<span className="sidebar-account-name">{account.display_name || account.username || t("account.localMode")}</span><ChevronsUpDown size={14} aria-hidden="true" />
     </button>
     <DesktopUpdateButton />
-    {open &&
+    {open && <FloatingMenuPortal anchorRef={anchor} owner="sidebar-account" placement="above" align="left"
+      width={composerMenuWidth(240)} matchAnchorWidth={!compact} flip>
       <div ref={panel} id={id} role="menu" aria-label={t("account.menu")} className="select-menu-panel sidebar-account-menu"
         onBlur={event => { if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node) && event.relatedTarget !== anchor.current) setOpen(false); }}
         onKeyDown={event => {
@@ -110,6 +112,6 @@ export function SidebarAccountMenu({ disabled, localOnly = false, compact = fals
         {error && <p className="sidebar-account-message settings-error" role="alert">{error}</p>}
         {notice && <p className="sidebar-account-message" role="status">{t("account.localLogout")}</p>}
       </div>
-    }
+    </FloatingMenuPortal>}
   </div>;
 }

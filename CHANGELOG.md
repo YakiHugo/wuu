@@ -10,6 +10,8 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Added
 
+- Add local history and bookmark suggestions to browser address fields, with keyboard selection and a mascot-centered new-tab search page.
+
 - Optional Feishu and Notion workspace extensions combine native website views with bounded document API tools and host-managed credentials in the OS secure store.
 - An optional ChatGPT website extension joins the reorderable workbench ribbon.
 
@@ -33,6 +35,8 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Changed
 
+- Refine browser tab sizing, selection surfaces, and close/new-tab alignment across font sizes.
+
 - Use a soft off-white workbench canvas across navigation, conversations, empty states, catalog/settings pages, and right-panel tools and previews while retaining distinct control surfaces.
 - Rename the plugins-and-skills navigation entry to Extensions and restore a large heading for the selected catalog category.
 - Separate plugins, settings, and account controls into a persistent icon ribbon
@@ -45,6 +49,8 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
   gutters to the reading pane.
 
 ### Fixed
+
+- Keep the account menu above browser pages while preserving native website visibility on dismissal.
 
 - Show local, theme-aware Notion, Feishu, and ChatGPT marks for saved website shortcuts and browser tabs without requiring their optional integrations.
 
