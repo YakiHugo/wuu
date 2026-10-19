@@ -319,7 +319,7 @@
 }
 
 .app-shell.sidebar-collapsed:not(.popped-out-shell) .titlebar {
-  padding-left: calc(var(--window-titlebar-leading-inset) - var(--conversation-pane-inset) + var(--control-size-toolbar) + var(--control-toolbar-gap));
+  padding-left: calc(var(--window-titlebar-leading-inset) - var(--conversation-pane-inset) + var(--page-history-controls-width) + var(--control-toolbar-gap));
 }
 
 .title-block,

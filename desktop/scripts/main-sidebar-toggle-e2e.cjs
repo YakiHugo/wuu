@@ -31,6 +31,15 @@ app.whenReady().then(async () => {
     const sidebar = document.querySelector('.sidebar').getBoundingClientRect();
     const button = document.querySelector('${toggle}');
     const rect = button?.getBoundingClientRect();
+    const group = button?.parentElement;
+    const historyControls = [...group.querySelectorAll('button')].map(control => {
+      const bounds = control.getBoundingClientRect();
+      const target = document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+      return { id: control.dataset.wuuComponent, bounds: bounds.toJSON(),
+        hit: target === control || control.contains(target),
+        noDrag: getComputedStyle(control).getPropertyValue('-webkit-app-region') === 'no-drag',
+        visible: control.checkVisibility({ checkVisibilityCSS: true, checkOpacity: true }) };
+    });
     const hit = rect && document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
     return { width: window.innerWidth, mode: shell.dataset.wuuSidebarMode,
       sidebar: sidebar.toJSON(), reserved: parseFloat(shell.style.getPropertyValue('--sidebar-width')),
@@ -40,11 +49,28 @@ app.whenReady().then(async () => {
       focusVisible: button?.matches(':focus-visible'), focused: document.activeElement === button,
       sameButton: button === window.sidebarToggleUnderTest,
       buttonCount: document.querySelectorAll('${toggle}').length,
-      shellOwned: button?.parentElement === shell,
+      shellOwned: group?.matches('.shell-page-history-controls') && group.parentElement === shell,
+      sameGroup: group === window.pageHistoryGroupUnderTest,
+      historyControls,
+      groupDraggable: getComputedStyle(group).getPropertyValue('-webkit-app-region') === 'drag',
       outsideHiddenContent: !button?.closest('aside, [inert], .conversation-pane'),
       sidebarVisible: document.querySelector('.sidebar').checkVisibility({ checkVisibilityCSS: true, checkOpacity: true }),
       titlebar: !!document.querySelector('[data-wuu-component="conversation-titlebar"]') };
   })()`);
+  function assertHistoryControls(state, original) {
+    const details = JSON.stringify(state);
+    assert.deepEqual(state.historyControls.map(control => control.id), ['page-history-back', 'page-history-forward', 'sidebar-toggle']);
+    assert(state.shellOwned && state.outsideHiddenContent && state.sameGroup && state.groupDraggable, details);
+    for (const [index, control] of state.historyControls.entries()) {
+      const box = control.bounds;
+      assert(control.hit && control.noDrag && control.visible && box.width > 0 && box.height > 0, details);
+      assert(box.left >= 0 && box.right <= state.width && box.top >= 0, details);
+      if (index > 0) assert(state.historyControls[index - 1].bounds.right <= box.left, details);
+      if (original) for (const axis of ['x', 'y']) {
+        assert(Math.abs(box[axis] - original.historyControls[index].bounds[axis]) < 0.1, `History controls moved: ${details}`);
+      }
+    }
+  }
   async function settled() {
     await wait(`!document.querySelector('.sidebar-animating, .sidebar-drawer-closing, .sidebar-drawer-docking, .window-resizing')`);
     await js(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
@@ -74,13 +100,15 @@ app.whenReady().then(async () => {
     await js(`document.documentElement.dataset.theme='${theme}';document.documentElement.style.setProperty('--font-ui','${font}px')`);
     await resize(1200);
     if (await js(collapsed)) { await clickToggle(); await wait(`!(${collapsed})`); await settled(); }
-    await js(`window.sidebarToggleUnderTest = document.querySelector('${toggle}')`);
+    await js(`window.sidebarToggleUnderTest = document.querySelector('${toggle}'); window.pageHistoryGroupUnderTest = window.sidebarToggleUnderTest.parentElement`);
     const original = await measure();
+    assertHistoryControls(original);
     assert.equal(original.buttonCount, 1);
     assert(original.shellOwned && original.outsideHiddenContent, JSON.stringify(original));
     for (const width of [820, 760, 759, 600, 440, 1200]) {
       await resize(width);
       const current = await measure();
+      assertHistoryControls(current, original);
       assert.equal(current.mode, "docked", JSON.stringify(current));
       assert(current.sameButton && current.shellOwned && current.outsideHiddenContent, JSON.stringify(current));
       assert.equal(current.reserved, original.reserved);
@@ -100,6 +128,7 @@ app.whenReady().then(async () => {
       await resize(width);
       assert(await js(collapsed));
       const current = await measure();
+      assertHistoryControls(current, original);
       assert.equal(current.reserved, 0);
       assert.equal(current.buttonCount, 1);
       assert(current.sameButton && current.hitsButton && current.outsideHiddenContent, JSON.stringify(current));
@@ -112,11 +141,13 @@ app.whenReady().then(async () => {
     win.webContents.sendInputEvent({ type: "mouseMove", x: Math.round(beforeHover.button.x + beforeHover.button.width / 2), y: Math.round(beforeHover.button.y + beforeHover.button.height / 2) });
     await wait(drawerOpen); await settled();
     const hover = await measure();
+    assertHistoryControls(hover, original);
     assert(hover.hitsButton, JSON.stringify(hover));
     await clickToggle(); await wait(`!(${collapsed})`); await settled();
     away(); await js(`document.querySelector('${toggle}').focus()`);
     key("Enter"); await wait(collapsed); await settled();
     const keyboardCollapsed = await measure();
+    assertHistoryControls(keyboardCollapsed, original);
     assert(keyboardCollapsed.sameButton && keyboardCollapsed.focused, "Collapse must preserve the focused DOM button");
     assert(keyboardCollapsed.sidebar.right <= 0 || !keyboardCollapsed.sidebarVisible,
       `A focused collapse toggle must not keep the sidebar exposed: ${JSON.stringify(keyboardCollapsed)}`);
@@ -126,6 +157,7 @@ app.whenReady().then(async () => {
     // A second keypress must work without focusing a replacement control.
     key("Enter"); await wait(`!(${collapsed})`); await settled();
     const keyboardDocked = await measure();
+    assertHistoryControls(keyboardDocked, original);
     assert(keyboardDocked.sameButton && keyboardDocked.focused && keyboardDocked.hitsButton,
       "Docking must retain the same focused, hittable button");
     for (const axis of ["x", "y"]) assert(Math.abs(keyboardDocked.button[axis] - keyboardCollapsed.button[axis]) < 0.1,

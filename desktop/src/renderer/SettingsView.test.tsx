@@ -20,6 +20,7 @@ import type {
   WuuDesktopApi
 } from "../shared/protocol";
 import { I18nProvider } from "./i18n";
+import type { PageHistoryControlsProps } from "./PageHistoryControls";
 import { hoverTooltipText, unhoverTooltip } from "./tooltipTestUtils";
 
 type GlobalWindow = typeof window & { wuu: WuuDesktopApi };
@@ -150,6 +151,9 @@ function renderSettings(props: {
   onRefreshEngineInventory?: () => Promise<EngineListResult | undefined>;
   onUpdateEngineInventory?: (params: EngineUpdateParams) => Promise<EngineListResult>;
   initialPage?: SettingsPage;
+  page?: SettingsPage;
+  onPageChange?: (page: SettingsPage) => void;
+  pageHistory?: Omit<PageHistoryControlsProps, "children">;
   runningProviderNames?: string[];
   codexPets?: CodexPetsSnapshot;
   codexPetsLoading?: boolean;
@@ -177,6 +181,9 @@ function renderSettings(props: {
     <SettingsView
         initialized={props.initialized}
         initialPage={props.initialPage ?? "general"}
+        page={props.page}
+        onPageChange={props.onPageChange}
+        pageHistory={props.pageHistory ?? { canGoBack: false, canGoForward: false, onBack: () => {}, onForward: () => {} }}
         running={props.running ?? false}
         usage={props.usage}
         usageLoading={props.usageLoading}
@@ -225,6 +232,53 @@ function renderSettings(props: {
 }
 
 describe("SettingsView shell", () => {
+  it("reports settings navigation once and restores a history page without recording it again", () => {
+    installBuildInfoStub({ core: {}, desktop: {} } as BuildInfoResult);
+    const onPageChange = vi.fn();
+    const props = { initialized: baseInitialized(), page: "general" as const, onPageChange };
+    renderSettings(props);
+    const appearance = container.querySelector<HTMLButtonElement>('[data-wuu-page="appearance"]');
+    expect(appearance).not.toBeNull();
+    act(() => { appearance?.click(); });
+    expect(onPageChange).toHaveBeenCalledExactlyOnceWith("appearance");
+    renderSettings({ ...props, page: "appearance" });
+    expect(container.querySelector('.settings-page')?.getAttribute('data-wuu-page')).toBe("appearance");
+    act(() => { appearance?.click(); });
+    expect(onPageChange).toHaveBeenCalledTimes(1);
+
+    renderSettings({ ...props, page: "usage" });
+    expect(container.querySelector('.settings-page')?.getAttribute('data-wuu-page')).toBe("usage");
+    expect(onPageChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps page history controls reachable across settings pages and sidebar collapse", () => {
+    installBuildInfoStub({ core: {}, desktop: {} } as BuildInfoResult);
+    const onBack = vi.fn();
+    const onForward = vi.fn();
+    const props = {
+      initialized: baseInitialized(),
+      pageHistory: { canGoBack: false, canGoForward: true, onBack, onForward },
+    };
+    renderSettings(props);
+    const back = container.querySelector<HTMLButtonElement>('[data-wuu-component="page-history-back"]');
+    const forward = container.querySelector<HTMLButtonElement>('[data-wuu-component="page-history-forward"]');
+    expect(back?.disabled).toBe(true);
+    expect(forward?.disabled).toBe(false);
+    act(() => { back?.click(); forward?.click(); });
+    expect(onBack).not.toHaveBeenCalled();
+    expect(onForward).toHaveBeenCalledTimes(1);
+
+    renderSettings({ ...props, initialPage: "appearance", sidebarCollapsed: true, pageHistory: { ...props.pageHistory, canGoBack: true, canGoForward: false } });
+    expect(container.querySelector('[data-wuu-component="page-history-back"]')).toBe(back);
+    expect(container.querySelector('[data-wuu-component="page-history-forward"]')).toBe(forward);
+    expect(back?.closest('[inert]')).toBeNull();
+    expect(back?.disabled).toBe(false);
+    expect(forward?.disabled).toBe(true);
+    act(() => { back?.click(); forward?.click(); });
+    expect(onBack).toHaveBeenCalledTimes(1);
+    expect(onForward).toHaveBeenCalledTimes(1);
+  });
+
   it("omits native settings and does not request desktop build info on a browser host", async () => {
     installBuildInfoStub({ core: undefined, desktop: { version: "test", date: "1970-01-01" } });
     window.wuu.unsupportedMethods = ["getBuildInfo", "listCodexPets", "getRemoteControlSnapshot"];
@@ -284,7 +338,7 @@ describe("SettingsView shell", () => {
     const shell = container.querySelector<HTMLElement>(".settings-shell");
     const sidebar = container.querySelector<HTMLElement>(".settings-sidebar");
     const toggle = container.querySelector<HTMLElement>(
-      ".settings-shell > .settings-sidebar-toggle",
+      ".settings-shell > .shell-page-history-controls > .settings-sidebar-toggle",
     );
     expect(sidebar).not.toBeNull();
     expect(toggle).not.toBeNull();
@@ -325,7 +379,7 @@ describe("SettingsView shell", () => {
 
     const shell = container.querySelector<HTMLElement>(".settings-shell");
     const toggle = container.querySelector<HTMLElement>(
-      ".settings-shell > .settings-sidebar-toggle",
+      ".settings-shell > .shell-page-history-controls > .settings-sidebar-toggle",
     );
     expect(toggle).not.toBeNull();
 

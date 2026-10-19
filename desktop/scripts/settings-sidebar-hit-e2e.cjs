@@ -97,6 +97,7 @@ async function run() {
   await settleChrome(win);
   await evaluate(win, () => {
     window.settingsToggleUnderTest = document.querySelector('.settings-sidebar-toggle');
+    window.settingsHistoryGroupUnderTest = window.settingsToggleUnderTest.parentElement;
     window.settingsToggleUnderTest.focus();
   });
   const keyboardDocked = await toggleHitState(win);
@@ -110,7 +111,7 @@ async function run() {
     await settleChrome(win);
     const state = await toggleHitState(win);
     assert.equal(state.buttonCount, 1);
-    assert(state.sameButton && state.focused && state.shellOwned && state.outsideHiddenContent, JSON.stringify(state));
+    assert(state.sameButton && state.sameGroup && state.focused && state.shellOwned && state.outsideHiddenContent, JSON.stringify(state));
     assert.equal(state.centerX, keyboardDocked.centerX, "Settings collapse must not move toggle horizontally");
     assert.equal(state.centerY, keyboardDocked.centerY, "Settings collapse must not move toggle vertically");
     assert(state.hitOwnedByToggle, JSON.stringify(state));
@@ -309,6 +310,14 @@ async function chromeToggleGeometry(win) {
     const icon = button.querySelector("svg");
     const glyph = icon.getBoundingClientRect();
     const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    const group = button.parentElement;
+    const historyControls = [...group.querySelectorAll('button')].map(control => {
+      const box = control.getBoundingClientRect();
+      const target = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+      return { id: control.dataset.wuuComponent, bounds: box.toJSON(),
+        hit: control === target || control.contains(target),
+        noDrag: getComputedStyle(control).getPropertyValue('-webkit-app-region') === 'no-drag' };
+    });
     const headers = new Set([
       button.closest(".traffic-spacer, .titlebar, .settings-titlebar"),
       document.querySelector(".titlebar"),
@@ -326,7 +335,7 @@ async function chromeToggleGeometry(win) {
     }
     const header = document.querySelector(".titlebar, .settings-titlebar").getBoundingClientRect();
     const peers = [...document.querySelectorAll([
-      '[data-wuu-component="sidebar-toggle"]', '.conversation-title-heading h1',
+      '.shell-page-history-controls button', '.conversation-title-heading h1',
       '.conversation-title-heading .icon-button', '[data-wuu-component="right-sidebar-toggle"]',
       '.title-actions .icon-button',
       '.settings-titlebar-slot > .settings-page-title', '.settings-titlebar-slot .settings-page-actions button',
@@ -342,6 +351,10 @@ async function chromeToggleGeometry(win) {
     const canvas = document.querySelector('.conversation-pane, .settings-main');
     return {
       header: header.toJSON(), peers,
+      viewportWidth: window.innerWidth, group: group.getBoundingClientRect().toJSON(), historyControls,
+      groupDraggable: getComputedStyle(group).getPropertyValue('-webkit-app-region') === 'drag',
+      shellOwned: group.matches('.shell-page-history-controls') && group.parentElement.matches('.app-shell, .settings-shell'),
+      outsideHiddenContent: !group.closest('aside, [inert], .conversation-pane, .settings-main'),
       canvasTop: canvas ? canvas.getBoundingClientRect().top + parseFloat(getComputedStyle(canvas, '::before').top) : null,
       x: rect.x, y: rect.y, width: rect.width, height: rect.height,
       iconWidth: glyph.width, iconHeight: glyph.height, icon: icon.innerHTML,
@@ -354,7 +367,7 @@ async function chromeToggleGeometry(win) {
 
 async function toggleHitState(win) {
   return evaluate(win, () => {
-    const toggle = document.querySelector(".settings-shell > .settings-sidebar-toggle");
+    const toggle = document.querySelector(".settings-shell > .shell-page-history-controls > .settings-sidebar-toggle");
     if (!(toggle instanceof HTMLButtonElement)) {
       throw new Error("Settings sidebar toggle not found.");
     }
@@ -369,7 +382,8 @@ async function toggleHitState(win) {
       buttonCount: document.querySelectorAll('[data-wuu-component="sidebar-toggle"]').length,
       sameButton: toggle === window.settingsToggleUnderTest,
       focused: document.activeElement === toggle,
-      shellOwned: toggle.parentElement === document.querySelector('.settings-shell'),
+      sameGroup: toggle.parentElement === window.settingsHistoryGroupUnderTest,
+      shellOwned: toggle.parentElement.matches('.shell-page-history-controls') && toggle.parentElement.parentElement === document.querySelector('.settings-shell'),
       outsideHiddenContent: !toggle.closest('aside, [inert], .settings-main'),
       sidebarRight: document.querySelector('.settings-sidebar').getBoundingClientRect().right,
       sidebarVisible: document.querySelector('.settings-sidebar').checkVisibility({ checkVisibilityCSS: true, checkOpacity: true }),
@@ -453,6 +467,22 @@ function delay(ms) {
 
 function assertTopRow(geometry, context) {
   const details = JSON.stringify({ ...context, geometry });
+  assert.deepEqual(geometry.historyControls.map(control => control.id), ['page-history-back', 'page-history-forward', 'sidebar-toggle']);
+  assert.ok(geometry.shellOwned && geometry.outsideHiddenContent && geometry.groupDraggable, `History group must own stable window chrome: ${details}`);
+  for (const [index, control] of geometry.historyControls.entries()) {
+    const box = control.bounds;
+    assert.ok(control.hit && control.noDrag && box.width > 0 && box.height > 0,
+      `Every history control must own its no-drag hit target: ${details}`);
+    assert.ok(box.left >= 0 && box.right <= geometry.viewportWidth && box.top >= 0,
+      `History controls must remain inside the viewport: ${details}`);
+    if (index > 0) assert.ok(geometry.historyControls[index - 1].bounds.right <= box.left,
+      `History controls must remain ordered without overlap: ${details}`);
+  }
+  if (context.layout !== 'docked') {
+    const heading = geometry.peers.find(peer => peer.target === 'settings-page-title' || peer.target === 'H1');
+    if (heading) assert.ok(heading.bounds.left >= geometry.group.right,
+      `The page heading must clear the complete history group: ${details}`);
+  }
   const axis = ((geometry.canvasTop ?? geometry.header.y) + geometry.header.bottom) / 2;
   assert.ok(geometry.peers.length >= 3, `The actual page chrome must be present: ${details}`);
   if (context.zoom === 1 && context.font <= 15) {
@@ -474,7 +504,7 @@ function assertTopRow(geometry, context) {
     // A hover drawer overlays the canvas without shifting its header. Its
     // covered controls cannot receive clicks until the drawer closes.
     if (peer.button) assert.ok(peer.hit || (context.page === "conversation-drawer"
-      && peer.target !== "sidebar-toggle" && peer.coveredByDrawer),
+      && !["sidebar-toggle", "page-history-back", "page-history-forward"].includes(peer.target) && peer.coveredByDrawer),
     `Visible controls must own their center hit: ${details}`);
   }
 }

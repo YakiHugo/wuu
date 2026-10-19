@@ -4,6 +4,7 @@
   /* An opaque neutral rail keeps navigation separate from the reading canvas
    * without depending on wallpaper or browser backing colors. */
   --sidebar-material-fill: var(--surface-2);
+  --page-history-controls-width: calc(var(--control-size-toolbar) * 3 + var(--control-toolbar-gap) * 2);
   /* Rail/content boundary: a crisp dark hairline instead of the old white
    * edge + white inset pair, which were invisible against the white content
    * column and left the boundary to be read from the gray brightness step.
@@ -188,6 +189,36 @@
   opacity: 0;
 }
 
+/* Page history and the sidebar toggle share one stable window-chrome group.
+ * Gaps remain draggable; each button opts out of native window dragging. */
+.shell-page-history-controls {
+  position: absolute;
+  top: calc((var(--window-titlebar-height) - var(--control-size-toolbar)) / 2);
+  left: var(--window-titlebar-leading-inset);
+  z-index: 151;
+  display: flex;
+  align-items: center;
+  gap: var(--control-toolbar-gap);
+  -webkit-app-region: drag;
+}
+
+.shell-page-history-controls .icon-button {
+  flex: 0 0 auto;
+  width: var(--control-size-toolbar);
+  height: var(--control-size-toolbar);
+  padding: 0;
+  background-clip: border-box;
+}
+
+.shell-page-history-controls button,
+.shell-page-history-controls button * {
+  -webkit-app-region: no-drag;
+}
+
+.shell-page-history-controls .shell-left-sidebar-toggle {
+  position: static;
+}
+
 /* A single control stays on the native chrome axis while either rail moves.
  * It must sit outside the rail so retained keyboard focus cannot reopen it. */
 .shell-left-sidebar-toggle {
@@ -218,9 +249,9 @@
 }
 
 .workspace-panel-sidebar-hit-hole {
-  width: var(--control-size-toolbar);
+  width: var(--page-history-controls-width);
   height: 100%;
-  flex: 0 0 var(--control-size-toolbar);
+  flex: 0 0 var(--page-history-controls-width);
   pointer-events: none;
   -webkit-app-region: no-drag;
 }

@@ -312,7 +312,7 @@
  * edge. Keep the toggle clear of the macOS traffic lights, matching the
  * main conversation titlebar reservation. */
 .settings-shell.sidebar-collapsed .settings-titlebar {
-  padding-left: calc(var(--window-titlebar-leading-inset) - var(--conversation-pane-inset) + var(--control-size-toolbar) + var(--control-toolbar-gap));
+  padding-left: calc(var(--window-titlebar-leading-inset) - var(--conversation-pane-inset) + var(--page-history-controls-width) + var(--control-toolbar-gap));
 }
 
 /* Column direction is load-bearing, not cosmetic: .settings-page carries
@@ -389,6 +389,7 @@
 }
 
 .settings-titlebar-slot > .settings-page-actions {
+  flex: 0 0 auto;
   min-height: 0;
   margin: 0 0 0 auto;
   -webkit-app-region: no-drag;
