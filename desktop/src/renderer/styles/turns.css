@@ -44,9 +44,9 @@
   --reasoning-stream-cursor-color: var(--gray-500);
   --turn-process-entry-color: var(--ink-tertiary);
   --process-control-color-fallback: var(--ink-tertiary);
-  /* Activity summaries are readable secondary controls, including after
-     streaming settles; placeholder ink is too faint for these destinations. */
-  --process-summary-color: var(--ink-tertiary);
+  /* Tool activity and standalone reasoning summaries share the quiet ink
+     used by the composer placeholder, in every running/settled state. */
+  --process-summary-color: var(--ink-quiet);
   --process-active-highlight: var(--ink-muted);
   --activity-toggle-hover-color: var(--gray-650);
   --activity-toggle-hover-color-alt: var(--wuu-color-text-muted, var(--gray-600));

@@ -360,8 +360,8 @@ html[data-app-background] .app-shell.navigation-ribbon-layout:has(.sidebar-ribbo
   margin: 0 0 var(--space-3);
   padding: 0 var(--sidebar-row-pad-x) var(--space-1);
   color: var(--ink-strong);
-  font-size: var(--font-heading);
-  font-weight: 600;
+  font-size: var(--font-ui);
+  font-weight: var(--weight-regular);
   overflow-wrap: anywhere;
 }
 
