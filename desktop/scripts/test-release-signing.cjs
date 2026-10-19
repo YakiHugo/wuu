@@ -84,16 +84,35 @@ test("certificate-free preview signs, verifies, and rejects tampered resources",
 });
 
 // Directory-only builds must embed updater configuration before the app is signed.
-test("signed app checkpoint includes the update feed without archive targets", () => {
+test("signed app checkpoint verifies runtime payloads and includes the update feed", async () => {
   const dir = mkdtempSync(join(tmpdir(), "wuu-update-feed-test-"));
   try {
-    execFileSync(process.execPath, ["-e", `
+    const source = join(dir, "source");
+    const files = {
+      "package.json": JSON.stringify({ version: "2026.10.19", main: "out/main/index.js" }),
+      "out/main/index.js": "// main",
+      "out/preload/index.cjs": "// preload",
+      "out/renderer/index.html": "<!doctype html>",
+      "out/renderer/THIRD-PARTY-LICENSES.txt": "monaco-editor@1 pdfjs-dist@1 pele@1 blobatar@1",
+      "node_modules/node-pty/package.json": "{}",
+      "node_modules/node-pty/build/Release/pty.node": "fixture binding",
+      "node_modules/electron-updater/package.json": "{}",
+    };
+    for (const worker of ["editor.worker", "ts.worker", "pdf.worker"]) files[`out/renderer/assets/${worker}-fixture.js`] = "// worker";
+    for (const [file, contents] of Object.entries(files)) {
+      mkdirSync(dirname(join(source, file)), { recursive: true });
+      writeFileSync(join(source, file), contents);
+    }
+    mkdirSync(join(dir, "bin"));
+    writeFileSync(join(dir, "bin/wuu-core"), "fixture core");
+    await require("@electron/asar").createPackageWithOptions(source, join(dir, "app.asar"), { unpack: "**/*.node" });
+    const runHook = () => execFileSync(process.execPath, ["-e", `
       const fs = require("node:fs");
       const path = require("node:path");
       require("node:child_process").execFileSync = () => "A".repeat(40) + " Developer ID Application:";
       const config = require("./scripts/release-builder.cjs");
       const resources = process.env.TEST_RESOURCES;
-      Promise.resolve(config.afterPack({ appOutDir: resources, packager: { getResourcesDir: p => p } }))
+      Promise.resolve(config.afterPack({ appOutDir: resources, electronPlatformName: "darwin", packager: { getResourcesDir: p => p } }))
         .then(() => {
           const feed = require("js-yaml").load(fs.readFileSync(path.join(resources, "app-update.yml"), "utf8"));
           require("node:assert/strict").deepEqual(feed, config.publish);
@@ -102,5 +121,8 @@ test("signed app checkpoint includes the update feed without archive targets", (
       WUU_RELEASE_SIGN_ID: "A".repeat(40), WUU_RELEASE_TEAM_ID: "A".repeat(10),
       APPLE_API_KEY: "/temporary/key", APPLE_API_KEY_ID: "key", APPLE_API_ISSUER: "issuer",
       TEST_RESOURCES: dir }, stdio: "pipe" });
+    runHook();
+    rmSync(join(dir, "app.asar"));
+    assert.throws(runHook, /app\.asar/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
