@@ -10,6 +10,13 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Added
 
+- Show external connections as compact two-line rows with account plans, remaining quota bars and local reset times; omit unavailable quota details.
+
+- Offer account sign-in and local authentication as explicit connection methods, keeping official ChatGPT app authorization separate from Codex credentials and native-engine account ownership.
+
+- Sign in to Grok Build from its connection page using the installed Grok CLI, with cancellation and verified completion. Keep connection status and actions together, and group model management beside readable model names.
+
+- Connect ChatGPT directly through official browser sign-in without Codex CLI, with account-scoped model discovery, public Responses inference, protected refresh and sign-out. Unify model connections and account usage in Settings while keeping API keys and local Codex credentials distinct.
 - Let external agent engines use Wuu browser and enabled computer-control tools through turn-scoped MCP, with shared permissions, activity previews, screenshots, and Stop/Takeover controls.
 - Experimental Linux x64 AppImage and Debian packages with sandbox-preserving X11 launchers and CI artifact verification. Public releases remain macOS-only.
 - Linux MCP OAuth credential storage through Secret Service, with no plaintext fallback.
