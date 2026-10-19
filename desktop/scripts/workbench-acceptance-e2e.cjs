@@ -78,6 +78,7 @@ const report = {
   commit: spawnSync('git', ['rev-parse', 'HEAD'], { cwd: desktop, encoding: 'utf8' }).stdout.trim(),
   versions: { electron: process.versions.electron, chromium: process.versions.chrome, platform: process.platform },
   fixture: { corpusSha256: createHash('sha256').update(corpusBytes).digest('hex'), noInference: true, isolatedHome: true, safeMode: false, extensionSources: ['bundled', 'authored-local-fixture'] },
+  layoutMatrixScope: process.env.WUU_WORKBENCH_MATRIX || 'full',
   checks: [], screenshots: [], actions: [], errors: [],
   exclusions: ['Native macOS traffic lights (Linux capture)', 'Live provider/account authentication',
     'Third-party plugin compatibility and dynamic plugin settings (authored fixture only)', 'Agent browser PiP pixels',
@@ -624,6 +625,7 @@ db.commit()
   for (const theme of ['light', 'dark']) {
     for (const size of [15, 20]) {
       for (const width of [1280, 960, 1440]) {
+        if (process.env.WUU_WORKBENCH_MATRIX === 'smoke' && !((theme === 'light' && size === 15 && width === 1280) || (theme === 'dark' && size === 20 && width === 960))) continue;
         await test(`rendered matrix ${theme} ${size}px ${width}px`, async () => {
           await goConversations(); await dockSidebar();
           await appearance(theme, size, width);

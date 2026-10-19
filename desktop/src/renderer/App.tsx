@@ -6204,7 +6204,7 @@ export function App(): JSX.Element {
       ) : null}
       {!poppedOutMode ? (
         <section className="web-workspace-stage" hidden={!showingWebsite || settingsOpen} aria-label={activeWebsite?.title}>
-          <WebWorkspacePanel site={activeWebsite} active={showingWebsite && !settingsOpen && !accountOpen} />
+          <WebWorkspacePanel site={activeWebsite} active={showingWebsite && !settingsOpen && !accountOpen} tabs />
         </section>
       ) : null}
       <DesktopWorkbench

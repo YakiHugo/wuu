@@ -10,12 +10,25 @@ const { BrowserWindow, dialog, nativeImage, session, webContents } = require('el
 
 async function createWebsiteFixture(home) {
   const requests = [];
+  const controls = { offline: true };
+  const downloadBytes = Buffer.from('Synthetic Wuu browser download.\n'.repeat(128));
   const server = http.createServer((request, response) => {
     let body = '';
     request.on('data', chunk => { body += chunk; });
     request.on('end', () => {
       const url = new URL(request.url, 'http://fixture.test');
       requests.push({ method: request.method, path: url.pathname, body, cookie: request.headers.cookie || '' });
+      if (url.pathname === '/offline' && controls.offline) { response.destroy(); return; }
+      if (url.pathname === '/download') {
+        response.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Disposition': 'attachment; filename="fixture.txt"', 'Content-Length': downloadBytes.length });
+        response.end(downloadBytes); return;
+      }
+      if (url.pathname === '/slow-download') {
+        const chunk = Buffer.alloc(65536, 'w'); let count = 0;
+        response.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Disposition': 'attachment; filename="slow-fixture.bin"', 'Content-Length': chunk.length * 160 });
+        const timer = setInterval(() => { response.write(chunk); if (++count === 160) { clearInterval(timer); response.end(); } }, 100);
+        response.once('close', () => clearInterval(timer)); return;
+      }
       if (url.pathname === '/cookie') {
         response.writeHead(302, { Location: '/alpha', 'Set-Cookie': 'wuu_acceptance=synthetic-session; Path=/; Max-Age=86400; SameSite=Lax' });
         response.end(); return;
@@ -28,6 +41,7 @@ async function createWebsiteFixture(home) {
 <p><a id="next" href="/next">Next page</a><a id="cookie" href="/cookie">Set synthetic session cookie</a></p>
 <button id="blank">Open blank popup + postMessage</button>
 <form action="/posted" method="post" target="_blank"><input type="hidden" name="fixture" value="post-preserved"><button id="post">Open POST popup</button></form>
+<p><a id="download" href="/download">Download synthetic text</a><a id="slow-download" href="/slow-download">Slow synthetic download</a></p>
 <button id="geo">Request location (deny)</button><button id="camera">Request synthetic camera (deny)</button>
 <pre id="state"></pre><p id="popup-result"></p><p id="permission-result"></p>
 <script>
@@ -47,7 +61,7 @@ document.querySelector('#camera').onclick=async()=>{document.querySelector('#per
     description: 'Authored local HTTP fixture, no external service or permission.', desktop: { entry: 'desktop.js' },
     contributes: { navigation: [{ id: 'website-entry', view: 'website', title: 'Fixture Website' }] } }));
   fs.writeFileSync(path.join(plugin, 'desktop.js'), `export function activate(api) { api.registerViewType({ id: 'website', title: 'Fixture Website', defaultRegion: 'primary', persistence: 'durable', render: () => api.react.createElement(api.ui.WebPage, { url: ${JSON.stringify(origin + '/extension')}, title: 'Fixture Website' }) }); }\n`);
-  return { origin, requests, close: () => server.close() };
+  return { origin, requests, controls, downloadBytes, close: () => server.close() };
 }
 
 async function runWebsiteAcceptance(h, fixture) {
@@ -63,7 +77,7 @@ async function runWebsiteAcceptance(h, fixture) {
   const prefs = () => evaluate(() => JSON.parse(localStorage.getItem('wuu.navigation-ribbon.v1')));
   const views = () => win.contentView.children.filter(view => view.webContents && !view.webContents.isDestroyed() && view.webContents.getURL().startsWith(origin));
   const contents = pathname => webContents.getAllWebContents().find(wc => !wc.isDestroyed() && wc.getURL() === origin + pathname);
-  const nativeView = pathname => views().find(view => view.webContents.getURL() === origin + pathname);
+  const nativeView = pathname => views().find(view => view.getVisible() && view.webContents.getURL() === origin + pathname) || views().find(view => view.webContents.getURL() === origin + pathname);
   async function until(predicate, label, timeout = 12000) {
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) { if (await predicate()) return; await delay(40); }
@@ -99,7 +113,7 @@ async function runWebsiteAcceptance(h, fixture) {
   async function pageClick(wc, selector, label) {
     const view = win.contentView.children.find(view => view.webContents === wc);
     assert.ok(view?.getVisible(), 'Native website is actually visible before page input');
-    const p = await wc.executeJavaScript(`(() => { const node=document.querySelector(${JSON.stringify(selector)}); const r=node.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`);
+    const p = await wc.executeJavaScript(`(async () => { const node=document.querySelector(${JSON.stringify(selector)}); node.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'}); await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))); const r=node.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`);
     const outer = win.getContentBounds(), inner = view.getBounds(), zoom = wc.getZoomFactor();
     await capture(`before-${label}`);
     xinput(['mousemove', String(Math.round(outer.x + inner.x + p.x * zoom)), String(Math.round(outer.y + inner.y + p.y * zoom)), 'click', '1']);
@@ -112,13 +126,29 @@ async function runWebsiteAcceptance(h, fixture) {
   }
   async function openSite(name, pathname) {
     await click(ribbon(name), `open-${name}`);
+    await waitFor(() => [...document.querySelectorAll('[data-wuu-component="web-workspace"]')].some(node => node.getBoundingClientRect().width > 0));
+    const id = await evaluate(() => [...document.querySelectorAll('[data-wuu-component="web-workspace"]')].find(node => node.getBoundingClientRect().width > 0).dataset.websiteId);
+    const state = await evaluate(({ id, url }) => window.wuu.webWorkspace.open({ id, url, tabs: Boolean(document.querySelector('.web-workspace-stage:not([hidden]) .web-workspace-tabs')) }), { id, url: origin + pathname });
+    if (state.url !== origin + pathname || state.error) {
+      // Independent journey setup only. Address-bar behavior has its own real
+      // native Return assertion and a failed navigation is never erased.
+      report.actions.push({ label: 'reset-independent-website-fixture', setupOnly: true, from: state.url, to: origin + pathname, atMs: Date.now() - started });
+      await evaluate(({ id, url }) => window.wuu.webWorkspace.command(id, 'navigate', url), { id, url: origin + pathname });
+    }
     await until(() => nativeView(pathname)?.getVisible() && !nativeView(pathname).webContents.isLoading(), `visible fixture ${pathname}`);
     return nativeView(pathname).webContents;
+  }
+  async function navigateAddress(pathname, label) {
+    await fill(address, pathname.startsWith('http') ? pathname : origin + pathname);
+    await capture(`before-address-submit-${label}`);
+    xinput(['key', '--clearmodifiers', 'Return']);
+    report.actions.push({ label: `native-address-submit-${label}`, input: 'native-x11-Return', atMs: Date.now() - started });
+    await until(() => nativeView(pathname)?.getVisible() && !nativeView(pathname).webContents.isLoading(), `native address navigation ${pathname}`);
   }
   async function addSite(name, pathname) {
     await click(manager, 'customize-navigation');
     await click(pick('.ribbon-manager button', 'Add website'), 'add-website');
-    await fill(formName, name); await fill(formURL, origin + pathname);
+    await fill(formName, name); await fill(formURL, pathname.startsWith('http') ? pathname : origin + pathname);
     await click(pick('.ribbon-manager button', 'Save'), 'save-website');
     await waitFor(name => [...document.querySelectorAll('[data-ribbon-manager-id]')].some(row => row.textContent.includes(name)), name);
     await click(pick('.ribbon-manager button', 'Close'), 'close-customize');
@@ -218,8 +248,8 @@ async function runWebsiteAcceptance(h, fixture) {
     await pageClick(wc, '#draft', 'focus-before-native-address-shortcut');
     xinput(['key', 'ctrl+l']);
     await waitFor(selector => document.activeElement?.matches(selector), address, 'native Ctrl+L focuses shell address');
-    await fill(address, origin + '/alpha'); key('Enter');
-    await until(() => wc.getURL() === origin + '/alpha' && !wc.isLoading(), 'address navigation');
+    await navigateAddress('/alpha', 'return-from-history');
+    assert.equal(wc.getURL(), origin + '/alpha');
     await capture('native-page-loaded'); return { preferences, cookie: 'synthetic-session', contentsId: wc.id };
   });
 
@@ -282,12 +312,21 @@ async function runWebsiteAcceptance(h, fixture) {
     security(blank.webContents);
     assert.deepEqual(await blank.webContents.executeJavaScript('({wuu:typeof window.wuu,require:typeof require,process:typeof process})'), { wuu: 'undefined', require: 'undefined', process: 'undefined' });
     await capture('blank-popup-opener'); blank.close(); win.focus();
+    const grouped = await evaluate(() => Boolean(document.querySelector('.web-workspace-stage:not([hidden]) .web-workspace-tabs')));
+    const tabsBefore = await evaluate(() => document.querySelectorAll('.web-workspace-stage:not([hidden]) .web-workspace-tabs [role=tab]').length);
     await pageClick(wc, '#post', 'open-post-popup');
     await until(() => fixture.requests.some(request => request.path === '/posted' && request.method === 'POST' && request.body === 'fixture=post-preserved'), 'native POST body preserved');
     await until(() => contents('/posted') && !contents('/posted').isLoading(), 'POST popup loaded');
     const post = contents('/posted'); security(post); await capture('post-popup');
-    BrowserWindow.fromWebContents(post).close(); win.focus();
-    return { openerRoundtrip: true, post: fixture.requests.find(request => request.path === '/posted') };
+    if (grouped) {
+      assert.ok(nativeView('/posted')?.getVisible(), 'Ordinary target=_blank POST opens in the destination tab group');
+      assert.equal(await evaluate(() => document.querySelectorAll('.web-workspace-stage:not([hidden]) .web-workspace-tabs [role=tab]').length), tabsBefore + 1);
+      await click('.web-workspace-stage:not([hidden]) .web-workspace-tab[data-active] .web-workspace-tab-close', 'close-post-tab');
+    } else {
+      const popup = BrowserWindow.fromWebContents(post); assert.ok(popup && popup !== win); popup.close();
+    }
+    win.focus();
+    return { openerRoundtrip: true, ordinaryPostMode: grouped ? 'tab' : 'popup', post: fixture.requests.find(request => request.path === '/posted') };
   });
 
   await testNative('website camera and location never receive silent grants', async () => {
@@ -311,6 +350,117 @@ async function runWebsiteAcceptance(h, fixture) {
       }
     } finally { xinput(['key', 'Escape']); dialog.showMessageBox = original; }
     return observed;
+  });
+
+  const liveStage = '.web-workspace-stage:not([hidden])';
+  const readSite = () => evaluate(({ id, url }) => window.wuu.webWorkspace.open({ id, url, tabs: true }), { id: alphaID, url: origin + '/alpha' });
+  let clearedHistoryURL;
+
+  await testNative('grouped tabs native shortcuts find and per-page zoom', async () => {
+    let wc = await openSite('Fixture Alpha', '/alpha');
+    const before = (await readSite()).tabs.length;
+    await pageClick(wc, '#draft', 'native-tab-shortcut-focus'); xinput(['key', '--clearmodifiers', 'ctrl+t']);
+    await waitFor(({ stage, count }) => document.querySelectorAll(`${stage} [role=tab]`).length === count && document.activeElement?.matches('.workspace-browser-url-input'), { stage: liveStage, count: before + 1 });
+    await hidden('new blank tab');
+    await navigateAddress('/tab-two', 'new-tab'); wc = nativeView('/tab-two').webContents;
+    await pageClick(wc, '#draft', 'native-find-shortcut-focus'); xinput(['key', '--clearmodifiers', 'ctrl+f']);
+    const findInput = `${liveStage} .web-workspace-findbar input`;
+    await waitFor(selector => document.activeElement?.matches(selector), findInput);
+    await fill(findInput, 'fixture');
+    await until(async () => (await readSite()).findResult?.matches > 1, 'native find returns multiple matches');
+    const found = (await readSite()).findResult;
+    await click(`${liveStage} button[aria-label="Next match"]`, 'next-native-find-match');
+    await until(async () => (await readSite()).findResult?.activeMatchOrdinal !== found.activeMatchOrdinal, 'next find result selected');
+    await capture('tabs-and-native-find');
+    await click(`${liveStage} button[aria-label="Close find"]`, 'close-native-find');
+    await click(`${liveStage} button[aria-label="Browser options"]`, 'browser-options');
+    await click('.web-workspace-menu button[aria-label="Zoom in"]', 'zoom-website-in');
+    await until(() => wc.getZoomFactor() > 1, 'actual native website zoom increased');
+    const zoom = wc.getZoomFactor();
+    await click('.web-workspace-menu button[aria-label="Reset zoom"]', 'reset-website-zoom');
+    await until(() => wc.getZoomFactor() === 1, 'actual native zoom reset'); xinput(['key', 'Escape']);
+    await pageClick(wc, '#draft', 'native-close-tab-focus'); xinput(['key', '--clearmodifiers', 'ctrl+w']);
+    await until(async () => !win.isDestroyed() && (await readSite()).tabs.length === before, 'native Ctrl+W closes one tab only');
+    wc = nativeView('/alpha').webContents;
+    await pageClick(wc, '#draft', 'native-reopen-tab-focus'); xinput(['key', '--clearmodifiers', 'ctrl+shift+t']);
+    await until(async () => (await readSite()).tabs.length === before + 1 && nativeView('/tab-two')?.getVisible(), 'native reopen restores closed tab');
+    await click(address, 'address-focused-close-tab'); xinput(['key', '--clearmodifiers', 'ctrl+w']);
+    await until(async () => !win.isDestroyed() && (await readSite()).tabs.length === before, 'address-focused Ctrl+W closes only the active tab');
+    return { originalTabs: before, find: found, zoom, windowSurvived: !win.isDestroyed() };
+  });
+
+  await testNative('native downloads complete pause resume and cancel safely', async () => {
+    const wc = await openSite('Fixture Alpha', '/alpha');
+    const partition = session.fromPartition('persist:wuu-browser');
+    const directory = path.join(output, 'synthetic-downloads'); fs.mkdirSync(directory, { recursive: true });
+    const saveFixture = (_event, item) => {
+      if ([origin + '/download', origin + '/slow-download'].includes(item.getURL())) item.setSavePath(path.join(directory, item.getFilename()));
+    };
+    // Only the fixture's OS save-picker destination is predetermined. Native
+    // transfer bytes/events, UI controls and ownership remain production code.
+    partition.on('will-download', saveFixture);
+    const downloads = () => evaluate(() => window.wuu.webWorkspace.listDownloads());
+    const menu = '[data-web-workspace-downloads-trigger]';
+    try {
+      await pageClick(wc, '#download', 'download-synthetic-file');
+      await until(async () => (await downloads()).some(item => item.filename === 'fixture.txt' && item.state === 'completed'), 'download completed');
+      const completed = (await downloads()).find(item => item.filename === 'fixture.txt');
+      assert.deepEqual(fs.readFileSync(completed.savePath), fixture.downloadBytes, 'Downloaded bytes match the synthetic response');
+      await click(menu, 'open-downloads'); await hidden('downloads panel');
+      await waitFor(id => document.querySelector(`[data-download-id="${id}"] [data-download-command="reveal"]`), completed.id);
+      await capture('completed-download'); xinput(['key', 'Escape']);
+      await until(() => nativeView('/alpha')?.getVisible(), 'restore after downloads');
+      await pageClick(wc, '#slow-download', 'start-cancellable-download');
+      await until(async () => (await downloads()).some(item => item.filename === 'slow-fixture.bin' && item.receivedBytes > 0 && !item.done), 'streaming download made progress');
+      const transfer = (await downloads()).find(item => item.filename === 'slow-fixture.bin');
+      const action = command => `[data-download-id="${transfer.id}"] [data-download-command="${command}"]`;
+      await click(menu, 'manage-live-download');
+      await click(action('pause'), 'pause-download');
+      await until(async () => (await downloads()).find(item => item.id === transfer.id)?.paused, 'download paused');
+      await click(action('resume'), 'resume-download');
+      await until(async () => !(await downloads()).find(item => item.id === transfer.id)?.paused, 'download resumed');
+      await click(action('cancel'), 'cancel-download');
+      await until(async () => (await downloads()).find(item => item.id === transfer.id)?.state === 'cancelled', 'download cancellation completed');
+      await capture('cancelled-download'); xinput(['key', 'Escape']);
+      return { completed: { filename: completed.filename, bytes: completed.receivedBytes, sha256: createHash('sha256').update(fixture.downloadBytes).digest('hex') }, cancelled: transfer.id, nativeSavePicker: 'fixture path preselected, not exercised' };
+    } finally { partition.removeListener('will-download', saveFixture); }
+  });
+
+  await testNative('bookmarks history search and clearing preserve private saved state', async () => {
+    await openSite('Fixture Alpha', '/alpha');
+    await click('[data-browser-bookmark-current]', 'bookmark-local-page');
+    await waitFor(() => document.querySelector('[data-browser-bookmark-current]')?.getAttribute('aria-pressed') === 'true');
+    await navigateAddress('/history-target', 'history-page');
+    await click('[data-browser-library-trigger]', 'open-browser-library'); await hidden('browser library');
+    await fill('[data-browser-library] input[type=search]', 'history-target');
+    await waitFor(url => document.querySelector(`[data-library-url="${url}"]`), origin + '/history-target');
+    await capture('searched-browser-history');
+    await click('[data-library-section="bookmarks"]', 'show-bookmarks');
+    await fill('[data-browser-library] input[type=search]', 'alpha');
+    await click(`[data-library-url="${origin}/alpha"]`, 'open-saved-bookmark');
+    await until(() => nativeView('/alpha')?.getVisible() && !nativeView('/alpha').webContents.isLoading(), 'bookmark navigated');
+    await click('[data-browser-library-trigger]', 'clear-fixture-history');
+    await click('[data-library-section="history"]', 'history-section');
+    await fill('[data-browser-library] input[type=search]', '');
+    await click('[data-library-clear-history]', 'review-clear-history');
+    await click('[data-library-confirm-clear]', 'confirm-clear-synthetic-history');
+    await until(async () => (await evaluate(() => window.wuu.webWorkspace.library.getState())).history.length === 0, 'history cleared');
+    const state = await evaluate(() => window.wuu.webWorkspace.library.getState());
+    assert.ok(state.bookmarks.some(bookmark => bookmark.url === origin + '/alpha'), 'Clearing history retains bookmarks');
+    clearedHistoryURL = origin + '/history-target';
+    await capture('cleared-history-retained-bookmark'); xinput(['key', 'Escape']);
+    return { history: state.history.length, bookmarks: state.bookmarks.length };
+  });
+
+  await testNative('failed website navigation retries requested destination', async () => {
+    await openSite('Fixture Alpha', '/alpha'); fixture.controls.offline = true;
+    await fill(address, origin + '/offline'); xinput(['key', '--clearmodifiers', 'Return']);
+    await waitFor(() => document.querySelector('.web-workspace-stage:not([hidden]) .web-workspace-message[role=alert]'));
+    await capture('failed-requested-destination');
+    fixture.controls.offline = false;
+    await click(pick(`${liveStage} .web-workspace-message button`, 'Try again'), 'retry-requested-destination');
+    await until(() => nativeView('/offline')?.getVisible() && !nativeView('/offline').webContents.isLoading(), 'retry loads requested URL, not previous page');
+    await capture('retried-requested-destination'); return { url: nativeView('/offline').webContents.getURL() };
   });
 
   await testNative('website edit removal recreation and renderer restart preserve saved state', async () => {
@@ -340,6 +490,11 @@ async function runWebsiteAcceptance(h, fixture) {
     assert.deepEqual(order, before.order.filter(id => order.includes(id)));
     await openSite('Fixture Alpha Restored', '/alpha');
     assert.ok((await contents('/alpha').executeJavaScript('document.cookie')).includes('wuu_acceptance=synthetic-session'));
+    const library = await evaluate(() => window.wuu.webWorkspace.library.getState());
+    if (clearedHistoryURL) {
+      assert.ok(!library.history.some(entry => entry.url === clearedHistoryURL), 'Renderer restart does not restore cleared history');
+      assert.ok(library.bookmarks.some(entry => entry.url === origin + '/alpha'), 'Bookmark survives renderer restart');
+    }
     await capture('saved-destinations-after-restart'); return { before, order, sharedCookieRetained: true };
   });
 
@@ -365,6 +520,17 @@ async function runWebsiteAcceptance(h, fixture) {
     await capture('extension-disabled-cleanly');
     return { sharedCookieRetained: true, navigationRemoved: true, nativeContentsDestroyed: true };
   });
+  if (report.checks.every(check => check.status === 'passed') && report.errors.length === 0) {
+    const optional = { name: 'Public Notion landing page', required: false, status: 'unavailable' };
+    try {
+      await addSite('Public Notion preview', 'https://www.notion.com/');
+      await click(ribbon('Public Notion preview'), 'optional-public-notion');
+      await until(() => win.contentView.children.some(view => view.webContents && !view.webContents.isDestroyed() && view.getVisible() && /^https:\/\/(?:www\.)?notion\.(?:com|so)\//.test(view.webContents.getURL()) && !view.webContents.isLoading()), 'optional public site', 10000);
+      optional.status = 'loaded';
+      await capture('optional-public-notion');
+    } catch (error) { optional.error = String(error); try { await capture('optional-public-site-unavailable'); } catch {} }
+    report.optionalEvidence = [optional]; save();
+  }
   await goConversations();
   report.websiteFixture = { origin, requestCount: fixture.requests.length, externalAccounts: false, authoredExtension: true };
 }

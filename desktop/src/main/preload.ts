@@ -29,6 +29,8 @@ import {
 
 import type { ActivityPreviewAppearance } from "../shared/activityPreview";
 import type { WebWorkspaceApi, WebWorkspaceState } from "../shared/webWorkspace";
+import type { WebWorkspaceDownloadState } from "../shared/webWorkspaceDownloads";
+import type { WebWorkspaceLibraryState } from "../shared/webWorkspaceLibrary";
 import { initializeDesktopPageZoom, type DesktopZoomAction } from "../shared/DesktopPageZoom";
 
 // Restore shell zoom independently of font preferences.
@@ -708,7 +710,37 @@ if (!process.argv.includes("--wuu-browser-disabled")) {
     open: (destination) => ipcRenderer.invoke("wuu:web-workspace-open", destination),
     reportBounds: (id, bounds) => ipcRenderer.invoke("wuu:web-workspace-bounds", id, bounds),
     command: (id, command, url) => ipcRenderer.invoke("wuu:web-workspace-command", id, command, url),
+    setShortcutTarget: (id, active) => ipcRenderer.invoke("wuu:web-workspace-shortcut-target", id, active),
     close: (id) => ipcRenderer.invoke("wuu:web-workspace-close", id),
+    createTab: (id, url) => ipcRenderer.invoke("wuu:web-workspace-tab-create", id, url),
+    selectTab: (id, tabId) => ipcRenderer.invoke("wuu:web-workspace-tab-select", id, tabId),
+    closeTab: (id, tabId) => ipcRenderer.invoke("wuu:web-workspace-tab-close", id, tabId),
+    reopenTab: (id) => ipcRenderer.invoke("wuu:web-workspace-tab-reopen", id),
+    find: (id, text, options) => ipcRenderer.invoke("wuu:web-workspace-find", id, text, options),
+    stopFind: (id) => ipcRenderer.invoke("wuu:web-workspace-stop-find", id),
+    setZoom: (id, factor) => ipcRenderer.invoke("wuu:web-workspace-zoom", id, factor),
+    listDownloads: () => ipcRenderer.invoke("wuu:web-workspace-downloads-list"),
+    downloadCommand: (id, command) => ipcRenderer.invoke("wuu:web-workspace-download-command", id, command),
+    onDownloads: handler => {
+      const listener = (_event: Electron.IpcRendererEvent, items: WebWorkspaceDownloadState[]) => handler(items);
+      ipcRenderer.on("wuu:web-workspace-downloads", listener);
+      return () => ipcRenderer.removeListener("wuu:web-workspace-downloads", listener);
+    },
+    library: {
+      getState: () => ipcRenderer.invoke("wuu:web-workspace-library-get"),
+      setBookmark: (url, title, bookmarked) => ipcRenderer.invoke("wuu:web-workspace-library-bookmark", url, title, bookmarked),
+      clearHistory: () => ipcRenderer.invoke("wuu:web-workspace-library-clear"),
+      onState: handler => {
+        const listener = (_event: Electron.IpcRendererEvent, state: WebWorkspaceLibraryState) => handler(state);
+        ipcRenderer.on("wuu:web-workspace-library", listener);
+        return () => ipcRenderer.removeListener("wuu:web-workspace-library", listener);
+      },
+    },
+    onFocusFind: handler => {
+      const listener = (_event: Electron.IpcRendererEvent, id: string) => handler(id);
+      ipcRenderer.on("wuu:web-workspace-focus-find", listener);
+      return () => ipcRenderer.removeListener("wuu:web-workspace-focus-find", listener);
+    },
     onState: (handler) => {
       const listener = (_event: Electron.IpcRendererEvent, state: WebWorkspaceState) => handler(state);
       ipcRenderer.on("wuu:web-workspace-state", listener);

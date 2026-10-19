@@ -1,4 +1,4 @@
-import type { FilesystemPermissionRequest, MediaAccessPermissionRequest, OpenExternalPermissionRequest, PermissionRequest, HandlerDetails, LoadURLOptions, Rectangle, Session, WebContents, WebContentsViewConstructorOptions, WindowOpenHandlerResponse } from "electron";
+import type { DownloadItem, FilesystemPermissionRequest, MediaAccessPermissionRequest, OpenExternalPermissionRequest, PermissionRequest, HandlerDetails, LoadURLOptions, Rectangle, Session, WebContents, WebContentsViewConstructorOptions, WindowOpenHandlerResponse } from "electron";
 import type { ActivitySession, BrowserListedTab, BrowserSurfaceSnapshot, BrowserTabStatus, BrowserTurnEndedResult, JsonValue, ServerEvent } from "../shared/protocol";
 import { activityTimestamp } from "../shared/activityTimestamp";
 import {
@@ -2339,6 +2339,7 @@ export type BrowserPermissionRequestDetails = PermissionRequest | FilesystemPerm
 
 export interface BrowserSessionPermissionDelegate {
   ownsWebContents(id: number): boolean;
+  handleDownload?(contents: WebContents, item: DownloadItem): void;
   requestPermission(
     contents: WebContents,
     permission: string,
@@ -2373,10 +2374,14 @@ export function installBrowserSessionHandlers(
     const owned = webContents ? coordinator.ownsWebContents(webContents.id) : false;
     return browserPermissionDecision(owned, permission);
   });
-  session.on("will-download", (event, _item, webContents) => {
+  session.on("will-download", (event, item, webContents) => {
     // Owned tabs do not write silent downloads to disk.
     if (webContents && coordinator.ownsWebContents(webContents.id)) {
       event.preventDefault();
+      return;
+    }
+    if (webContents && websites?.ownsWebContents(webContents.id)) {
+      websites.handleDownload?.(webContents, item);
     }
   });
 }

@@ -173,7 +173,9 @@
       "sign": "scripts/sign-mac.cjs",
       "hardenedRuntime": false,
       "extendInfo": {
-        "NSScreenCaptureUsageDescription": "Wuu uses screen capture to observe apps during computer-use tasks."
+        "NSScreenCaptureUsageDescription": "Wuu uses screen capture to observe apps during computer-use tasks.",
+        "NSMicrophoneUsageDescription": "Wuu uses the microphone when you dictate text or allow a website to use it.",
+        "NSCameraUsageDescription": "Wuu uses the camera only when you allow a website to use it."
       },
       "extraResources": [
         {

@@ -12,6 +12,12 @@ on:
       - 'desktop/package*.json'
       - '.github/workflows/workbench-acceptance.yml'
   workflow_dispatch:
+    inputs:
+      layout_matrix:
+        description: Repeated layout matrix (browser journeys always run)
+        type: choice
+        options: [smoke, full]
+        default: smoke
 
 permissions:
   contents: read
@@ -57,6 +63,7 @@ jobs:
         timeout-minutes: 10
         env:
           WUU_WORKBENCH_OUTPUT: ${{ runner.temp }}/wuu-workbench-acceptance
+          WUU_WORKBENCH_MATRIX: ${{ inputs.layout_matrix || 'smoke' }}
         shell: bash
         run: |
           mkdir -p "$WUU_WORKBENCH_OUTPUT"
@@ -95,7 +102,7 @@ jobs:
           if (!fs.existsSync(path)) process.exit(0);
           const r = JSON.parse(fs.readFileSync(path));
           const rows = r.checks.map(c => `- ${c.status === 'passed' ? 'PASS' : 'FAIL'} ${c.name}`);
-          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, [`## Workbench: ${r.status}`, `Commit: ${r.commit}`, `${r.screenshots.length} full-window PNGs plus real-time MP4 in the evidence artifact.`, ...rows, '', 'Not covered:', ...r.exclusions.map(s => `- ${s}`), ''].join('\n'));
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, [`## Workbench: ${r.status}`, `Commit: ${r.commit}`, `Layout matrix: ${r.layoutMatrixScope || "full"}; all browser journeys run.`, `${r.screenshots.length} full-window PNGs plus real-time MP4 in the evidence artifact.`, ...rows, '', 'Not covered:', ...r.exclusions.map(s => `- ${s}`), ''].join('\n'));
           NODE
       - name: Upload full-window evidence even on failure
         if: always()

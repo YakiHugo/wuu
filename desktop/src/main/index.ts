@@ -2,7 +2,10 @@ import { AppContextCapture } from "./appContextCapture";
 import { SystemPermissions } from "./systemPermissions";
 import { createBrowserView } from "./browserView";
 import { WebWorkspaceHost } from "./webWorkspaceHost";
-import type { WebWorkspaceBounds, WebWorkspaceCommand } from "../shared/webWorkspace";
+import { WebWorkspaceLibrary } from "./webWorkspaceLibrary";
+import { WebWorkspaceDownloads } from "./webWorkspaceDownloads";
+import type { WebWorkspaceDownloadCommand } from "../shared/webWorkspaceDownloads";
+import type { WebWorkspaceBounds, WebWorkspaceCommand, WebWorkspaceDestination, WebWorkspaceFindOptions } from "../shared/webWorkspace";
 import { importBrowserCookies, listBrowserProfiles } from "./browserCookieImport";
 import { BrowserExtensionManager } from "./browserExtensions";
 import { saveArtifactFile } from "./artifactSave";
@@ -345,9 +348,18 @@ const browserHostCoordinator = new BrowserHostCoordinator(
   ),
   (workdir) => broadcastToAll("wuu:browser-invalidate", { workdir }),
 );
+const webWorkspaceLibrary = new WebWorkspaceLibrary(join(app.getPath("userData"), "web-workspace.json"));
+const webWorkspaceDownloads = new WebWorkspaceDownloads(
+  (owner, items) => sendToWindow(owner, "wuu:web-workspace-downloads", items),
+);
 const webWorkspaceHost = new WebWorkspaceHost(
   (owner, state) => sendToWindow(owner, "wuu:web-workspace-state", state),
   (owner, id) => sendToWindow(owner, "wuu:web-workspace-focus-address", id),
+  {
+    library: webWorkspaceLibrary, downloads: webWorkspaceDownloads,
+    onFocusFind: (owner, id) => sendToWindow(owner, "wuu:web-workspace-focus-find", id),
+    onLibraryChange: (owner) => sendToWindow(owner, "wuu:web-workspace-library", webWorkspaceLibrary.getState()),
+  },
 );
 // A workdir with a live agent tab counts as busy so pool idle-eviction cannot
 // yank the page out mid user-takeover (isBusy only sees pending requests +
@@ -819,6 +831,7 @@ function persistMainWindowBoundsNow(win: BrowserWindow): void {
 function loadRenderer(window: BrowserWindow): void {
   // Shell windows only: browser and observation surfaces keep their own zoom.
   window.webContents.on("before-input-event", (event, input) => {
+    if (event.defaultPrevented || webWorkspaceHost.handleShellInput(window.webContents, event, input)) return;
     const modifier = process.platform === "darwin" ? input.meta : input.control;
     if (!modifier || input.alt || (process.platform === "darwin" && input.control)) return;
     let action: DesktopZoomAction;
@@ -1373,7 +1386,9 @@ app.whenReady().then(async () => {
       app.on("web-contents-created", (_event, contents) => {
         listener({
           onBeforeInputEvent: (handler) => {
-            contents.on("before-input-event", (event, value) => handler(event, value));
+            contents.on("before-input-event", (event, value) => {
+              if (!webWorkspaceHost.handleShellInput(contents, event, value)) handler(event, value);
+            });
           },
           onDevToolsOpened: (handler) => {
             contents.on("devtools-opened", handler);
@@ -2849,14 +2864,53 @@ app.whenReady().then(async () => {
     if (!isAppContextSender(event)) throw new Error("Website destinations are available from Wuu's main window only.");
     return windowRegistry.mainWindow()!;
   };
-  ipcMain.handle("wuu:web-workspace-open", (event, destination: { id: string; url: string }) =>
+  ipcMain.handle("wuu:web-workspace-open", (event, destination: WebWorkspaceDestination) =>
     webWorkspaceHost.open(webWorkspaceSender(event), destination));
   ipcMain.handle("wuu:web-workspace-bounds", (event, id: string, bounds: WebWorkspaceBounds | null) =>
     webWorkspaceHost.reportBounds(webWorkspaceSender(event), id, bounds));
+  ipcMain.handle("wuu:web-workspace-shortcut-target", (event, id: string, active: boolean) =>
+    webWorkspaceHost.setShortcutTarget(webWorkspaceSender(event), id, active === true));
   ipcMain.handle("wuu:web-workspace-command", (event, id: string, command: WebWorkspaceCommand, url?: string) =>
     webWorkspaceHost.command(webWorkspaceSender(event), id, command, url));
   ipcMain.handle("wuu:web-workspace-close", (event, id: string) =>
     webWorkspaceHost.close(webWorkspaceSender(event), id));
+  ipcMain.handle("wuu:web-workspace-tab-create", (event, id: string, url?: string) =>
+    webWorkspaceHost.createTab(webWorkspaceSender(event), id, url));
+  ipcMain.handle("wuu:web-workspace-tab-select", (event, id: string, tabId: string) =>
+    webWorkspaceHost.selectTab(webWorkspaceSender(event), id, tabId));
+  ipcMain.handle("wuu:web-workspace-tab-close", (event, id: string, tabId: string) =>
+    webWorkspaceHost.closeTab(webWorkspaceSender(event), id, tabId));
+  ipcMain.handle("wuu:web-workspace-tab-reopen", (event, id: string) =>
+    webWorkspaceHost.reopenTab(webWorkspaceSender(event), id));
+  ipcMain.handle("wuu:web-workspace-find", (event, id: string, text: string, options?: WebWorkspaceFindOptions) =>
+    webWorkspaceHost.find(webWorkspaceSender(event), id, text, options));
+  ipcMain.handle("wuu:web-workspace-stop-find", (event, id: string) =>
+    webWorkspaceHost.stopFind(webWorkspaceSender(event), id));
+  ipcMain.handle("wuu:web-workspace-zoom", (event, id: string, factor: number) =>
+    webWorkspaceHost.setZoom(webWorkspaceSender(event), id, factor));
+  ipcMain.handle("wuu:web-workspace-downloads-list", event => webWorkspaceDownloads.list(webWorkspaceSender(event)));
+  ipcMain.handle("wuu:web-workspace-download-command", async (event, id: string, command: WebWorkspaceDownloadCommand) => {
+    const owner = webWorkspaceSender(event);
+    await webWorkspaceDownloads.command(owner, id, command);
+    return webWorkspaceDownloads.list(owner);
+  });
+  ipcMain.handle("wuu:web-workspace-library-get", event => {
+    webWorkspaceSender(event);
+    return webWorkspaceLibrary.getState();
+  });
+  ipcMain.handle("wuu:web-workspace-library-bookmark", (event, url: string, title: string, bookmarked: boolean) => {
+    const owner = webWorkspaceSender(event);
+    if (typeof url !== "string" || typeof title !== "string" || typeof bookmarked !== "boolean") throw new Error("Invalid website bookmark.");
+    const state = webWorkspaceLibrary.setBookmark(url, title, bookmarked);
+    sendToWindow(owner, "wuu:web-workspace-library", state);
+    return state;
+  });
+  ipcMain.handle("wuu:web-workspace-library-clear", event => {
+    const owner = webWorkspaceSender(event);
+    const state = webWorkspaceLibrary.clearHistory();
+    sendToWindow(owner, "wuu:web-workspace-library", state);
+    return state;
+  });
   ipcMain.handle("wuu:browser-profiles", (event) => {
     requireBrowserSettingsSender(event);
     if (!ENABLE_EMBEDDED_BROWSER) {

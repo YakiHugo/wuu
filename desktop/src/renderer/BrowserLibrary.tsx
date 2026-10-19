@@ -1,0 +1,204 @@
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import type { WebWorkspaceApi } from "../shared/webWorkspace";
+import { persistentWebWorkspaceURL, type WebWorkspaceLibraryState } from "../shared/webWorkspaceLibrary";
+import { Bookmark, BookOpen, Clock3, Search, X } from "./WuuIcons";
+import { useI18n } from "./i18n";
+import { UILayerPortal } from "./ui/layers/UILayerHost";
+import { rawErrorMessage } from "./UserFacingErrors";
+import { showActionErrorToast } from "./Toast";
+import "./styles/browser-library.css";
+
+export function BrowserLibrary({ api, currentURL, currentTitle, onOpen, active = true, destinationId }: {
+  api?: WebWorkspaceApi;
+  currentURL: string;
+  currentTitle: string;
+  onOpen: (url: string) => void;
+  active?: boolean;
+  destinationId?: string;
+}): JSX.Element {
+  const { t, formatDate } = useI18n();
+  const library = api?.library;
+  const [state, setState] = useState<WebWorkspaceLibraryState>();
+  const [open, setOpen] = useState(false);
+  const [section, setSection] = useState<"history" | "bookmarks">("history");
+  const [query, setQuery] = useState("");
+  const [limit, setLimit] = useState(100);
+  const [pending, setPending] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [error, setError] = useState("");
+  const [position, setPosition] = useState<CSSProperties>({ visibility: "hidden" });
+  const trigger = useRef<HTMLButtonElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  const search = useRef<HTMLInputElement>(null);
+  const cancelClear = useRef<HTMLButtonElement>(null);
+  const updates = useRef(0);
+  const panelId = useId();
+  const headingId = useId();
+  const safeURL = persistentWebWorkspaceURL(currentURL);
+  const bookmarked = Boolean(safeURL && state?.bookmarks.some((entry) => entry.url === safeURL));
+
+  const refresh = useCallback(() => {
+    if (!library) return;
+    const version = updates.current;
+    void library.getState().then((next) => {
+      if (version === updates.current) { updates.current++; setState(next); setError(""); }
+    }).catch((cause: unknown) => { if (version === updates.current) setError(rawErrorMessage(cause)); });
+  }, [library]);
+
+  useEffect(() => {
+    if (!library) return;
+    const unsubscribe = library.onState((next) => { updates.current++; setState(next); });
+    refresh();
+    return () => { updates.current++; unsubscribe(); };
+  }, [library, refresh]);
+
+  useEffect(() => { if (!active) setOpen(false); }, [active]);
+  useEffect(() => { setLimit(100); }, [query, section]);
+  useEffect(() => {
+    if (open && confirmClear) cancelClear.current?.focus();
+  }, [open, confirmClear]);
+
+  const close = useCallback((restoreFocus = true) => {
+    setOpen(false);
+    setConfirmClear(false);
+    if (restoreFocus) trigger.current?.focus();
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const place = (): void => {
+      const anchor = trigger.current?.getBoundingClientRect();
+      const content = panel.current;
+      if (!anchor || !content) return;
+      const margin = 12;
+      const top = Math.min(anchor.bottom + 8, Math.max(margin, window.innerHeight - 200));
+      const left = Math.max(margin, Math.min(anchor.right - content.offsetWidth, window.innerWidth - content.offsetWidth - margin));
+      setPosition({ left, top, maxHeight: Math.max(0, window.innerHeight - top - margin) });
+    };
+    place();
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(place) : undefined;
+    if (panel.current) observer?.observe(panel.current);
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    const frame = requestAnimationFrame(() => search.current?.focus());
+    return () => {
+      observer?.disconnect();
+      cancelAnimationFrame(frame);
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    refresh();
+    const outside = (event: PointerEvent): void => {
+      const target = event.target as Node;
+      if (!panel.current?.contains(target) && !trigger.current?.contains(target)) close(false);
+    };
+    const focusOutside = (event: FocusEvent): void => {
+      const target = event.target as Node;
+      if (!panel.current?.contains(target) && !trigger.current?.contains(target)) close(false);
+    };
+    const escape = (event: KeyboardEvent): void => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (confirmClear) { setConfirmClear(false); search.current?.focus(); } else close();
+    };
+    document.addEventListener("pointerdown", outside, true);
+    document.addEventListener("focusin", focusOutside, true);
+    document.addEventListener("keydown", escape, true);
+    return () => {
+      document.removeEventListener("pointerdown", outside, true);
+      document.removeEventListener("focusin", focusOutside, true);
+      document.removeEventListener("keydown", escape, true);
+    };
+  }, [open, refresh, close, confirmClear]);
+
+  const changeBookmark = async (url: string, title: string, value: boolean): Promise<void> => {
+    if (!library || pending) return;
+    setPending(true);
+    setError("");
+    const version = updates.current;
+    try {
+      const next = await library.setBookmark(url, title, value);
+      if (version === updates.current) { updates.current++; setState(next); }
+    } catch (cause) {
+      const message = rawErrorMessage(cause);
+      setError(message);
+      if (!open) showActionErrorToast(message);
+    } finally { setPending(false); }
+  };
+
+  const clearHistory = async (): Promise<void> => {
+    if (!library || pending) return;
+    setPending(true);
+    setError("");
+    const version = updates.current;
+    try {
+      const next = await library.clearHistory();
+      if (version === updates.current) { updates.current++; setState(next); }
+      setConfirmClear(false);
+    } catch (cause) { setError(rawErrorMessage(cause)); }
+    finally { setPending(false); }
+  };
+
+  const entries = state?.[section] ?? [];
+  const needle = query.trim().toLowerCase();
+  const matching = needle ? entries.filter((entry) => `${entry.title}\n${entry.url}`.toLowerCase().includes(needle)) : entries;
+  const bookmarkLabel = t(bookmarked ? "browserLibrary.removeBookmark" : "browserLibrary.addBookmark");
+  return <>
+    <button type="button" className="icon-button workspace-browser-nav browser-library-bookmark" data-browser-bookmark-current
+      aria-label={bookmarkLabel} title={safeURL ? bookmarkLabel : t("browserLibrary.privacy")} aria-pressed={bookmarked}
+      disabled={!library || !safeURL || pending} onClick={() => void changeBookmark(currentURL, currentTitle, !bookmarked)}>
+      <Bookmark className="icon" aria-hidden="true" />
+    </button>
+    <button ref={trigger} type="button" className="icon-button workspace-browser-nav" data-browser-library-trigger
+      aria-label={t("browserLibrary.title")} title={t("browserLibrary.title")} aria-haspopup="dialog" aria-expanded={open}
+      aria-controls={open ? panelId : undefined} disabled={!library} onClick={() => { if (open) close(); else { setOpen(true); setConfirmClear(false); } }}>
+      <BookOpen className="icon" aria-hidden="true" />
+    </button>
+    {open ? <UILayerPortal layer="popover">
+      <div ref={panel} id={panelId} role="dialog" aria-labelledby={headingId} className="browser-library-panel"
+        data-browser-library data-wuu-layer="popover" data-wuu-component="popover" data-web-workspace-owner={destinationId} style={position}
+        onPointerDown={(event) => event.stopPropagation()}>
+        <div className="browser-library-heading">
+          <span id={headingId}>{t("browserLibrary.title")}</span>
+          <button type="button" className="icon-button" aria-label={t("browserLibrary.close")} onClick={() => close()}><X className="icon" /></button>
+        </div>
+        <div className="browser-library-sections" role="group" aria-label={t("browserLibrary.title")}>
+          <button type="button" data-library-section="history" aria-pressed={section === "history"} onClick={() => { setSection("history"); setConfirmClear(false); }}><Clock3 className="icon" />{t("browserLibrary.history")}</button>
+          <button type="button" data-library-section="bookmarks" aria-pressed={section === "bookmarks"} onClick={() => { setSection("bookmarks"); setConfirmClear(false); }}><Bookmark className="icon" />{t("browserLibrary.bookmarks")}</button>
+        </div>
+        <label className="browser-library-search"><Search className="icon" /><input ref={search} type="search" value={query}
+          aria-label={t("browserLibrary.search")} placeholder={t("browserLibrary.search")} onChange={(event) => setQuery(event.target.value)} /></label>
+        {(error || state?.error) ? <p className="browser-library-error" role="alert">{error || state?.error}</p> : null}
+        {confirmClear ? <div className="browser-library-confirm" role="alert">
+          <p>{t("browserLibrary.confirmClear")}</p>
+          <div><button ref={cancelClear} type="button" className="settings-button settings-button-ghost" disabled={pending} onClick={() => { setConfirmClear(false); search.current?.focus(); }}>{t("browserLibrary.cancel")}</button>
+            <button type="button" className="settings-button" data-library-confirm-clear disabled={pending} onClick={() => void clearHistory()}>{t("browserLibrary.clearHistory")}</button></div>
+        </div> : <div className="browser-library-results">
+          {!state && !error ? <p className="browser-library-empty" role="status">{t("browserLibrary.loading")}</p>
+            : matching.length ? <ul>{matching.slice(0, limit).map((entry) => <li key={entry.id} data-library-entry>
+              <button type="button" className="browser-library-open" title={entry.url} data-library-url={entry.url}
+                onClick={() => { close(false); onOpen(entry.url); }}>
+                <span className="browser-library-entry-title">{entry.title || entry.url}</span>
+                <span className="browser-library-entry-url">{entry.url}</span>
+                {"visitedAt" in entry ? <time dateTime={new Date(entry.visitedAt).toISOString()}>{formatDate(entry.visitedAt, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</time> : null}
+              </button>
+              {section === "bookmarks" ? <button type="button" className="icon-button browser-library-remove" disabled={pending}
+                aria-label={`${t("browserLibrary.removeBookmark")}: ${entry.title || entry.url}`} title={t("browserLibrary.removeBookmark")}
+                onClick={() => void changeBookmark(entry.url, entry.title, false)}><X className="icon" /></button> : null}
+            </li>)}</ul>
+              : <p className="browser-library-empty">{t(needle ? "browserLibrary.noResults" : section === "history" ? "browserLibrary.emptyHistory" : "browserLibrary.emptyBookmarks")}</p>}
+          {matching.length > limit ? <button type="button" className="settings-button settings-button-ghost browser-library-more" onClick={() => setLimit((value) => value + 100)}>{t("browserLibrary.showMore")}</button> : null}
+        </div>}
+        <div className="browser-library-footer">
+          <p>{t("browserLibrary.privacy")}</p>
+          {section === "history" && Boolean(state?.history.length) && !confirmClear ? <button type="button" className="settings-button settings-button-ghost" data-library-clear-history onClick={() => setConfirmClear(true)}>{t("browserLibrary.clearHistory")}</button> : null}
+        </div>
+      </div>
+    </UILayerPortal> : null}
+  </>;
+}
