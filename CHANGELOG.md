@@ -58,6 +58,7 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 - Keep full-workspace websites attached to the native window edges during live resizing, including when the shell renderer is busy.
 - Keep explicit workbench sidebar collapse separate from hover previews, and remove the redundant settings breadcrumb root.
 - Reserve app-history controls in the existing content header so narrow Mac sidebars keep notification and search hit areas clear, including zoomed layouts and hover previews.
+- Stabilize PDF fit-width layout when a non-overlay scrollbar would otherwise alternate between appearing and disappearing.
 
 - Keep the account menu above browser pages while preserving native website visibility on dismissal.
 
