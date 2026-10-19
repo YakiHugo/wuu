@@ -2,7 +2,7 @@ name: Workbench visual acceptance
 
 on:
   push:
-    branches: [design/conversation-layout]
+    branches: [design/conversation-layout, experiment/workbench]
     paths:
       - 'desktop/src/**'
       - 'desktop/scripts/workbench-acceptance-e2e.cjs'
