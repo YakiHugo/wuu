@@ -238,10 +238,25 @@ async function input(selector, text) {
   await until((selector, text) => document.querySelector(selector)?.value === text, 'native draft insertion', selector, text);
 }
 async function openConversation(id, title) {
-  await until(() => {
-    const input = document.querySelector('.composer textarea');
-    return input && !input.disabled && !input.readOnly;
-  }, 'ready conversation shell');
+  await until(selector => {
+    const input = document.querySelector(selector);
+    return input && !input.disabled && !input.readOnly && !input.closest('[inert]')
+      && input.getClientRects().length > 0;
+  }, 'ready conversation shell', mainInput);
+  // Native keyboard input requires the host window and intended composer to
+  // own focus; a mounted textarea alone does not establish either prerequisite.
+  main.focus();
+  await hostUntil(() => main.isFocused(), 'native conversation window focus');
+  await evaluate(selector => document.querySelector(selector).focus(), mainInput);
+  await until(selector => document.hasFocus()
+    && document.activeElement === document.querySelector(selector), 'conversation composer focus', mainInput);
+  await evaluate(() => {
+    window.__sessionMessageSearchKey = null;
+    window.addEventListener('keydown', event => {
+      window.__sessionMessageSearchKey = { key: event.key, ctrlKey: event.ctrlKey, metaKey: event.metaKey,
+        documentFocused: document.hasFocus(), target: event.target?.outerHTML };
+    }, { capture: true, once: true });
+  });
   key('P', [process.platform === 'darwin' ? 'meta' : 'control']);
   await until(() => document.activeElement === document.querySelector('.conversation-search-dialog input'), 'conversation search focus');
   // Reuse the observable request/result barrier from conversation-search-e2e.
@@ -737,10 +752,19 @@ run().catch(async error => {
   clearTimeout(watchdog);
   await stopRecording().catch(() => {});
   log(String(error.stack || error));
+  // Preserve the original failure even if renderer diagnostics or capture fail.
+  fs.writeFileSync(path.join(output, 'failure.json'), JSON.stringify({ error: String(error.stack || error), boundary, checks, failures, screenshots, rpc, nativeMenus }, null, 2));
   if (main && !main.isDestroyed()) {
     try {
-      fs.writeFileSync(path.join(output, 'failure.png'), (await main.webContents.capturePage()).toPNG());
+      fs.writeFileSync(path.join(output, 'failure-host.json'), JSON.stringify({
+        windowFocused: main.isFocused(), windowVisible: main.isVisible(),
+        webContentsFocused: main.webContents.isFocused(),
+      }, null, 2));
+    } catch (diagnosticError) { log(`Host diagnostics: ${diagnosticError}`); }
+    try {
       fs.writeFileSync(path.join(output, 'failure-state.json'), JSON.stringify(await evaluate(() => ({
+        documentFocused: document.hasFocus(), searchKey: window.__sessionMessageSearchKey,
+        activeElementInert: Boolean(document.activeElement?.closest('[inert]')),
         cards: [...document.querySelectorAll('.session-message-source')].map(node => node.outerHTML),
         activeElement: document.activeElement?.outerHTML,
         search: document.querySelector('.conversation-search-dialog')?.outerHTML,
@@ -748,8 +772,10 @@ run().catch(async error => {
         panes: [...document.querySelectorAll('.conversation-split-pane, .cached-conversation-pane')].map(node => ({ id: node.dataset.threadId, active: node.dataset.active })),
         inputs: [...document.querySelectorAll('.composer textarea')].map(node => ({ text: node.value, rect: node.getBoundingClientRect().toJSON() })),
       })), null, 2));
-    } catch (captureError) { log(String(captureError)); }
+    } catch (diagnosticError) { log(`Renderer diagnostics: ${diagnosticError}`); }
+    try {
+      fs.writeFileSync(path.join(output, 'failure.png'), (await main.webContents.capturePage()).toPNG());
+    } catch (captureError) { log(`Screenshot: ${captureError}`); }
   }
-  fs.writeFileSync(path.join(output, 'failure.json'), JSON.stringify({ error: String(error.stack || error), boundary, checks, failures, screenshots, rpc, nativeMenus }, null, 2));
   app.exit(1);
 });

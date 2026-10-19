@@ -295,14 +295,15 @@ describe("sidebar collapse-state independence", () => {
     window.wuu.loadCodexModels = vi.fn().mockResolvedValue({ providers: [...config.providers!, updated], models: updated.models });
     await act(async () => { root = createRoot(container); root.render(<App />); });
     await flushAsync();
-    const click = async (selector: string) => {
-      const button = container.querySelector<HTMLButtonElement>(selector);
+    const click = async (selector: string, scope: ParentNode = container) => {
+      const button = scope.querySelector<HTMLButtonElement>(selector);
       expect(button).not.toBeNull();
       await act(async () => button!.click());
       await flushAsync();
     };
     await click('.sidebar-account-trigger');
-    await click('[data-settings-page="providers"]');
+    // The account menu is portaled outside the mounted App container.
+    await click('[data-settings-page="providers"]', document);
     await act(async () => { await import("./SettingsView"); });
     await click('[data-provider="codex-account"]');
     const sourceValue = () => container.querySelector('.connection-fields .model-service-status')?.textContent;
@@ -330,15 +331,16 @@ describe("sidebar collapse-state independence", () => {
     window.wuu.refreshModelCatalog = vi.fn().mockResolvedValue({ providers: [...config.providers!, updated], model_count: 3 });
     await act(async () => { root = createRoot(container); root.render(<App />); });
     await flushAsync();
-    const click = async (selector: string) => {
-      const button = container.querySelector<HTMLButtonElement>(selector);
+    const click = async (selector: string, scope: ParentNode = container) => {
+      const button = scope.querySelector<HTMLButtonElement>(selector);
       expect(button).not.toBeNull();
       expect(button!.disabled).toBe(false);
       await act(async () => button!.click());
       await flushAsync();
     };
     await click('.sidebar-account-trigger');
-    await click('[data-settings-page="providers"]');
+    // The account menu is portaled outside the mounted App container.
+    await click('[data-settings-page="providers"]', document);
     await act(async () => { await import("./SettingsView"); });
     await click('[data-provider="grok-account"]');
     expect(window.wuu.authenticateEngine).not.toHaveBeenCalled();
