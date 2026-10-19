@@ -32,11 +32,6 @@
   visibility: hidden;
 }
 
-:root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon).sidebar-collapsed .titlebar,
-:root:has(.mac-window-controls) .app-shell.sidebar-collapsed .settings-embedded .settings-titlebar {
-  padding-left: calc(var(--space-2) * 2 + var(--workbench-control-size) + var(--control-toolbar-gap));
-}
-
 :root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon) .sidebar-brand {
   padding-bottom: 0;
   -webkit-app-region: drag;
@@ -583,6 +578,7 @@ html:not([data-app-background]) .navigation-ribbon-layout:has(.sidebar-ribbon) :
   height: var(--control-size-toolbar);
   padding: 0;
 }
+.shell-page-history-controls[hidden] { display: none; }
 .shell-page-history-controls button,
 .shell-page-history-controls button * { -webkit-app-region: no-drag; }
 .navigation-ribbon-layout:has(.sidebar-ribbon) > .shell-page-history-controls {
@@ -591,25 +587,33 @@ html:not([data-app-background]) .navigation-ribbon-layout:has(.sidebar-ribbon) :
   left: calc(var(--window-titlebar-leading-inset) + var(--control-size-toolbar) + var(--control-toolbar-gap));
 }
 :root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon) {
-  --app-navigation-width: calc(var(--workbench-control-size) * 3 + var(--control-toolbar-gap) * 2);
+  --app-history-width: calc(var(--workbench-control-size) * 2 + var(--control-toolbar-gap));
+  --app-history-origin: var(--sidebar-width);
+  --app-history-inset: var(--control-toolbar-inset);
+  --app-history-end: calc(var(--app-history-origin) + var(--app-history-inset) + var(--app-history-width) + var(--control-toolbar-gap));
+}
+/* Only the toggle occupies the secondary sidebar header. History belongs to
+   the active content header, whose leading lane reserves the same dimensions. */
+:root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon).sidebar-collapsed {
+  --app-history-inset: calc(var(--space-2) * 2 + (var(--sidebar-content-icon-size) - var(--workbench-control-size)) / 2 + var(--workbench-control-size) + var(--control-toolbar-gap));
 }
 :root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon) > .shell-page-history-controls {
   top: calc(var(--workbench-top) + (var(--canvas-titlebar-height) - var(--control-size-toolbar)) / 2);
-  left: calc(var(--sidebar-ribbon-width) + var(--space-2) * 2 + (var(--sidebar-content-icon-size) - var(--control-size-toolbar)) / 2 + var(--control-size-toolbar) + var(--control-toolbar-gap));
+  left: calc(var(--app-history-origin) + var(--app-history-inset));
 }
-:root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon) .sidebar-section-title {
-  padding-left: calc(var(--app-navigation-width) + var(--space-2));
-}
-:root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon).sidebar-collapsed .titlebar,
-:root:has(.mac-window-controls) .app-shell.sidebar-collapsed .settings-embedded .settings-titlebar {
-  padding-left: calc(var(--space-2) * 2 + var(--app-navigation-width) + var(--control-toolbar-gap));
+:root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon) .titlebar,
+:root:has(.mac-window-controls) .app-shell.navigation-ribbon-layout:has(.sidebar-ribbon) .settings-embedded .settings-titlebar {
+  padding-left: calc(var(--app-history-end) - var(--sidebar-width));
 }
 :root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon).right-panel-globalized .workspace-panel-tabbar {
-  padding-left: calc(var(--space-2) * 2 + var(--app-navigation-width) + var(--control-toolbar-gap));
+  padding-left: calc(var(--app-history-end) - var(--workspace-sheet-left));
 }
-:root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon)[data-web-workspace-open] > .shell-page-history-controls {
-  left: calc(var(--sidebar-ribbon-width) + var(--space-2));
+/* Browser navigation stays beside the address field, separated from app
+   history by an extra gap in this existing row; the sidebar toggle is hidden. */
+:root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon)[data-web-workspace-open] {
+  --app-history-origin: var(--sidebar-ribbon-width);
+  --app-history-inset: var(--control-toolbar-inset);
 }
 :root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon) .web-workspace-toolbar {
-  padding-left: calc(var(--workbench-control-size) * 2 + var(--control-toolbar-gap) + var(--space-2) * 2);
+  padding-left: calc(var(--app-history-end) - var(--sidebar-ribbon-width) + var(--control-toolbar-gap));
 }

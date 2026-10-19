@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight } from "./WuuIcons";
 import { Tooltip } from "./Tooltip";
 import { useI18n } from "./i18n";
@@ -9,6 +9,7 @@ export type PageHistoryControlsProps = {
   onBack: () => void;
   onForward: () => void;
   children?: ReactNode;
+  hidden?: boolean;
 };
 
 export function PageHistoryControls({
@@ -17,10 +18,22 @@ export function PageHistoryControls({
   onBack,
   onForward,
   children,
+  hidden = false,
 }: PageHistoryControlsProps): JSX.Element {
   const { t } = useI18n();
+  const controlsRef = useRef<HTMLDivElement>(null);
+  const [occluded, setOccluded] = useState(hidden);
+  useLayoutEffect(() => {
+    const controls = controlsRef.current;
+    if (hidden && controls?.contains(document.activeElement)) {
+      controls.closest(".app-shell")?.querySelector<HTMLButtonElement>(".section-sidebar-toggle")?.focus();
+    }
+    // Move focus before the browser can blur a hidden/inert descendant.
+    // The layout update applies occlusion before paint without losing ownership.
+    setOccluded(hidden);
+  }, [hidden]);
   return (
-    <div className="shell-page-history-controls" data-wuu-component="page-history-controls">
+    <div ref={controlsRef} className="shell-page-history-controls" data-wuu-component="page-history-controls" hidden={occluded} inert={occluded}>
       <Tooltip content={t("app.historyBack")} side="bottom">
         <button
           type="button"

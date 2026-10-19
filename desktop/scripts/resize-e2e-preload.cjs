@@ -364,6 +364,19 @@ const desktopAPI = {
   },
   onWindowResizeState: () => () => undefined
 };
+// Opt-in titlebar geometry capabilities must remain self-contained so the
+// sandboxed native QA wrapper can use this preload without local require().
+// Caption actions are renderer-only stubs, never evidence of OS hit testing.
+if (process.env.WUU_TITLEBAR_FIXTURE_PLATFORM) {
+  desktopAPI.platform = process.env.WUU_TITLEBAR_FIXTURE_PLATFORM;
+  desktopAPI.hostKind = "desktop";
+  if (desktopAPI.platform === "darwin") {
+    desktopAPI.windowClose = async () => undefined;
+    desktopAPI.windowMinimize = async () => undefined;
+    desktopAPI.windowToggleMaximize = async () => undefined;
+    desktopAPI.windowToggleFullScreen = async () => undefined;
+  }
+}
 // Focused renderer journeys may extend this shared synthetic backend without
 // copying it or adding test-only hooks to production renderer code.
 const extend = process.env.WUU_RENDERER_E2E_EXTENSION

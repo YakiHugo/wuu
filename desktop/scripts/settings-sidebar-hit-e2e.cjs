@@ -9,6 +9,11 @@ const rendererHtml = path.resolve(process.env.WUU_TITLEBAR_RENDERER_HTML || path
 const preload = path.join(__dirname, "resize-e2e-preload.cjs");
 const evidenceDir = path.resolve(process.env.WUU_TITLEBAR_OUTPUT || path.join(desktopRoot, "out", "e2e", "settings-titlebar"));
 const userData = path.join(evidenceDir, "settings-sidebar-hit-user-data");
+const fixturePlatform = process.env.WUU_TITLEBAR_FIXTURE_PLATFORM || process.platform;
+assert.ok(["darwin", "linux", "win32"].includes(fixturePlatform), "Unsupported fixture platform");
+// This flag enables self-contained caption capabilities in the existing preload,
+// including when Electron sandboxing forbids dynamic local module requires.
+process.env.WUU_TITLEBAR_FIXTURE_PLATFORM = fixturePlatform;
 
 process.env.WUU_RESIZE_E2E_CWD = repoRoot;
 fs.rmSync(userData, { recursive: true, force: true });
@@ -50,6 +55,10 @@ async function run() {
   win.showInactive();
   await win.webContents.debugger.sendCommand("Emulation.setFocusEmulationEnabled", { enabled: true });
   await waitFor(win, () => Boolean(document.querySelector(".conversation-pane")), 5000);
+  const macControlsPresent = await evaluate(win, () => !!document.querySelector('.mac-window-controls'));
+  assert.equal(macControlsPresent, fixturePlatform === "darwin",
+    "Fixture caption capabilities must activate the requested platform branch; dataset.platform alone is insufficient");
+  await verifyNarrowSidebarControls(win);
   await verifyTitlebarContinuity(win);
   win.setContentSize(1180, 820);
   win.webContents.setZoomFactor(1);
@@ -145,6 +154,77 @@ async function run() {
   app.quit();
 }
 
+// Reproduce the native Mac collision: a 240px total sidebar is narrower than
+// a 240px secondary pane (292px including the ribbon). Both must stay usable.
+async function verifyNarrowSidebarControls(win) {
+  const savedWidth = await evaluate(win, () => localStorage.getItem("wuu.desktop.sidebarWidth"));
+  for (const totalWidth of [240, 292]) {
+    await evaluate(win, width => {
+      localStorage.setItem("wuu.desktop.sidebarWidth", String(width));
+      localStorage.setItem("wuu.desktop.sidebarCollapsed", "false");
+    }, totalWidth);
+    win.setContentSize(900, 675);
+    win.webContents.setZoomFactor(0.75);
+    await loadFile(win, rendererHtml);
+    await waitFor(win, () => !!document.querySelector(".conversation-pane"), 5000);
+    await evaluate(win, platform => {
+      document.documentElement.dataset.platform = platform;
+      document.documentElement.dataset.hostKind = "desktop";
+      document.documentElement.style.setProperty("--font-ui", "20px");
+      document.documentElement.style.setProperty("--desktop-page-zoom", "0.75");
+    }, fixturePlatform);
+    await settleChrome(win);
+    assert.equal(await evaluate(win, () => parseFloat(getComputedStyle(document.querySelector(".app-shell")).getPropertyValue("--sidebar-open-width"))), totalWidth);
+    let collapsedGeometry;
+    for (const layout of ["docked", "collapsed", "drawer"]) {
+      if (layout === "collapsed") {
+        await evaluate(win, () => document.querySelector(".section-sidebar-toggle").click());
+      } else if (layout === "drawer") {
+        await revealDrawerAtEdge(win);
+      }
+      await settleChrome(win);
+      const geometry = await chromeToggleGeometry(win);
+      const scenario = `sidebar-${totalWidth}-20px-0.75-${layout}`;
+      results.push({ scenario, page: "conversation", geometry });
+      saveResults();
+      await capture(win, `${scenario}.png`);
+      if (layout === "collapsed") collapsedGeometry = geometry;
+      if (layout === "drawer") {
+        assert.equal(geometry.titleX, collapsedGeometry.titleX, "Preview does not reflow the content title");
+        assert.deepEqual(geometry.header, collapsedGeometry.header, "Preview does not move the content header");
+      }
+      assertTopRow(geometry, { page: layout === "drawer" ? "conversation-drawer" : "conversation", layout, font: 20, zoom: 0.75 });
+    }
+    await evaluate(win, () => document.querySelector(".sidebar-account-trigger").click());
+    await waitFor(win, () => !!document.querySelector('[data-settings-page="providers"]'), 3000);
+    await evaluate(win, () => document.querySelector('[data-settings-page="providers"]').click());
+    await waitFor(win, () => !!document.querySelector(".settings-shell"), 3000);
+    await settleChrome(win);
+    const geometry = await chromeToggleGeometry(win);
+    results.push({ scenario: `sidebar-${totalWidth}-20px-0.75-settings`, geometry });
+    saveResults();
+    assertTopRow(geometry, { totalWidth, page: "settings", layout: "drawer", font: 20, zoom: 0.75 });
+    await capture(win, `sidebar-${totalWidth}-20px-0.75-settings.png`);
+    await evaluate(win, () => document.querySelector('[data-ribbon-id="conversations"]').click());
+    const away = await evaluate(win, () => ({ x: innerWidth - 40, y: innerHeight - 40 }));
+    win.webContents.sendInputEvent({ type: "mouseMove", x: Math.round(away.x * 0.75), y: Math.round(away.y * 0.75) });
+    await waitFor(win, () => !document.querySelector('.sidebar-drawer-open, .sidebar-drawer-closing, .sidebar-drawer-docking'), 3000);
+    await settleChrome(win);
+    const restored = await chromeToggleGeometry(win);
+    assertControlSeparation(restored, { totalWidth, page: "conversation-restored" });
+    assert.equal(restored.historyState.hidden, false, "App history returns when preview closes");
+  }
+  await evaluate(win, width => {
+    if (width === null) localStorage.removeItem("wuu.desktop.sidebarWidth");
+    else localStorage.setItem("wuu.desktop.sidebarWidth", width);
+    localStorage.setItem("wuu.desktop.sidebarCollapsed", "false");
+  }, savedWidth);
+  win.setContentSize(1180, 820);
+  win.webContents.setZoomFactor(1);
+  await loadFile(win, rendererHtml);
+  await waitFor(win, () => !!document.querySelector(".conversation-pane"), 5000);
+}
+
 // Exercise the real app, not copies of header markup or stylesheet literals.
 // Page switching must preserve the control's hit box and rendered glyph;
 // Shell controls and content headings retain their respective rows without clipping.
@@ -154,7 +234,7 @@ async function verifyTitlebarContinuity(win) {
       for (const zoom of [1, 0.75, 1.25, 2]) {
         win.webContents.setZoomFactor(zoom);
         await win.webContents.executeJavaScript(`
-          document.documentElement.dataset.platform = ${JSON.stringify(process.platform)};
+          document.documentElement.dataset.platform = ${JSON.stringify(fixturePlatform)};
           document.documentElement.dataset.hostKind = 'desktop';
           document.documentElement.dataset.theme = ${JSON.stringify(theme)};
           document.documentElement.style.setProperty('--font-ui', '${font}px');
@@ -280,8 +360,32 @@ async function chromeToggleGeometry(win) {
           hit: target === element || element.contains(target),
           noDrag: getComputedStyle(element).getPropertyValue('-webkit-app-region') === 'no-drag' };
       });
+    const shell = document.querySelector('.app-shell');
+    const historyGroup = document.querySelector('.shell-page-history-controls');
+    const historySuppressed = !!document.querySelector('.mac-window-controls') &&
+      !shell.hasAttribute('data-web-workspace-open') &&
+      ['sidebar-drawer-open', 'sidebar-drawer-closing', 'sidebar-drawer-docking'].some(name => shell.classList.contains(name));
+    const historyState = { expectedSuppressed: historySuppressed, hidden: historyGroup.hidden, inert: historyGroup.inert };
+    const visible = element => element.checkVisibility({ checkVisibilityCSS: true, checkOpacity: true });
+    const guardElements = [...new Set([
+      ...document.querySelectorAll('.section-sidebar-toggle, .shell-page-history-controls button, .sidebar-notifications-button, .sidebar-brand .conversation-search-trigger'),
+      ...activeHeader.querySelectorAll('h1, button'),
+    ])].filter(visible);
+    const separationTargets = guardElements.map(element => {
+      const box = element.getBoundingClientRect();
+      const samples = [[0.5, 0.5], [0.2, 0.2], [0.8, 0.2], [0.2, 0.8], [0.8, 0.8]].map(([x, y]) => {
+        const hit = document.elementFromPoint(box.left + box.width * x, box.top + box.height * y);
+        return { owned: hit === element || element.contains(hit),
+          drawer: !!hit?.closest(settingsOpen ? '.settings-sidebar' : '.sidebar-content'),
+          hit: hit?.closest('button')?.dataset.wuuComponent || hit?.className || null };
+      });
+      return { target: element.dataset.wuuComponent || element.className || element.tagName,
+        bounds: box.toJSON(), button: element instanceof HTMLButtonElement,
+        history: !!element.closest('.shell-page-history-controls'),
+        drawerOwned: !!element.closest(settingsOpen ? '.settings-sidebar' : '.sidebar-content'), samples };
+    });
     return {
-      header: header.toJSON(), peers,
+      header: header.toJSON(), peers, separationTargets, historyState,
       contentAxis: (header.top + parseFloat(headerStyle.paddingTop) + header.bottom - parseFloat(headerStyle.paddingBottom)) / 2,
       shellRow: shellBounds.toJSON(), shellControls,
       shellAxis: (shellBounds.top + parseFloat(shellStyle.paddingTop) + shellBounds.bottom - parseFloat(shellStyle.paddingBottom)) / 2,
@@ -366,8 +470,8 @@ async function waitFor(win, predicate, timeoutMs) {
   throw new Error(`Timed out waiting for condition. Last value: ${JSON.stringify(lastValue)}`);
 }
 
-function evaluate(win, fn) {
-  return win.webContents.executeJavaScript(`(${fn.toString()})()`, true);
+function evaluate(win, fn, argument) {
+  return win.webContents.executeJavaScript(`(${fn.toString()})(${JSON.stringify(argument) ?? ""})`, true);
 }
 
 function delay(ms) {
@@ -378,7 +482,8 @@ function assertTopRow(geometry, context) {
   const details = JSON.stringify({ ...context, geometry });
   const axis = geometry.contentAxis;
   assert.ok(geometry.peers.length >= 2, `Active page title and actions must remain present: ${details}`);
-  const expectedControls = ["sidebar-toggle", "page-history-back", "page-history-forward",
+  const expectedControls = ["sidebar-toggle",
+    ...(geometry.historyState.expectedSuppressed ? [] : ["page-history-back", "page-history-forward"]),
     ...(context.page === "settings" ? [] : ["right-sidebar-toggle"])];
   assert.deepEqual(geometry.shellControls.map(control => control.target).sort(), expectedControls.sort(),
     `The active surface exposes its history and sidebar controls: ${details}`);
@@ -392,6 +497,7 @@ function assertTopRow(geometry, context) {
     assert.ok(Math.abs(box.top + box.height / 2 - geometry.shellAxis) < 0.6,
       `Shell controls share their own row, separate from content headings: ${details}`);
   }
+  assertControlSeparation(geometry, context);
   for (const peer of geometry.peers) {
     assert.ok(Math.abs(peer.centerY - axis) < 0.6, `Peer controls must share the titlebar axis: ${details}`);
     assert.ok(peer.bounds.top >= geometry.header.top - 0.1 && peer.bounds.bottom <= geometry.header.bottom + 0.1,
@@ -404,13 +510,43 @@ function assertTopRow(geometry, context) {
   }
 }
 
+function assertControlSeparation(geometry, context) {
+  const details = JSON.stringify({ ...context, geometry });
+  const targets = geometry.separationTargets;
+  const histories = targets.filter(target => target.history);
+  const suppressed = geometry.historyState.expectedSuppressed;
+  assert.equal(histories.length, suppressed ? 0 : 2, `App history follows the preview visibility policy: ${details}`);
+  assert.equal(geometry.historyState.hidden, suppressed, `Preview visibility is explicit: ${details}`);
+  assert.equal(geometry.historyState.inert, suppressed, `Hidden history cannot receive keyboard input: ${details}`);
+  for (const target of targets) {
+    if (target.button) {
+      const coveredByDrawer = !target.history && !target.drawerOwned && target.samples.every(sample => sample.drawer);
+      assert.ok(coveredByDrawer || target.samples.every(sample => sample.owned),
+        `Visible controls own their interior, not only their center: ${details}`);
+    }
+    for (const history of histories) {
+      if (target === history) continue;
+      // The preview legitimately covers underlying content; its own visible
+      // notification/search controls still have to remain independently usable.
+      if (!target.drawerOwned && target.samples.every(sample => sample.drawer) && !target.samples.some(sample => sample.owned)) continue;
+      const a = history.bounds, b = target.bounds;
+      const overlapX = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+      const overlapY = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+      assert.ok(overlapX <= 0.1 || overlapY <= 0.1,
+        `App-history hitboxes must not overlap another visible header target: ${details}`);
+    }
+  }
+}
+
 function saveResults(failure) {
   fs.writeFileSync(path.join(evidenceDir, "results.json"), JSON.stringify({
-    platform: process.platform, electron: process.versions.electron, rendererHtml,
+    platform: process.platform, fixturePlatform, simulatedPlatform: fixturePlatform !== process.platform,
+    captionCapabilities: "Renderer-only stubs; not evidence of native OS caption behavior.",
+    electron: process.versions.electron, rendererHtml,
     nativeTrafficLights: {
       verification: "Renderer geometry only; native macOS traffic-light pixels require a macOS acceptance run." },
     account: "Not exercised: account UI is disabled in production bundles.",
-    linuxCaption: "Not mounted by this synthetic bridge; onboarding-workspaces E2E covers the real main/preload caption.",
+    linuxCaption: "The titlebar fixture does not add Linux caption actions; onboarding-workspaces E2E covers the real main/preload caption.",
     results, ...(failure ? { failure } : {}),
   }, null, 2));
 }

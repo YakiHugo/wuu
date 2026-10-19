@@ -6421,7 +6421,9 @@ export function App(): JSX.Element {
           },
         }}
       />
-      {!poppedOutMode && !isTouchWebShell() ? <PageHistoryControls {...pageHistory} /> : null}
+      {!poppedOutMode && !isTouchWebShell() ? <PageHistoryControls {...pageHistory}
+        hidden={window.wuu.platform === "darwin" && nativeRibbonPresent && !(showingWebsite && !settingsOpen) && sidebarDrawerPhase !== "closed"}
+      /> : null}
       {/* macOS applies app regions in DOM order, so a later drag titlebar would
         * cover this no-drag control. Keep it as the shell's last child. */}
       {!poppedOutMode ? (

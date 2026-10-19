@@ -414,6 +414,21 @@ describe("collapsed sidebar hover drawer", () => {
     expect(appShell()?.classList.contains("sidebar-drawer-docking")).toBe(false);
   });
 
+  it("occludes Mac app history during drawer preview and restores the same controls after close", async () => {
+    Object.defineProperty(window.wuu, "platform", { configurable: true, value: "darwin" });
+    await renderCollapsedApp();
+    const history = container.querySelector<HTMLElement>('[data-wuu-component="page-history-controls"]')!;
+    expect(history.hidden).toBe(false);
+    await openDrawerViaHoverZone();
+    expect(history.hidden).toBe(true);
+    expect(history.hasAttribute("inert")).toBe(true);
+    await act(async () => window.dispatchEvent(new Event("blur")));
+    await act(async () => { vi.advanceTimersByTime(400); });
+    expect(container.querySelector('[data-wuu-component="page-history-controls"]')).toBe(history);
+    expect(history.hidden).toBe(false);
+    expect(history.hasAttribute("inert")).toBe(false);
+  });
+
   it("retains an edge-opened drawer while the pointer travels over its persistent toggle", async () => {
     window.innerWidth = 820;
     await renderCollapsedApp();

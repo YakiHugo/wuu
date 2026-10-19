@@ -57,6 +57,7 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 - Avoid remeasuring covered conversation inputs during website window resizing, and refit retained drafts when their workspace becomes visible again.
 - Keep full-workspace websites attached to the native window edges during live resizing, including when the shell renderer is busy.
 - Keep explicit workbench sidebar collapse separate from hover previews, and remove the redundant settings breadcrumb root.
+- Reserve app-history controls in the existing content header so narrow Mac sidebars keep notification and search hit areas clear, including zoomed layouts and hover previews.
 
 - Keep the account menu above browser pages while preserving native website visibility on dismissal.
 
