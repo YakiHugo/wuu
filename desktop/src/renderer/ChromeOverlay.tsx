@@ -17,7 +17,7 @@ export function useChromeOverlay(enabled: boolean, bounds: ChromeOverlayRect | n
   onCommand: (command: ChromeOverlayCommand) => void, onDismiss: () => void, focus = false, appearanceElement?: HTMLElement | null): boolean {
   const api = chromeOverlayApi();
   const { locale } = useI18n();
-  const token = useRef(crypto.randomUUID());
+  const token = useRef<string | undefined>(undefined);
   const generation = useRef(0);
   const callbacks = useRef({ onCommand, onDismiss });
   callbacks.current = { onCommand, onDismiss };
@@ -28,19 +28,34 @@ export function useChromeOverlay(enabled: boolean, bounds: ChromeOverlayRect | n
     if (!active) return;
     const changed = () => setAppearanceRevision(value => value + 1);
     const observer = new MutationObserver(changed);
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "style", "class"] });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "data-appearance-motion", "style", "class"] });
     return () => observer.disconnect();
   }, [active]);
   useLayoutEffect(() => {
     if (!api) return;
     return api.onEvent(event => {
-      if (event.token !== token.current || event.generation !== generation.current) return;
+      if (!token.current || event.token !== token.current) return;
+      // Dismissal ends this opening, even if a presentation update crossed it.
+      // Business commands still require the exact currently displayed model.
+      const lifecycle = event.command.type === "dismiss" || event.command.type === "pointer";
+      if (lifecycle ? event.generation > generation.current : event.generation !== generation.current) return;
       callbacks.current.onCommand(event.command);
       if (event.command.type === "dismiss") callbacks.current.onDismiss();
     });
   }, [api]);
   useLayoutEffect(() => {
-    if (!api || !active || !bounds) return;
+    if (!api || !active) return;
+    const currentToken = crypto.randomUUID();
+    token.current = currentToken;
+    generation.current = 0;
+    return () => {
+      void api.hide(currentToken, generation.current);
+      if (token.current === currentToken) token.current = undefined;
+    };
+  }, [api, active]);
+  useLayoutEffect(() => {
+    if (!api || !active || !bounds || !token.current) return;
+    const currentToken = token.current;
     const computed = getComputedStyle(appearanceElement ?? document.documentElement);
     const variables: Record<string, string> = {};
     // Keep user/theme tokens without accepting CSS rules or external resources.
@@ -50,13 +65,9 @@ export function useChromeOverlay(enabled: boolean, bounds: ChromeOverlayRect | n
       if (value.length <= 512 && !/url\s*\(/i.test(value)) variables[name] = value;
     }
     const current = ++generation.current;
-    const request: ChromeOverlayRequest = { version: CHROME_OVERLAY_VERSION, token: token.current, generation: current,
+    const request: ChromeOverlayRequest = { version: CHROME_OVERLAY_VERSION, token: currentToken, generation: current,
       bounds, model, focus, appearance: { theme: document.documentElement.dataset.theme === "dark" ? "dark" : "light", locale, fontFamily: computed.fontFamily, variables } };
-    void api.show(request).catch(() => { if (generation.current === current) callbacks.current.onDismiss(); });
+    void api.show(request).catch(() => { if (token.current === currentToken && generation.current === current) callbacks.current.onDismiss(); });
   }, [api, active, modelKey, boundsKey, locale, appearanceRevision, focus, appearanceElement]);
-  useLayoutEffect(() => {
-    if (!api || !active) return;
-    return () => { void api.hide(token.current, generation.current); };
-  }, [api, active]);
   return active;
 }

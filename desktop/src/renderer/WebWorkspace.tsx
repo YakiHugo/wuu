@@ -519,7 +519,9 @@ function observeWebWorkspaceBounds(host: HTMLElement, resizeWithWindow: boolean,
     if (frame) cancelAnimationFrame(frame);
     frame = 0;
     const rect = visibleElementRect(host);
-    let bounds: HostRect | null = rect && document.visibilityState !== "hidden" ? {
+    // Window occlusion is owned by the native parent, not this layout contract.
+    // A hidden document must retain the selected page's restore geometry.
+    let bounds: HostRect | null = rect ? {
       x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height),
     } : null;
     let occluded = false;

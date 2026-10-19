@@ -220,9 +220,10 @@ async function capture(label) {
   await delay(160);
 }
 async function click(target, label, evidence = true) {
+  if (evidence) { await point(target); await capture(`before-${label}`); }
+  // Capturing can finish a transition; never click its earlier midpoint.
   const p = await point(target);
-  const inRail = await evaluate(p => Boolean(document.elementFromPoint(p.x, p.y)?.closest('.sidebar-ribbon')), p);
-  if (evidence) await capture(`before-${label}`);
+  const inRail = p.nativeChrome || await evaluate(p => Boolean(document.elementFromPoint(p.x, p.y)?.closest('.sidebar-ribbon')), p);
   // Route through the OS so a native chrome view cannot be bypassed by a
   // renderer-only event sent to the placeholder underneath it.
   const zoom = win.webContents.getZoomFactor();
@@ -240,6 +241,17 @@ async function click(target, label, evidence = true) {
     assert.equal(moved.status, 0, moved.stderr || String(moved.error));
     report.actions.push({ label: `${label}-leave-rail`, atMs: Date.now() - started });
     await settle();
+    const account = win.contentView.children.find(view => view.webContents?.getURL() === 'wuu-chrome://ui/chrome-overlay.html?surface=account');
+    const menuRetains = account?.getVisible() || await evaluate(() => [...document.querySelectorAll('.sidebar-account-menu[role=menu]')].some(node => node.getBoundingClientRect().width > 0 && getComputedStyle(node).visibility !== 'hidden'));
+    if (!menuRetains) {
+      await waitFor(() => document.querySelector('.sidebar-ribbon')?.dataset.expanded !== 'true', undefined, 'Ordinary pointer navigation leaves the hover rail', 4000);
+      const deadline = Date.now() + 4000;
+      while (win.contentView.children.some(view => view.webContents?.getURL() === 'wuu-chrome://ui/chrome-overlay.html?surface=ribbon' && view.getVisible())) {
+        if (Date.now() >= deadline) throw new Error('Native hover rail remains visible after pointer leave');
+        await delay(40);
+      }
+      await settle();
+    }
   }
 }
 async function fill(target, text) {
@@ -760,7 +772,7 @@ run().then(async () => {
   clearTimeout(watchdog); websiteFixture?.close();
   const code = report.status === 'passed' ? 0 : 1;
   // The real app's quit hook shuts down its Go child; preserve failing status.
-  app.on('will-quit', () => { process.exitCode = code; });
+  app.once('will-quit', () => app.exit(code));
   app.quit();
   setTimeout(() => app.exit(code), 1000).unref();
 }).catch(async error => {

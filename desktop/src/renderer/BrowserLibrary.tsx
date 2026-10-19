@@ -6,6 +6,7 @@ import { useI18n } from "./i18n";
 import { UILayerPortal } from "./ui/layers/UILayerHost";
 import { rawErrorMessage } from "./UserFacingErrors";
 import { showActionErrorToast } from "./Toast";
+import { NativeBrowserPopover } from "./NativeBrowserPopover";
 import "./styles/browser-library.css";
 
 export function BrowserLibrary({ api, currentURL, currentTitle, onOpen, active = true, destinationId, presentation = "toolbar" }: {
@@ -162,10 +163,15 @@ export function BrowserLibrary({ api, currentURL, currentTitle, onOpen, active =
       <BookOpen className="icon" aria-hidden="true" />
       {presentation === "menu" ? <span>{t("browserLibrary.title")}</span> : null}
     </button>
-    {open ? <UILayerPortal layer="popover">
+    {open ? <NativeBrowserPopover onDismiss={() => close(false)}><UILayerPortal layer="popover">
       <div ref={panel} id={panelId} role="dialog" aria-labelledby={headingId} className="browser-library-panel"
         data-browser-library data-wuu-layer="popover" data-wuu-component="popover" data-web-workspace-owner={destinationId} style={position}
-        onPointerDown={(event) => event.stopPropagation()}>
+        onPointerDown={(event) => event.stopPropagation()}
+        onKeyDown={(event) => {
+          if (event.key !== "Escape") return;
+          event.preventDefault(); event.stopPropagation();
+          if (confirmClear) { setConfirmClear(false); search.current?.focus(); } else close();
+        }}>
         <div className="browser-library-heading">
           <span id={headingId}>{t("browserLibrary.title")}</span>
           <button type="button" className="icon-button" aria-label={t("browserLibrary.close")} onClick={() => close()}><X className="icon" /></button>
@@ -202,6 +208,6 @@ export function BrowserLibrary({ api, currentURL, currentTitle, onOpen, active =
           {section === "history" && Boolean(state?.history.length) && !confirmClear ? <button type="button" className="settings-button settings-button-ghost" data-library-clear-history onClick={() => setConfirmClear(true)}>{t("browserLibrary.clearHistory")}</button> : null}
         </div>
       </div>
-    </UILayerPortal> : null}
+    </UILayerPortal></NativeBrowserPopover> : null}
   </>;
 }

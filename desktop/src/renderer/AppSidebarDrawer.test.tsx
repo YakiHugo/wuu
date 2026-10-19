@@ -443,6 +443,7 @@ describe("collapsed sidebar hover drawer", () => {
     await act(async () => back.focus());
     const ribbon = container.querySelector<HTMLElement>(".sidebar-ribbon")!;
     await act(async () => ribbon.dispatchEvent(new MouseEvent("pointerover", { bubbles: true })));
+    await act(async () => { await vi.advanceTimersByTimeAsync(120); });
     expect(ribbon.dataset.expanded).toBe("true");
     expect(history.hidden).toBe(collapsed);
     expect(history.hasAttribute("inert")).toBe(collapsed);
@@ -461,6 +462,7 @@ describe("collapsed sidebar hover drawer", () => {
     const ribbon = container.querySelector<HTMLElement>(".sidebar-ribbon")!;
     await act(async () => toggle.focus());
     await act(async () => ribbon.dispatchEvent(new MouseEvent("pointerover", { bubbles: true })));
+    await act(async () => { await vi.advanceTimersByTimeAsync(120); });
     expect(toggle.hidden).toBe(platform === "darwin");
     expect(toggle.hasAttribute("inert")).toBe(platform === "darwin");
     expect(document.activeElement).toBe(platform === "darwin" ? appShell() : toggle);

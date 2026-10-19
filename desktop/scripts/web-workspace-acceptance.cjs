@@ -6,7 +6,7 @@ const path = require('node:path');
 const http = require('node:http');
 const { spawnSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
-const { app, BrowserWindow, dialog, Menu, nativeImage, session, webContents } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, session, webContents } = require('electron');
 const { prepareMediaFixture, serveMediaFixture, runBrowserMediaAcceptance } = require('./browser-media-acceptance.cjs');
 
 async function createWebsiteFixture(home) {
@@ -77,7 +77,7 @@ document.querySelector('#camera').onclick=async()=>{document.querySelector('#per
 }
 
 async function runWebsiteAcceptance(h, fixture) {
-  const { win, report, output, started, save, evaluate, waitFor, settle, delay, point, fill, key, pick, test, goConversations, goSettings, appearance, plugins, conversations } = h;
+  const { win, report, output, started, save, evaluate, waitFor, settle, delay, point, fill: fillShell, key, pick, test, goConversations, goSettings, appearance, plugins, conversations } = h;
   const origin = fixture.origin;
   const addTabButton = '.sidebar-ribbon-add';
   const webTabs = '[data-wuu-component="website-navigation-item"]';
@@ -85,6 +85,7 @@ async function runWebsiteAcceptance(h, fixture) {
   const siteIDs = new Map();
   const ribbonGroup = 'ribbon-browser';
   const readSite = () => evaluate(() => window.wuu.webWorkspace.initializeTabs([]));
+  let independentFixtures = false;
   const webRoot = '[data-wuu-component="web-workspace"]';
   const address = `${webRoot} .web-workspace-toolbar .workspace-browser-url-input`;
   const startInput = '.web-workspace-stage:not([hidden]) .web-workspace-start-search input';
@@ -97,8 +98,104 @@ async function runWebsiteAcceptance(h, fixture) {
   const chromeView = kind => win.contentView.children.find(view => view.webContents && !view.webContents.isDestroyed() && view.webContents.getURL() === `wuu-chrome://ui/chrome-overlay.html?surface=${kind}`);
   const evaluateContents = (wc, fn, value) => wc.executeJavaScript(`(${fn})(${JSON.stringify(value)})`);
   const evaluateRibbon = (fn, value) => chromeView('ribbon')?.getVisible() ? evaluateContents(chromeView('ribbon').webContents, fn, value) : evaluate(fn, value);
+  // Toolbar popovers reuse React in a clipped native child below a View.
+  // Walk the native hierarchy rather than querying its shell placeholder.
+  function nativeLayers(parent = win.contentView, x = 0, y = 0, top) {
+    return parent.children.flatMap(view => {
+      if (!view.getVisible()) return [];
+      const b = view.getBounds(), layer = { view, x: x + b.x, y: y + b.y, top: top || view };
+      return [...(view.webContents && !view.webContents.isDestroyed() ? [layer] : []), ...nativeLayers(view, layer.x, layer.y, layer.top)];
+    });
+  }
+  async function nativePopover() {
+    for (const layer of nativeLayers()) {
+      const wc = layer.view.webContents;
+      if (wc.getURL() !== 'about:blank') continue;
+      if (await wc.executeJavaScript('document.body?.hasAttribute("data-browser-popover")').catch(() => false)) return layer;
+    }
+  }
+  async function evaluatePopover(fn, value) {
+    const layer = await nativePopover();
+    return layer ? evaluateContents(layer.view.webContents, fn, value) : undefined;
+  }
+  const waitPopover = (fn, value, label = String(fn)) => until(() => evaluatePopover(`async argument => Boolean(await (${fn})(argument))`, value), label);
+  async function fill(target, value) {
+    const query = typeof target === 'string' ? target : target.selector;
+    if (!await evaluatePopover(selector => Boolean(document.querySelector(selector)), query)) return fillShell(target, value);
+    const wc = (await nativePopover()).view.webContents;
+    await click(target, 'focus-native-popover-input', false);
+    await until(() => wc.isFocused(), 'Native popover owns keyboard focus before typing');
+    await waitPopover(selector => document.hasFocus() && document.activeElement?.matches(selector), query);
+    const nativeInputEvents = [];
+    const observeNativeInput = (_event, input) => { if (nativeInputEvents.length < 100) nativeInputEvents.push({ at: Date.now() - started, ...input }); };
+    wc.on('before-input-event', observeNativeInput);
+    await evaluateContents(wc, selector => {
+      const events = [], input = document.querySelector(selector);
+      const snapshot = (type, event) => {
+        if (events.length >= 160) return;
+        events.push({ type, at: performance.now(), trusted: event?.isTrusted, key: event?.key, data: event?.data,
+          inputType: event?.inputType, ctrl: event?.ctrlKey, alt: event?.altKey, meta: event?.metaKey, shift: event?.shiftKey, defaultPrevented: event?.defaultPrevented,
+          focused: document.hasFocus(), active: document.activeElement === input,
+          connected: input?.isConnected, value: input?.value, selection: [input?.selectionStart, input?.selectionEnd] });
+      };
+      const types = ['keydown', 'keyup', 'beforeinput', 'input', 'change', 'selectionchange', 'focusin', 'focusout'];
+      const observe = event => {
+        snapshot(event.type, event);
+        if (event.type === 'input') requestAnimationFrame(() => snapshot('input-next-frame'));
+      };
+      types.forEach(type => document.addEventListener(type, observe, true));
+      window.__wuuAcceptancePopoverInput = { events, snapshot, stop: () => types.forEach(type => document.removeEventListener(type, observe, true)) };
+      snapshot('before-native-select-all');
+    }, query);
+    try {
+      xinput(['key', '--clearmodifiers', 'ctrl+a']);
+      await waitPopover(selector => { const input = document.querySelector(selector); return document.hasFocus() && document.activeElement === input
+        && input.selectionStart === 0 && input.selectionEnd === input.value.length; }, query);
+      // Let each real key reach the controlled cross-document input before
+      // sending the next. No dropped character is retried or silently repaired.
+      let entered = '';
+      for (const character of value) {
+        await evaluateContents(wc, character => window.__wuuAcceptancePopoverInput.snapshot(`before-native-character:${character}`), character);
+        xinput(['type', '--clearmodifiers', '--delay', '8', character]);
+        entered += character;
+        await waitPopover(({ selector, value }) => document.querySelector(selector)?.value === value, { selector: query, value: entered });
+        await evaluateContents(wc, () => window.__wuuAcceptancePopoverInput.snapshot('native-character-acknowledged'));
+      }
+      if (!value) { xinput(['key', 'BackSpace']); await waitPopover(selector => document.querySelector(selector)?.value === '', query); }
+    } catch (error) {
+      report.nativePopoverInputFailure = { selector: query, expected: value, focusedContentsID: webContents.getFocusedWebContents()?.id,
+        input: await evaluateContents(wc, selector => { const input = document.querySelector(selector); return { focused: document.hasFocus(), active: document.activeElement?.outerHTML.slice(0, 300), value: input?.value, selection: [input?.selectionStart, input?.selectionEnd] }; }, query) };
+      save(); throw error;
+    } finally {
+      wc.removeListener('before-input-event', observeNativeInput);
+      report.nativePopoverInputTraces ||= [];
+      report.nativePopoverInputTraces.push({ selector: query, expected: value, contentsID: wc.id, nativeInputEvents,
+        events: await evaluateContents(wc, () => {
+          const trace = window.__wuuAcceptancePopoverInput;
+          trace?.snapshot('finished'); trace?.stop(); delete window.__wuuAcceptancePopoverInput;
+          return trace?.events;
+        }).catch(error => ({ error: String(error) })) });
+      save();
+    }
+  }
   async function chromePoint(target) {
     const query = typeof target === 'string' ? { selector: target } : target;
+    const popover = await nativePopover();
+    if (popover) {
+      const p = await evaluateContents(popover.view.webContents, ({ selector, text }) => {
+        const node = [...document.querySelectorAll(selector)].find(node => (text === undefined || (node.getAttribute('aria-label') || node.textContent || '').trim() === text) && node.getBoundingClientRect().width > 0);
+        if (!node) return null;
+        const r = node.getBoundingClientRect(), x = r.x + r.width / 2, y = r.y + r.height / 2;
+        if (!node.contains(document.elementFromPoint(x, y)) || node.disabled) throw new Error('Native popover target is occluded or disabled: ' + selector);
+        return { x, y };
+      }, query);
+      if (p) {
+        const z = popover.view.webContents.getZoomFactor(), ownerZoom = win.webContents.getZoomFactor();
+        const screen = { x: popover.x + p.x * z, y: popover.y + p.y * z }, clip = popover.top.getBounds();
+        assert.ok(screen.x >= clip.x && screen.x < clip.x + clip.width && screen.y >= clip.y && screen.y < clip.y + clip.height, 'Native popover control is inside its clipping viewport');
+        return { x: screen.x / ownerZoom, y: screen.y / ownerZoom, nativeChrome: 'popover' };
+      }
+    }
     for (const kind of ['account', 'ribbon']) {
       const view = chromeView(kind);
       if (!view?.getVisible()) continue;
@@ -144,6 +241,7 @@ async function runWebsiteAcceptance(h, fixture) {
     report.screenshots.push({ file: name, source: 'x11-whole-native-window', sha256: createHash('sha256').update(taken.stdout).digest('hex'), atMs: Date.now() - started, image: image.getSize(), window: bounds,
       nativeFocus: { ownerFocused: win.isFocused(), ownerFullscreen: win.isFullScreen(), focusedContentsID: webContents.getFocusedWebContents()?.id ?? null },
       nativeViews: win.contentView.children.filter(view => view.webContents && !view.webContents.isDestroyed()).map(view => ({ id: view.webContents.id, url: view.webContents.getURL(), visible: view.getVisible(), focused: view.webContents.isFocused(), bounds: view.getBounds(), zoom: view.webContents.getZoomFactor() })),
+      visibleNativeLayers: nativeLayers().map(({ view, x, y, top }) => ({ id: view.webContents.id, url: view.webContents.getURL(), focused: view.webContents.isFocused(), x, y, bounds: view.getBounds(), clip: top.getBounds() })),
       activeElement: await evaluate(() => document.activeElement?.outerHTML.slice(0, 240)) });
     save(); await delay(160);
   }
@@ -151,19 +249,25 @@ async function runWebsiteAcceptance(h, fixture) {
     const result = spawnSync('xdotool', args, { encoding: 'utf8', timeout: 5000 });
     assert.equal(result.status, 0, result.stderr || String(result.error));
   }
-  async function leaveRail() {
+  async function leaveRail(waitForCollapse = true) {
     const outer = win.getContentBounds(), zoom = win.webContents.getZoomFactor();
     xinput(['mousemove', String(Math.round(outer.x + Math.min(300, outer.width / zoom - 20) * zoom)), String(Math.round(outer.y + 90 * zoom))]);
     await settle();
+    // Native chrome has a 120ms pointer-exit grace. Shell rAFs alone do not
+    // acknowledge its dismissal; never replace this with Escape or forced blur.
+    if (waitForCollapse) await until(async () => !chromeView('ribbon')?.getVisible()
+      && await evaluate(() => document.querySelector('.sidebar-ribbon')?.dataset.expanded !== 'true'), 'Native hover rail acknowledges pointer leave', 4000);
   }
   async function hoverTab(id) {
     const p = await chromePoint(tabButton(id)), outer = win.getContentBounds(), zoom = win.webContents.getZoomFactor();
     xinput(['mousemove', String(Math.round(outer.x + 26 * zoom)), String(Math.round(outer.y + p.y * zoom))]);
     await waitFor(() => document.querySelector('.sidebar-ribbon')?.dataset.expanded === 'true');
     await until(() => chromeView('ribbon')?.getVisible(), 'Native expanded ribbon paints');
+    const width = await evaluate(() => document.querySelector('.sidebar-ribbon').getBoundingClientRect().width);
+    await until(() => Math.abs(chromeView('ribbon').getBounds().width - width * zoom) <= 1, 'Native hover reveal reaches the click targets');
   }
   async function finishRailInteraction(wc, label) {
-    await leaveRail();
+    await leaveRail(false);
     if (await evaluate(() => document.querySelector('.sidebar-ribbon')?.dataset.expanded === 'true')) {
       // Escape/Tab can correctly retain keyboard focus in the expanded rail.
       // A real click back into browser chrome ends that interaction explicitly.
@@ -192,7 +296,9 @@ async function runWebsiteAcceptance(h, fixture) {
   async function typeAddress(value, label) {
     await focusAddress(label);
     xinput(['key', '--clearmodifiers', 'ctrl+a']);
-    xinput(['type', '--clearmodifiers', '--delay', '0', value]);
+    await waitFor(selector => { const input = document.querySelector(selector); return document.activeElement === input
+      && input.selectionStart === 0 && input.selectionEnd === input.value.length; }, address, 'Native select-all reaches the address input');
+    xinput(['type', '--clearmodifiers', '--delay', '8', value]);
     await waitFor(({ selector, value }) => document.activeElement?.matches(selector) && document.activeElement.value === value, { selector: address, value });
   }
   async function click(target, label, evidence = true, retainHover = false) {
@@ -206,7 +312,11 @@ async function runWebsiteAcceptance(h, fixture) {
     report.actions.push({ label: `web-${label}`, input: 'native-x11', atMs: Date.now() - started, point: p });
     await settle();
     if (evidence) await capture(`after-${label}`);
-    if (inRail && !retainHover) await leaveRail();
+    if (inRail && !retainHover) {
+      // An open account menu intentionally retains the rail until dismissal.
+      const menuRetains = chromeView('account')?.getVisible() || await evaluate(() => [...document.querySelectorAll('.sidebar-account-menu[role=menu]')].some(node => node.getBoundingClientRect().width > 0 && getComputedStyle(node).visibility !== 'hidden'));
+      await leaveRail(!menuRetains);
+    }
   }
   async function mascotGaze() {
     const selector = '.web-workspace-stage:not([hidden]) .web-workspace-start-mascot';
@@ -277,7 +387,15 @@ async function runWebsiteAcceptance(h, fixture) {
     return Promise.all(views().map(async view => ({ url: view.webContents.getURL(), visible: view.getVisible(), visibility: await view.webContents.executeJavaScript('document.visibilityState') })));
   }
   async function verticalTabGeometry(expanded = false) {
-    if (expanded) await until(() => chromeView('ribbon')?.getVisible(), 'Expanded native ribbon is visible');
+    await waitFor(expanded => {
+      const bar = document.querySelector('.sidebar-ribbon');
+      return (bar?.dataset.expanded === 'true') === expanded
+        && bar.getAnimations({ subtree: true }).every(animation => animation.playState !== 'running');
+    }, expanded, 'Ribbon reaches its requested interaction state');
+    const expectedWidth = await evaluate(() => document.querySelector('.sidebar-ribbon').getBoundingClientRect().width);
+    await until(() => expanded
+      ? chromeView('ribbon')?.getVisible() && Math.abs(chromeView('ribbon').getBounds().width - expectedWidth * win.webContents.getZoomFactor()) <= 1
+      : !chromeView('ribbon')?.getVisible(), 'Native ribbon finishes its reveal or dismissal');
     const geometry = await evaluateRibbon(() => {
       const bar = document.querySelector('.sidebar-ribbon'), r = bar.getBoundingClientRect();
       const rows = [...bar.querySelectorAll('.sidebar-ribbon-tab-row')].map(row => {
@@ -291,7 +409,7 @@ async function runWebsiteAcceptance(h, fixture) {
       return { width: r.width, expanded: bar.dataset.expanded === 'true', viewportWidth: innerWidth, rows };
     });
     assert.equal(geometry.expanded, expanded, `Rail expansion follows the current interaction: ${JSON.stringify(geometry)}`);
-    assert.ok(Math.abs(geometry.width - (expanded ? 200 : 52)) <= 1, `Rail is52px at rest and200px only while expanded: ${JSON.stringify(geometry)}`);
+    assert.ok(Math.abs(geometry.width - expectedWidth) <= 1, `Native ribbon matches the shell interaction bounds: ${JSON.stringify(geometry)}`);
     assert.ok(geometry.rows.every(row => row.title && (expanded ? row.titleVisible && row.titleWidth >= 20 : !row.titleVisible)), 'Destination labels appear only in the expanded overlay');
     assert.ok(geometry.rows.some(row => row.id === 'conversations' && !row.close), 'Built-in Chat has no close button');
     assert.ok(geometry.rows.every(row => row.close === row.web), 'Only real website tabs have direct close controls');
@@ -430,31 +548,19 @@ async function runWebsiteAcceptance(h, fixture) {
     xinput(['key', '--clearmodifiers', 'Return']);
     await until(() => nativeView('/alpha')?.getVisible() && !nativeView('/alpha').webContents.isLoading(), 'Editable URL submits after toolbar drag');
   }
-  async function assertMenuBackdrop(label, qualitySource) {
-    await hidden(label);
-    const selector = '.web-workspace-stage:not([hidden]) .web-workspace-backdrop';
-    await waitFor(selector => {
-      const image = document.querySelector(selector);
-      return image?.complete && image.naturalWidth > 100 && image.naturalHeight > 100 && image.getBoundingClientRect().width > 100;
-    }, selector, `${label}: real page snapshot decoded behind menu`);
-    const source = await evaluate(selector => document.querySelector(selector).src, selector);
-    const image = nativeImage.createFromDataURL(source);
-    const bitmap = image.getBitmap(), colors = new Set();
-    for (let i = 0; i + 3 < bitmap.length; i += 4 * 97) colors.add(bitmap.readUInt32LE(i));
-    assert.ok(colors.size > 12, 'Snapshot has actual nonblank page content, not a flat placeholder');
-    let quality;
-    if (qualitySource) {
-      const live = await qualitySource.capturePage(undefined, { stayHidden: true });
-      const scales = live.getScaleFactors(), highestScale = Math.max(1, ...scales);
-      const original = live.toPNG({ scaleFactor: highestScale });
-      assert.ok(source.startsWith('data:image/png;base64,'), 'The authored page backdrop uses lossless PNG');
-      const backdrop = Buffer.from(source.slice(source.indexOf(',') + 1), 'base64');
-      const pixels = buffer => ({ width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) });
-      quality = { nativeScaleFactors: scales, encodedScale: highestScale, nativePixels: pixels(original), backdropPixels: pixels(backdrop), bytes: backdrop.length };
-      assert.deepEqual(quality.backdropPixels, quality.nativePixels, 'Profile backdrop preserves the native capture pixel resolution without1280-edge downsampling');
-    }
-    report.actions.push({ label: `${label}-snapshot`, atMs: Date.now() - started, image: image.getSize(), sampledColors: colors.size, quality, sha256: createHash('sha256').update(image.toPNG()).digest('hex') });
-    save();
+  async function assertLivePopover(label) {
+    await until(() => nativePopover(), `${label}: native popover is visible`);
+    const layer = await nativePopover(), view = views().find(view => view.getVisible());
+    assert.ok(view, `${label}: the underlying native website remains visible`);
+    const wc = view.webContents, bounds = view.getBounds();
+    const before = await wc.executeJavaScript('({frames:window.fixtureFrames,animation:getComputedStyle(document.querySelector("#live-marker")).transform})');
+    await delay(160);
+    const after = await wc.executeJavaScript('({frames:window.fixtureFrames,animation:getComputedStyle(document.querySelector("#live-marker")).transform})');
+    assert.ok(view.getVisible() && after.frames > before.frames, `${label}: live guest frames continue`);
+    assert.notEqual(after.animation, before.animation, `${label}: visible page animation continues`);
+    assert.deepEqual(view.getBounds(), bounds, `${label}: native page viewport is unchanged`);
+    assert.ok(win.contentView.children.indexOf(layer.top) > win.contentView.children.indexOf(view), `${label}: native popover is above the page`);
+    report.actions.push({ label: `${label}-live-popover`, contentsID: layer.view.webContents.id, pageID: wc.id, bounds, clip: layer.top.getBounds(), atMs: Date.now() - started }); save();
   }
   async function profileMenu(label, wc) {
     if (label === 'narrow-new-tab') await hoverTab((await readSite()).activeTabId);
@@ -539,6 +645,11 @@ async function runWebsiteAcceptance(h, fixture) {
   async function tabMenu(id, label) {
     await hoverTab(id);
     const p = await chromePoint(tabButton(id)), bounds = win.getContentBounds(), zoom = win.webContents.getZoomFactor();
+    const wc = chromeView('ribbon').webContents, trace = { label, id, point: p, commands: [] };
+    const observe = (event, message) => {
+      if (event.sender === wc && trace.commands.length < 40) trace.commands.push({ token: message?.token, generation: message?.generation, command: message?.command, atMs: Date.now() - started });
+    };
+    ipcMain.on('wuu:chrome-overlay-command', observe);
     const popup = Menu.prototype.popup; let items;
     Menu.prototype.popup = function (...args) { items = this.items.map(item => ({ label: item.label, enabled: item.enabled })); return popup.apply(this, args); };
     try {
@@ -546,7 +657,17 @@ async function runWebsiteAcceptance(h, fixture) {
       await until(() => items, 'Actual native tab context menu opens');
       await capture(`tab-context-${label}`);
       return items.map(item => item.label);
-    } finally { Menu.prototype.popup = popup; }
+    } finally {
+      Menu.prototype.popup = popup;
+      ipcMain.removeListener('wuu:chrome-overlay-command', observe);
+      trace.items = items;
+      trace.current = await evaluateContents(wc, async id => {
+        const request = await window.wuuChromeOverlay.ready();
+        return { token: request?.token, generation: request?.generation, item: request?.model.items?.find(item => item.id === id),
+          focused: document.hasFocus(), active: document.activeElement?.outerHTML.slice(0, 240) };
+      }, id).catch(error => ({ unavailable: String(error) }));
+      (report.tabMenuTraces ||= []).push(trace); save();
+    }
   }
   async function closeActiveTab(label) {
     const before = await readSite(), id = before.activeTabId;
@@ -587,8 +708,33 @@ async function runWebsiteAcceptance(h, fixture) {
     assert.equal(wc.session, session.fromPartition('persist:wuu-browser'), 'Uses the existing persistent browser profile');
     return { sandbox: p.sandbox, contextIsolation: p.contextIsolation, nodeIntegration: p.nodeIntegration, preload: p.preload || null };
   }
+  async function ensureIndependentFixtures(journey) {
+    // The first journey owns real +/address/Pin acceptance. Once its result is
+    // recorded, missing prerequisites must not turn every later journey into
+    // the same missing-selector failure. API calls here are setup, not passes.
+    for (const [name, pathname] of [['Fixture Alpha', '/alpha'], ['Fixture Beta', '/beta']]) {
+      const state = await readSite();
+      if (state.tabs.some(tab => tab.id === siteIDs.get(name))) continue;
+      const restored = await evaluate(({ id, url }) => window.wuu.webWorkspace.createTab(id, url), { id: ribbonGroup, url: origin + pathname });
+      siteIDs.set(name, restored.activeTabId);
+      if (name === 'Fixture Alpha') alphaID = restored.activeTabId;
+      report.actions.push({ label: 'restore-missing-independent-fixture', setupOnly: true, journey, name, id: restored.activeTabId, url: origin + pathname, atMs: Date.now() - started }); save();
+      await waitFor(id => document.querySelector(`[data-ribbon-id="${id}"]`), restored.activeTabId);
+    }
+  }
+  async function ensureIndependentCookie(journey) {
+    const cookieCheck = report.checks.find(check => check.name === 'native website security cookies history reload and retained input');
+    if (cookieCheck?.status === 'passed') return;
+    const cookies = session.fromPartition('persist:wuu-browser').cookies;
+    if ((await cookies.get({ url: origin })).some(cookie => cookie.name === 'wuu_acceptance' && cookie.value === 'synthetic-session')) return;
+    await cookies.set({ url: origin, name: 'wuu_acceptance', value: 'synthetic-session', path: '/', expirationDate: Date.now() / 1000 + 86400, sameSite: 'lax' });
+    report.actions.push({ label: 'restore-independent-synthetic-cookie', setupOnly: true, journey, reason: 'The earlier cookie journey did not pass', atMs: Date.now() - started }); save();
+  }
   const testNative = (name, action) => test(name, async () => {
-    try { return await action(); }
+    try {
+      if (independentFixtures) await ensureIndependentFixtures(name);
+      return await action();
+    }
     catch (error) {
       try { await capture(`failure-${name}`); } catch {}
       // Keep the original failure, then dismiss only this fixture's popups.
@@ -607,7 +753,9 @@ async function runWebsiteAcceptance(h, fixture) {
     };
     const created = [];
     const observe = (_event, wc) => {
-      if (wc === win.webContents) return;
+      // Trusted ribbon/account/capsule views are separate WebContents and
+      // must not be counted as repeated Notion website creation.
+      if (wc === win.webContents || wc.session !== session.fromPartition('persist:wuu-browser')) return;
       created.push(wc);
       const record = (event, detail = {}) => {
         diagnostic.events.push({ atMs: Date.now() - started, id: wc.id, event, ...detail }); save();
@@ -727,43 +875,72 @@ async function runWebsiteAcceptance(h, fixture) {
   });
 
   await testNative('left plus opens one blank mascot tab and Pin retains the website', async () => {
-    assert.equal(await evaluate(selector => document.querySelectorAll(selector).length, webTabs), 0, 'No website tabs are added by default');
-    await blankTab('first-left-web-tab');
-    assert.equal(await evaluate(() => Boolean(document.querySelector('.web-workspace-tabstrip'))), false);
-    await fill(startInput, 'javascript:alert(1)'); xinput(['key', '--clearmodifiers', 'Return']);
-    await waitFor(selector => document.querySelector(selector)?.getAttribute('aria-invalid') === 'true', startInput);
-    assert.equal((await readSite()).url, 'about:blank', 'Unsafe scheme never navigates');
-    await capture('unsafe-address-rejected');
-    await closeActiveTab('close-final-blank-tab');
-    assert.equal((await readSite()).tabs.length, 0, 'Closing the final tab leaves no artificial replacement');
-    await waitFor(() => !document.querySelector('.web-workspace-stage:not([hidden])'));
-    alphaID = await blankTab('new-alpha-left-tab'); siteIDs.set('Fixture Alpha', alphaID);
-    await fill(startInput, origin + '/alpha'); xinput(['key', '--clearmodifiers', 'Return']);
-    await until(() => nativeView('/alpha')?.getVisible() && !nativeView('/alpha').webContents.isLoading(), 'First left tab loads fixture');
-    const options = await tabMenu(alphaID, 'pin-alpha');
-    assert.deepEqual(options, ['Pin tab', 'Close tab'], 'Website context menu stays minimal');
-    xinput(['key', 'Home', 'key', 'Return']);
-    await waitFor(id => document.querySelector(`[data-ribbon-id="${id}"]`)?.dataset.pinned === 'true', alphaID);
-    await addSite('Fixture Beta', '/beta');
-    await openSite('Fixture Alpha', '/alpha');
-    const vertical = { collapsed: await verticalTabGeometry() }, hostBefore = nativeView('/alpha').getBounds();
-    const viewportBefore = await nativeView('/alpha').webContents.executeJavaScript('({width:innerWidth,height:innerHeight})');
-    const focusBeforeHover = nativeView('/alpha').webContents.isFocused();
-    await hoverTab(siteIDs.get('Fixture Beta'));
-    vertical.expanded = await verticalTabGeometry(true);
-    await liveChrome('ribbon', nativeView('/alpha').webContents, 'hover rail');
-    assert.equal(nativeView('/alpha').webContents.isFocused(), focusBeforeHover, 'Pointer hover preserves existing native keyboard focus');
-    assert.deepEqual(nativeView('/alpha').getBounds(), hostBefore, 'Hover expansion does not resize the native website');
-    assert.deepEqual(await nativeView('/alpha').webContents.executeJavaScript('({width:innerWidth,height:innerHeight})'), viewportBefore, 'Hover expansion leaves the page viewport unchanged');
-    assert.ok(await evaluateRibbon(id => { const close = document.querySelector(`[data-ribbon-close-id="${id}"]`); return close && getComputedStyle(close).visibility === 'visible' && Number(getComputedStyle(close).opacity) > 0.95; }, siteIDs.get('Fixture Beta')), 'Hovered native tab exposes its close control');
-    await capture('vertical-left-tabs-with-hover-close');
-    await leaveRail();
-    await until(() => nativeView('/alpha')?.getVisible() && !chromeView('ribbon')?.getVisible(), 'Pointer leave dismisses chrome while retaining the same live page');
-    vertical.restored = await verticalTabGeometry();
-    await capture('collapsed-left-tabs-unchanged-web-viewport');
-    return { alphaID, betaID: siteIDs.get('Fixture Beta'), options, tabs: (await readSite()).tabs, vertical };
+    const probeContents = [win.webContents, chromeView('ribbon')?.webContents].filter(Boolean);
+    for (const wc of probeContents) await evaluateContents(wc, () => {
+      const events = [], types = ['pointerover', 'pointerout', 'pointermove', 'focusin', 'focusout', 'focus', 'blur'];
+      const observe = event => {
+        const nav = document.querySelector('.sidebar-ribbon');
+        events.push({ type: event.type, at: performance.now(), x: event.clientX, y: event.clientY,
+          target: event.target instanceof Element ? event.target.outerHTML.slice(0, 160) : String(event.target),
+          related: event.relatedTarget instanceof Element ? event.relatedTarget.outerHTML.slice(0, 160) : String(event.relatedTarget),
+          expanded: nav?.dataset.expanded, hovered: nav?.matches(':hover'), focusedWithin: nav?.contains(document.activeElement) });
+        if (events.length > 160) events.shift();
+      };
+      types.forEach(type => window.addEventListener(type, observe, true));
+      window.__wuuRailAcceptance = { events, stop: () => types.forEach(type => window.removeEventListener(type, observe, true)) };
+    });
+    try {
+      assert.equal(await evaluate(selector => document.querySelectorAll(selector).length, webTabs), 0, 'No website tabs are added by default');
+      await blankTab('first-left-web-tab');
+      assert.equal(await evaluate(() => Boolean(document.querySelector('.web-workspace-tabstrip'))), false);
+      await fill(startInput, 'javascript:alert(1)'); xinput(['key', '--clearmodifiers', 'Return']);
+      await waitFor(selector => document.querySelector(selector)?.getAttribute('aria-invalid') === 'true', startInput);
+      assert.equal((await readSite()).url, 'about:blank', 'Unsafe scheme never navigates');
+      await capture('unsafe-address-rejected');
+      await closeActiveTab('close-final-blank-tab');
+      assert.equal((await readSite()).tabs.length, 0, 'Closing the final tab leaves no artificial replacement');
+      await waitFor(() => !document.querySelector('.web-workspace-stage:not([hidden])'));
+      alphaID = await blankTab('new-alpha-left-tab'); siteIDs.set('Fixture Alpha', alphaID);
+      await fill(startInput, origin + '/alpha'); xinput(['key', '--clearmodifiers', 'Return']);
+      await until(() => nativeView('/alpha')?.getVisible() && !nativeView('/alpha').webContents.isLoading(), 'First left tab loads fixture');
+      const options = await tabMenu(alphaID, 'pin-alpha');
+      assert.deepEqual(options, ['Pin tab', 'Close tab'], 'Website context menu stays minimal');
+      xinput(['key', 'Home', 'key', 'Return']);
+      await waitFor(id => document.querySelector(`[data-ribbon-id="${id}"]`)?.dataset.pinned === 'true', alphaID);
+      await addSite('Fixture Beta', '/beta');
+      await openSite('Fixture Alpha', '/alpha');
+      const vertical = { collapsed: await verticalTabGeometry() }, hostBefore = nativeView('/alpha').getBounds();
+      const viewportBefore = await nativeView('/alpha').webContents.executeJavaScript('({width:innerWidth,height:innerHeight})');
+      const focusBeforeHover = nativeView('/alpha').webContents.isFocused();
+      await hoverTab(siteIDs.get('Fixture Beta'));
+      vertical.expanded = await verticalTabGeometry(true);
+      await liveChrome('ribbon', nativeView('/alpha').webContents, 'hover rail');
+      assert.equal(nativeView('/alpha').webContents.isFocused(), focusBeforeHover, 'Pointer hover preserves existing native keyboard focus');
+      assert.deepEqual(nativeView('/alpha').getBounds(), hostBefore, 'Hover expansion does not resize the native website');
+      assert.deepEqual(await nativeView('/alpha').webContents.executeJavaScript('({width:innerWidth,height:innerHeight})'), viewportBefore, 'Hover expansion leaves the page viewport unchanged');
+      assert.ok(await evaluateRibbon(id => { const close = document.querySelector(`[data-ribbon-close-id="${id}"]`); return close && getComputedStyle(close).visibility === 'visible' && Number(getComputedStyle(close).opacity) > 0.95; }, siteIDs.get('Fixture Beta')), 'Hovered native tab exposes its close control');
+      await capture('vertical-left-tabs-with-hover-close');
+      await leaveRail();
+      await until(() => nativeView('/alpha')?.getVisible() && !chromeView('ribbon')?.getVisible(), 'Pointer leave dismisses chrome while retaining the same live page');
+      vertical.restored = await verticalTabGeometry();
+      await capture('collapsed-left-tabs-unchanged-web-viewport');
+      return { alphaID, betaID: siteIDs.get('Fixture Beta'), options, tabs: (await readSite()).tabs, vertical };
+    } finally {
+      report.firstTabRailInteraction = await Promise.all(probeContents.map(async wc => {
+        if (wc.isDestroyed()) return { id: wc.id, destroyed: true };
+        const state = await evaluateContents(wc, () => {
+          const nav = document.querySelector('.sidebar-ribbon'), probe = window.__wuuRailAcceptance;
+          const result = { events: probe.events, expanded: nav?.dataset.expanded, hovered: nav?.matches(':hover'),
+            focusedWithin: nav?.contains(document.activeElement), documentFocused: document.hasFocus(), activeElement: document.activeElement?.outerHTML.slice(0, 300) };
+          probe.stop(); delete window.__wuuRailAcceptance; return result;
+        });
+        return { id: wc.id, url: wc.getURL(), focused: wc.isFocused(), ...state };
+      })).catch(error => [{ unavailable: String(error) }]);
+      save();
+    }
   });
 
+  independentFixtures = true;
   await testNative('ribbon reorders Chat away from first with real keyboard and pointer', async () => {
     await openSite('Fixture Alpha', '/alpha');
     const before = await evaluate(() => [...document.querySelectorAll('.sidebar-ribbon-main [data-ribbon-id]')].map(node => node.dataset.ribbonId));
@@ -891,11 +1068,11 @@ async function runWebsiteAcceptance(h, fixture) {
         if (width === 440) {
           for (const [name, trigger, panel] of [['library', '[data-browser-library-trigger]', '[data-browser-library]'], ['downloads', '[data-web-workspace-downloads-trigger]', '[data-web-workspace-downloads]']]) {
             await click(`.web-workspace-toolbar ${trigger}`, `narrow-toolbar-${name}`, false);
-            await waitFor(selector => document.querySelector(selector), panel);
-            await assertMenuBackdrop(`narrow-toolbar-${name}`);
+            await waitPopover(selector => document.querySelector(selector), panel);
+            await assertLivePopover(`narrow-toolbar-${name}`);
             await capture(`narrow-toolbar-${name}`);
             xinput(['key', '--clearmodifiers', 'Escape']);
-            await waitFor(selector => !document.querySelector(selector), panel);
+            await until(async () => !await nativePopover(), `Native ${name} closes on Escape`);
             await until(() => view.getVisible(), 'Closing narrow toolbar menus restores the same native webpage');
           }
         }
@@ -1007,7 +1184,7 @@ async function runWebsiteAcceptance(h, fixture) {
     await until(() => wc.getZoomFactor() === 1, 'actual native zoom reset'); xinput(['key', 'Escape']);
     await pageClick(wc, '#draft', 'native-close-tab-focus'); xinput(['key', '--clearmodifiers', 'ctrl+w']);
     await until(async () => !win.isDestroyed() && (await readSite()).tabs.length === before, 'native Ctrl+W closes one tab only');
-    wc = nativeView('/alpha').webContents;
+    wc = await openSite('Fixture Alpha', '/alpha');
     await pageClick(wc, '#draft', 'native-reopen-tab-focus'); xinput(['key', '--clearmodifiers', 'ctrl+shift+t']);
     await until(async () => (await readSite()).tabs.length === before + 1 && nativeView('/tab-two')?.getVisible(), 'native reopen restores closed tab');
     await click(address, 'address-focused-close-tab'); xinput(['key', '--clearmodifiers', 'ctrl+w']);
@@ -1032,8 +1209,8 @@ async function runWebsiteAcceptance(h, fixture) {
       await until(async () => (await downloads()).some(item => item.filename === 'fixture.txt' && item.state === 'completed'), 'download completed');
       const completed = (await downloads()).find(item => item.filename === 'fixture.txt');
       assert.deepEqual(fs.readFileSync(completed.savePath), fixture.downloadBytes, 'Downloaded bytes match the synthetic response');
-      await click(menu, 'open-downloads'); await assertMenuBackdrop('downloads panel');
-      await waitFor(id => document.querySelector(`[data-download-id="${id}"] [data-download-command="reveal"]`), completed.id);
+      await click(menu, 'open-downloads'); await assertLivePopover('downloads panel');
+      await waitPopover(id => document.querySelector(`[data-download-id="${id}"] [data-download-command="reveal"]`), completed.id);
       await capture('completed-download'); xinput(['key', 'Escape']);
       await until(() => nativeView('/alpha')?.getVisible(), 'restore after downloads');
       await pageClick(wc, '#slow-download', 'start-cancellable-download');
@@ -1068,34 +1245,33 @@ async function runWebsiteAcceptance(h, fixture) {
     const gaze = await mascotGaze();
     await fill(startInput, 'fixture');
     const suggestion = url => `[data-address-suggestion-url="${url}"]`;
-    await waitFor(({ alpha, history }) => document.querySelector(`[data-address-suggestion-url="${alpha}"]`)?.dataset.addressSuggestionSource === 'bookmark'
+    await waitPopover(({ alpha, history }) => document.querySelector(`[data-address-suggestion-url="${alpha}"]`)?.dataset.addressSuggestionSource === 'bookmark'
       && document.querySelector(`[data-address-suggestion-url="${history}"]`)?.dataset.addressSuggestionSource === 'history', { alpha: origin + '/alpha', history: origin + '/history-target' });
     await capture('central-history-and-bookmark-suggestions');
     xinput(['key', '--clearmodifiers', 'Escape']);
-    await waitFor(selector => !document.querySelector('[data-web-workspace-address-suggestions]') && document.activeElement?.matches(selector) && document.activeElement.value === 'fixture', startInput);
+    await until(async () => !await nativePopover(), 'Central suggestions close on Escape');
+    await waitFor(selector => document.activeElement?.matches(selector) && document.activeElement.value === 'fixture', startInput);
     await fill(startInput, 'alpha');
-    await waitFor(selector => document.querySelector(selector), suggestion(origin + '/alpha'));
+    await waitPopover(selector => document.querySelector(selector), suggestion(origin + '/alpha'));
     xinput(['key', '--clearmodifiers', 'Down']);
-    await waitFor(url => document.querySelector(`[data-address-suggestion-url="${url}"]`)?.getAttribute('aria-selected') === 'true', origin + '/alpha');
+    await waitPopover(url => document.querySelector(`[data-address-suggestion-url="${url}"]`)?.getAttribute('aria-selected') === 'true', origin + '/alpha');
     xinput(['key', '--clearmodifiers', 'Return']);
     await until(() => nativeView('/alpha')?.getVisible() && !nativeView('/alpha').webContents.isLoading(), 'Keyboard selection opens the saved bookmark');
     gaze.unmount = await mascotUnmount();
     // The page now owns native focus. A renderer-only sendInputEvent can edit
     // its DOM address field without moving OS focus from the WebContentsView.
     // Exercise the real user's click and typing before judging autocomplete.
-    await click(address, 'focus-toolbar-history-suggestions');
-    await until(() => win.webContents.isFocused(), 'Native toolbar click transfers keyboard focus to the shell');
-    xinput(['key', '--clearmodifiers', 'ctrl+a']);
-    xinput(['type', '--clearmodifiers', '--delay', '0', 'history-target']);
+    await typeAddress('history-target', 'focus-toolbar-history-suggestions');
     await waitFor(selector => document.activeElement?.matches(selector) && document.activeElement.value === 'history-target', address);
-    await waitFor(selector => document.querySelector(selector), suggestion(origin + '/history-target'));
-    await assertMenuBackdrop('toolbar-address-suggestions');
+    await waitPopover(selector => document.querySelector(selector), suggestion(origin + '/history-target'));
+    await assertLivePopover('toolbar-address-suggestions');
     await capture('toolbar-history-suggestion-over-page');
     xinput(['key', '--clearmodifiers', 'Escape']);
-    await waitFor(selector => !document.querySelector('[data-web-workspace-address-suggestions]') && document.activeElement?.matches(selector) && document.activeElement.value === 'history-target', address);
+    await until(async () => !await nativePopover(), 'Toolbar suggestions close on Escape');
+    await waitFor(selector => document.activeElement?.matches(selector) && document.activeElement.value === 'history-target', address);
     await until(() => nativeView('/alpha')?.getVisible(), 'Escape restores native page while retaining address draft');
     xinput(['key', '--clearmodifiers', 'Down']);
-    await waitFor(selector => document.querySelector(selector), suggestion(origin + '/history-target'));
+    await waitPopover(selector => document.querySelector(selector), suggestion(origin + '/history-target'));
     await click(suggestion(origin + '/history-target'), 'choose-history-with-pointer');
     await until(() => nativeView('/history-target')?.getVisible() && !nativeView('/history-target').webContents.isLoading(), 'Pointer selection opens stored history URL');
     const selectedPage = nativeView('/history-target').webContents;
@@ -1105,9 +1281,9 @@ async function runWebsiteAcceptance(h, fixture) {
     await closeActiveTab('close-suggestion-journey-tab');
     assert.equal((await readSite()).tabs.length, tabsBeforeStart, 'Closing suggestion journey removes exactly its one tab');
     await openSite('Fixture Alpha', '/history-target');
-    await click('[data-browser-library-trigger]', 'open-browser-library'); await assertMenuBackdrop('browser library');
+    await click('[data-browser-library-trigger]', 'open-browser-library'); await assertLivePopover('browser library');
     await fill('[data-browser-library] input[type=search]', 'history-target');
-    await waitFor(url => document.querySelector(`[data-library-url="${url}"]`), origin + '/history-target');
+    await waitPopover(url => document.querySelector(`[data-library-url="${url}"]`), origin + '/history-target');
     await capture('searched-browser-history');
     await click('[data-library-section="bookmarks"]', 'show-bookmarks');
     await fill('[data-browser-library] input[type=search]', 'alpha');
@@ -1140,11 +1316,20 @@ async function runWebsiteAcceptance(h, fixture) {
   await runBrowserMediaAcceptance({ win, report, output, started, save, testNative, openSite, pageClick, navigateAddress, readSite, nativeView, until, evaluate, fill, address, capture, xinput, delay }, fixture);
 
   await testNative('left tab close recreation and renderer restart preserve order pin and cookies', async () => {
+    await ensureIndependentCookie('tab close and renderer restart');
     const wc = await openSite('Fixture Alpha', '/alpha');
     assert.ok((await wc.executeJavaScript('document.cookie')).includes('wuu_acceptance=synthetic-session'));
     const backgroundOwner = await openSite('Fixture Beta', '/beta'), beforeClose = win.getBounds();
     await hoverTab(alphaID);
-    assert.ok(await evaluateRibbon(id => { const close = document.querySelector(`[data-ribbon-close-id="${id}"]`); return close && Number(getComputedStyle(close).opacity) > 0.95; }, alphaID), 'Native background close control is visible before clicking');
+    try {
+      await until(() => evaluateRibbon(id => { const close = document.querySelector(`[data-ribbon-close-id="${id}"]`); return close && getComputedStyle(close).visibility === 'visible' && Number(getComputedStyle(close).opacity) > 0.95; }, alphaID), 'Native background close control settles before clicking', 4000);
+    } catch (error) {
+      const pointer = spawnSync('xdotool', ['getmouselocation', '--shell'], { encoding: 'utf8', timeout: 5000 });
+      report.backgroundCloseFailure = { pointer: pointer.stdout, overlayBounds: chromeView('ribbon')?.getBounds(),
+        native: await evaluateRibbon(id => ({ hovered: [...document.querySelectorAll(':hover')].map(node => node.tagName + '.' + node.className),
+          activeElement: document.activeElement?.outerHTML.slice(0, 300),
+          close: document.querySelector(`[data-ribbon-close-id="${id}"]`)?.outerHTML }), alphaID) }; save(); throw error;
+    }
     await click(`.sidebar-ribbon-close[data-ribbon-close-id="${alphaID}"]`, 'close-background-alpha');
     await until(() => wc.isDestroyed(), 'Closed left tab releases native contents');
     assert.equal((await readSite()).activeTabId, siteIDs.get('Fixture Beta'), 'Closing a background tab does not select it or change the active tab');
@@ -1204,6 +1389,7 @@ async function runWebsiteAcceptance(h, fixture) {
   });
 
   await testNative('authored extension uses shared native website and unloads cleanly', async () => {
+    await ensureIndependentCookie('authored extension shared browser profile');
     await click(plugins, 'open-extension-inventory'); await hidden('extension inventory');
     await click(pick('.sidebar-section-item', 'Plugins'), 'select-plugin-inventory');
     await waitFor(() => document.querySelector('.catalog-row-open[aria-label*="Acceptance Webpage"]'));

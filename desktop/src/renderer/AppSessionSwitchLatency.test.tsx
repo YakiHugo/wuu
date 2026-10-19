@@ -531,6 +531,10 @@ describe("session tab switch latency", () => {
     expect(history.hidden).toBe(false);
     await act(async () => pageHistoryButton("back").focus());
     await act(async () => ribbon.dispatchEvent(new MouseEvent("pointerover", { bubbles: true })));
+    await vi.waitFor(async () => {
+      await act(async () => {});
+      expect(ribbon.dataset.expanded).toBe("true");
+    });
     expect(history.hidden).toBe(true);
     expect(history.hasAttribute("inert")).toBe(true);
     expect(toggle.hidden).toBe(true);
@@ -542,6 +546,14 @@ describe("session tab switch latency", () => {
       expect(toggle.hidden).toBe(true);
       const request = showOverlay.mock.calls.map(([request]) => request).findLast(request => request.model.kind === "ribbon")!;
       expect(request).toBeDefined();
+      await act(async () => overlayListeners.forEach(listener => listener({
+        token: request.token, generation: request.generation, command: { type: "pointer", inside: false },
+      })));
+      // Closing motion retracts the DOM ribbon but native ownership persists
+      // until the matching presenter dismissal completes that opening.
+      expect(ribbon.dataset.expanded).toBeUndefined();
+      expect(history.hidden).toBe(true);
+      expect(toggle.hidden).toBe(true);
       await act(async () => overlayListeners.forEach(listener => listener({
         token: request.token, generation: request.generation, command: { type: "dismiss", reason: "leave" },
       })));

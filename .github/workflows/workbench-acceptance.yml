@@ -37,7 +37,9 @@ concurrency:
 jobs:
   accept:
     name: Real Electron clickthrough and video
-    runs-on: ubuntu-latest
+    # Match the package check: Chromium sandbox uses unprivileged namespaces.
+    # Stock Ubuntu24.04 restricts them; do not weaken the extension sandbox.
+    runs-on: ubuntu-22.04
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4

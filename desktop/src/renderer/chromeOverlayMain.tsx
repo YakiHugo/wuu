@@ -77,6 +77,12 @@ function RibbonSurface({ model, send }: { model: ChromeRibbonModel; send: (comma
 
 function Overlay(): JSX.Element | null {
   const [request, setRequest] = useState<ChromeOverlayRequest | null>(null);
+  const [revealed, setRevealed] = useState(true);
+  const progress = useRef(0);
+  const motionToken = useRef<string | undefined>(undefined);
+  const latestRequest = useRef(request);
+  latestRequest.current = request;
+  useEffect(() => api.onVisibility(setRevealed), []);
   const previous = useRef<{ token: string; focus: boolean; target?: string } | undefined>(undefined);
   useEffect(() => {
     let received = false;
@@ -110,6 +116,23 @@ function Overlay(): JSX.Element | null {
     const frame = requestAnimationFrame(() => api.painted(request.token, request.generation));
     return () => cancelAnimationFrame(frame);
   }, [request]);
+  useLayoutEffect(() => {
+    if (!request || request.model.kind !== "ribbon") { progress.current = 0; motionToken.current = undefined; setRevealed(true); return; }
+    if (motionToken.current !== request.token) { motionToken.current = request.token; progress.current = 0; }
+    const duration = Number.parseFloat(getComputedStyle(document.querySelector(".sidebar-ribbon")!).getPropertyValue("--ribbon-motion-duration")) || 0;
+    const from = progress.current, to = revealed ? 1 : 0, start = performance.now();
+    let frame = 0;
+    const tick = (now: number): void => {
+      const elapsed = duration ? Math.max(0, Math.min(1, (now - start) / duration)) : 1;
+      const eased = 1 - Math.pow(1 - elapsed, 3);
+      progress.current = elapsed === 1 ? to : from + (to - from) * eased;
+      const current = latestRequest.current;
+      if (current) api.command({ token: current.token, generation: current.generation, command: { type: "reveal", fraction: progress.current } });
+      if (elapsed < 1) frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [request?.token, revealed]);
   if (!request) return null;
   const language = request.appearance.locale;
   return <I18nProvider key={language} preferenceStore={{ get: () => language, set: async () => {}, subscribe: () => () => {} }}>

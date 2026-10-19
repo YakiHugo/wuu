@@ -11,6 +11,7 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 ### Added
 
 - Navigate window-local app page history across conversations, settings, workspace tools, and workbench destinations without changing website Back/Forward history.
+- Reclaim eligible website tabs after 30 minutes in the background, restoring their history and scroll position on selection while protecting edited, pinned, media, and other stateful pages.
 - Review local browser extension permissions before loading, manage installed snapshots with details and reload controls, and preserve the previous working copy when an update fails.
 
 - Add local history and bookmark suggestions to browser address fields, with keyboard selection and a mascot-centered new-tab search page.
@@ -38,6 +39,8 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Changed
 
+- Animate the hover tab ribbon with a stable icon column, reversible native bounds, and both system and in-app reduced-motion support.
+
 - Keep websites live beneath the hover tab ribbon and account menu with bounded, isolated native chrome surfaces.
 
 - Expand the vertical browser tab rail with readable titles and direct close controls for web tabs, while keeping built-in destinations permanent and preserving sidebar content widths.
@@ -60,6 +63,12 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Keep native tab context menus responsive when a title or favicon update crosses the right-click, while validating the current tab and menu actions.
+- Dismiss the live native hover ribbon on real pointer movement into the shell or page after reopening a tab, including when the reused overlay never received a pointer-enter event.
+- Keep tab-close focus inside the native ribbon instead of moving to its duplicate shell controls.
+- Keep floating tab ribbon reversals continuous during page-title updates and let clicks reach browser controls beneath the saved sidebar footprint.
+
+- Keep website contents live under browser toolbar panels and retain the selected native page when hiding or restoring the window.
 - Keep newly restored browser tabs from taking focus while hidden by the navigation rail.
 
 - Keep contextual sidebar controls beneath the expanded macOS navigation rail while preserving traffic-light access and restoring the controls after hover.

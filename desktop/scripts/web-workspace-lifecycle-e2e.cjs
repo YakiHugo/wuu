@@ -1,0 +1,117 @@
+// Real Electron views and fixed local pages; no user profile or macOS desktop.
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const http = require('node:http');
+const { app, BrowserWindow, ipcMain } = require('electron');
+const { buildSync } = require('esbuild');
+assert.equal(process.platform, 'linux');
+app.disableHardwareAcceleration();
+const output = path.resolve('out/e2e/web-workspace-lifecycle');
+fs.mkdirSync(output, { recursive: true });
+process.on('uncaughtException',error=>{console.error(error);fs.writeFileSync(path.join(output,'failure.txt'),String(error.stack));process.exit(1)});
+app.setPath('userData', path.join(output, 'profile'));
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function until(fn, label) { for (let i = 0; i < 300; i++) { if (await fn()) return; await delay(20); } throw new Error('Timeout: ' + label); }
+(async () => {
+  await app.whenReady();
+  // Bundle the shipping host, with real Electron webContents and session history.
+  const bundle = path.resolve('out/main/lifecycle-test-host.cjs');
+  buildSync({ entryPoints: ['src/main/webWorkspaceHost.ts'], outfile: bundle, bundle: true, platform: 'node', external: ['electron'], format: 'cjs' });
+  const { WebWorkspaceHost } = require(bundle);
+  const downloadBundle = path.resolve('out/main/lifecycle-downloads.cjs');
+  buildSync({ entryPoints: ['src/main/webWorkspaceDownloads.ts'], outfile: downloadBundle, bundle: true, platform: 'node', external: ['electron'], format: 'cjs' });
+  const { WebWorkspaceDownloads } = require(downloadBundle);
+  const downloads = new WebWorkspaceDownloads(() => {});
+  const server = http.createServer((req, res) => {
+    if (req.url === '/download.bin') {
+      res.writeHead(200, {'Content-Type':'application/octet-stream','Content-Length':10000000});
+      res.write(Buffer.alloc(1024));
+      const timer=setInterval(() => res.write(Buffer.alloc(1024)),100); res.on('close',()=>clearInterval(timer)); return;
+    }
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end(`<title>${req.url}</title><style>body{height:3000px;background:#badced}</style><input id="draft"><button id="click">Action</button>${req.url === '/frame' ? '<iframe src="/editor"></iframe>' : ''}<script>window.identity=Math.random();${req.url === '/storage' ? "sessionStorage.setItem('draft','preserved')" : ''}</script>`);
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const win = new BrowserWindow({ width: 900, height: 700, webPreferences: { sandbox: true } });
+  await win.loadURL('data:text/html,<title>Lifecycle fixture</title>');
+  const changes = [], host = new WebWorkspaceHost((_owner, state) => changes.push(state), () => {}, {downloads});
+  ipcMain.on('wuu:web-workspace-page-edited', event => host.protectEditedPage(event.sender));
+  host.initializeTabs(win, []);
+  const group = 'ribbon-browser';
+  host.reportBounds(win, group, { x: 0, y: 0, width: 900, height: 650 });
+  const create = async name => {
+    const state = host.createTab(win, group, origin + '/' + name), id = state.activeTabId;
+    let view;
+    await until(() => { view = win.contentView.children.find(view => view.webContents?.getURL() === origin + '/' + name); return view && !view.webContents.isLoading(); }, name);
+    return { id, view, wc: view.webContents, contentsID: view.webContents.id };
+  };
+  console.log('LIFECYCLE creating fixtures');
+  const cold = await create('cold');
+  await cold.wc.loadURL(origin + '/second');
+  await cold.wc.executeJavaScript('scrollTo(0,540);void 0');
+  const pinned = await create('pinned'); host.setTabPinned(win, group, pinned.id, true);
+  const edited = await create('edited');
+  edited.wc.focus(); await edited.wc.executeJavaScript('document.querySelector("#draft").focus()');
+  await edited.wc.insertText('unsaved draft');
+  const storage = await create('storage');
+  const frame = await create('frame');
+  const veto = await create('veto');
+  await veto.wc.executeJavaScript('window.onbeforeunload=()=>false;void 0', true);
+  console.log('LIFECYCLE media');
+  const media = await create('media');
+  await media.wc.executeJavaScript(`(async()=>{const c=document.createElement('canvas'),v=document.createElement('video');v.muted=true;c.width=64;c.height=64;v.srcObject=c.captureStream(10);document.body.append(v);window.mediaTimer=setInterval(()=>{c.getContext('2d').fillStyle=Math.random()>.5?'red':'blue';c.getContext('2d').fillRect(0,0,64,64)},50);await v.play()})()`,true);
+  console.log('LIFECYCLE opener');
+  const opener = await create('opener');
+  await opener.wc.executeJavaScript(`window.child=window.open('${origin}/child');void 0`,true);
+  let child;
+  await until(()=>{child=win.contentView.children.find(v=>v.webContents?.getURL()===origin+'/child');return child&&!child.webContents.isLoading()},'opener-connected child');
+  const active = await create('active');
+  console.log('LIFECYCLE download');
+  let download;
+  active.wc.session.once('will-download',(_event,item)=>{download=item;downloads.start(win,group,item);item.setSavePath(path.join(output,'download.bin'));});
+  active.wc.downloadURL(origin+'/download.bin');
+  await until(()=>download && downloads.list(win).some(item=>!item.done),'pending download');
+  assert.equal(await host.discardInactiveTabs(performance.now()+31*60*1000),0,'Pending downloads protect their owning group');
+  download.cancel();
+  await until(()=>downloads.list(win).every(item=>item.done),'download cancellation');
+  const first = await host.discardInactiveTabs();
+  assert.equal(cold.wc.isDestroyed(), false, 'Recently viewed tabs are retained');
+  console.log('LIFECYCLE discard');
+  const before = app.getAppMetrics();
+  const result = await host.discardInactiveTabs(performance.now() + 31 * 60 * 1000);
+  assert.ok(cold.wc.isDestroyed(), 'An idle ordinary tab releases its native contents');
+  for (const page of [pinned, edited, storage, frame, veto, media, opener, active]) assert.equal(page.wc.isDestroyed(), false, 'Protected page retained: ' + page.id);
+  assert.equal(child.webContents.isDestroyed(),false,'Opener-linked child retained');
+  const dormant = changes.at(-1).tabs.find(tab => tab.id === cold.id);
+  assert.equal(dormant.discarded, true);
+  assert.equal(dormant.canGoBack, true);
+  host.selectTab(win, group, cold.id);
+  let restored;
+  await until(() => { restored = win.contentView.children.find(view => view.webContents?.getURL() === origin + '/second'); return restored && !restored.webContents.isLoading(); }, 'restored page');
+  assert.notEqual(restored.webContents.id, cold.contentsID, 'Restoration creates a fresh renderer');
+  assert.equal(restored.webContents.navigationHistory.canGoBack(), true);
+  await until(async () => (await restored.webContents.executeJavaScript('scrollY')) === 540, 'restored scroll');
+  restored.webContents.navigationHistory.goBack();
+  await until(() => restored.webContents.getURL() === origin + '/cold' && !restored.webContents.isLoading(), 'restored back navigation');
+  assert.equal(await edited.wc.executeJavaScript('document.querySelector("#draft").value'), 'unsaved draft');
+  const cycles=[];
+  host.setTabPinned(win,group,active.id,true);
+  for(let repeat=0;repeat<3;repeat++) {
+    const old=restored.webContents, oldID=old.id;
+    await old.executeJavaScript('scrollTo(0,540);void 0');
+    host.selectTab(win,group,active.id);
+    const count=await host.discardInactiveTabs(performance.now()+31*60*1000);
+    assert.ok(old.isDestroyed());
+    host.selectTab(win,group,cold.id);
+    await until(()=>{restored=win.contentView.children.find(v=>v.webContents?.getURL()===origin+'/cold');return restored&&!restored.webContents.isLoading()},'repeated restore');
+    await until(async()=>await restored.webContents.executeJavaScript('scrollY')===540,'repeated scroll restore');
+    assert.equal(restored.webContents.navigationHistory.canGoForward(),true);
+    cycles.push({repeat,count,oldID,newID:restored.webContents.id,views:win.contentView.children.length});
+  }
+  fs.writeFileSync(path.join(output, 'report.json'), JSON.stringify({ status: 'passed', first, result, before, after: app.getAppMetrics(), restoredHistory: restored.webContents.navigationHistory.getAllEntries().map(entry => ({url:entry.url,title:entry.title})), protectedCount: 9, cycles }, null, 2));
+  await veto.wc.executeJavaScript('window.onbeforeunload=null;void 0');
+  host.destroyAll(); win.destroy(); server.close(); app.quit();
+})().catch(error => { console.error(error); fs.writeFileSync(path.join(output, 'failure.txt'), String(error.stack)); process.exit(1); });
+setTimeout(() => process.exit(1), 90000).unref();

@@ -30,6 +30,7 @@ export type ChromeAccountPanel = {
 };
 export type ChromeRibbonFocus = { kind: "item" | "close"; id: string } | { kind: "account" | "settings" | "new-tab" | "desktop-update" };
 export type ChromeRibbonModel = {
+  collapsedWidth: number;
   kind: "ribbon";
   items: ChromeRibbonItem[];
   label: string; newTabLabel: string; canCreateTab: boolean;
@@ -51,6 +52,7 @@ export type ChromeOverlayRequest = {
   model: ChromeOverlayModel;
 };
 export type ChromeOverlayCommand =
+  | { type: "reveal"; fraction: number }
   | { type: "capsule-expand" | "capsule-open" }
   | { type: "capsule-collapse" | "capsule-draft" | "capsule-send"; text: string }
   | { type: "select" | "close-tab"; id: string }
@@ -72,6 +74,7 @@ export interface ChromeOverlayApi {
 }
 export interface ChromeOverlayRendererApi {
   ready(): Promise<ChromeOverlayRequest | null>;
+  onVisibility(listener: (visible: boolean) => void): () => void;
   onState(listener: (request: ChromeOverlayRequest | null) => void): () => void;
   painted(token: string, generation: number): void;
   command(event: ChromeOverlayEvent): void;

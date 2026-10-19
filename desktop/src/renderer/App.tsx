@@ -4667,8 +4667,10 @@ export function App(): JSX.Element {
       throw new Error("The workspace changed. Return to the source workspace and send again.");
     }
     const reference = formatPageContext(page);
+    // pasted_text becomes a file attachment in the core. Keep this bounded
+    // reference inline so the initial model request has the exact browser target.
     const message = createComposerMessage(text + reference, [], [], [
-      { type: "text", text }, { type: "pasted_text", text: reference, title: page.title || "Current page" },
+      { type: "text", text }, { type: "text", text: reference },
     ])!;
     let thread = sessionId ? [current.thread, current.secondaryThread, ...current.threads].find(value => value?.id === sessionId) : undefined;
     if (sessionId && (!thread || thread.read_only || thread.archived)) throw new Error("This conversation is no longer available. Open Chat to continue it.");

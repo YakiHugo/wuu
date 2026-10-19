@@ -13,6 +13,12 @@
   display: none;
 }
 
+/* The saved sidebar footprint sits behind the browser. Only its ribbon keeps
+   pointer events when that overlay's stacking context is raised. */
+.app-shell[data-web-workspace-open] > .sidebar {
+  pointer-events: none;
+}
+
 .app-shell[data-web-workspace-open] > :is(
   .conversation-pane,
   .workspace-right-panel,

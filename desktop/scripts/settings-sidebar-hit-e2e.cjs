@@ -284,7 +284,7 @@ async function verifyRibbonHistoryOcclusion(win) {
     });
     win.webContents.sendInputEvent({ type: 'mouseMove', x: Math.round(point.x * 2), y: Math.round(point.y * 2) });
     await waitFor(win, () => !!document.querySelector('.sidebar-ribbon[data-expanded="true"]'), 3000);
-    await evaluate(win, () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await settleRibbonMotion(win);
     const expanded = await snapshot();
     const a = before.history.bounds, b = expanded.ribbon;
     const overlaps = Math.min(a.right, b.right) > Math.max(a.left, b.left) &&
@@ -351,7 +351,7 @@ async function verifyRibbonControlFocus(win, page) {
       const zoom = win.webContents.getZoomFactor();
       win.webContents.sendInputEvent({ type: 'mouseMove', x: Math.round(point.x * zoom), y: Math.round(point.y * zoom) });
       await waitFor(win, () => !!document.querySelector('.sidebar-ribbon[data-expanded="true"]'), 3000);
-      await evaluate(win, () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      await settleRibbonMotion(win);
       const expanded = await snapshot();
       assert.ok(expanded.toggle.hidden && expanded.toggle.inert, 'Expanded Mac ribbon explicitly removes its covered toggle');
       assert.equal(expanded.history.hidden, layout !== 'docked', 'Docked history remains outside the ribbon');
@@ -361,7 +361,14 @@ async function verifyRibbonControlFocus(win, page) {
       assert.deepEqual(expanded.title, before.title);
       assert.deepEqual(expanded.content, before.content);
       // A genuine pointer exit must collapse naturally, with no blur or focus reset.
-      await preparePointerInput(win);
+      await preparePointerInput(win, async () => {
+        const closing = await closingControlOwnership(win);
+        results.push({ scenario: `ribbon-closing-hit-${page}-${layout}-${owner}`, closing });
+        saveResults();
+        assert.ok(closing.controls.some(control => control.target === "sidebar-toggle"), "The restored toggle is sampled before motion settles");
+        for (const control of closing.controls) assert.ok(control.samples.every(sample => sample.owned),
+          `Restored controls own their interior during ribbon closing: ${JSON.stringify(closing)}`);
+      });
       await settleChrome(win);
       const restored = await snapshot();
       assert.ok(!restored.toggle.hidden && !restored.toggle.inert && !restored.ribbonExpanded);
@@ -377,6 +384,7 @@ async function verifyRibbonControlFocus(win, page) {
   win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'ArrowDown' });
   win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'ArrowDown' });
   await waitFor(win, () => !!document.querySelector('.sidebar-ribbon[data-expanded="true"]'), 3000);
+  await settleRibbonMotion(win);
   const away = await evaluate(win, () => ({ x: innerWidth - 30, y: innerHeight - 30 }));
   const zoom = win.webContents.getZoomFactor();
   win.webContents.sendInputEvent({ type: 'mouseMove', x: Math.round(away.x * zoom), y: Math.round(away.y * zoom) });
@@ -385,6 +393,7 @@ async function verifyRibbonControlFocus(win, page) {
   assert.ok(keyboard.ribbonExpanded && keyboard.focusInRibbon, 'Genuine keyboard ribbon focus survives pointer exit');
   await evaluate(win, () => document.querySelector('.app-shell').focus());
   await waitFor(win, () => !document.querySelector('.sidebar-ribbon[data-expanded="true"]'), 3000);
+  await settleRibbonMotion(win);
   results.push({ scenario: `ribbon-keyboard-retention-${page}`, keyboard });
   saveResults();
   await evaluate(win, collapsed => {
@@ -405,7 +414,40 @@ async function notificationRouteState(win) {
   }));
 }
 
-async function preparePointerInput(win) {
+async function settleRibbonMotion(win) {
+  // The expanded marker precedes the width transition, and is removed before
+  // its closing transition finishes. Read geometry to flush style, then wait
+  // for the actual renderer animation rather than sampling two early frames.
+  await waitFor(win, () => {
+    const ribbon = document.querySelector('.sidebar-ribbon');
+    if (!ribbon) throw new Error('Ribbon is required for motion checks');
+    ribbon.getBoundingClientRect();
+    return ribbon.getAnimations().every(animation => !animation.pending &&
+      animation.playState !== 'running');
+  }, 3000);
+}
+
+async function closingControlOwnership(win) {
+  return evaluate(win, () => {
+    const ribbon = document.querySelector('.sidebar-ribbon');
+    const bounds = ribbon.getBoundingClientRect().toJSON();
+    const motionActive = ribbon.getAnimations().some(animation => animation.pending || animation.playState === 'running');
+    const controls = [...document.querySelectorAll('.section-sidebar-toggle, .shell-page-history-controls button')]
+      .filter(element => element.checkVisibility({ checkVisibilityCSS: true, checkOpacity: true }))
+      .map(element => {
+        const rect = element.getBoundingClientRect();
+        return { target: element.dataset.wuuComponent, bounds: rect.toJSON(), samples:
+          [[0.5, 0.5], [0.2, 0.2], [0.8, 0.2], [0.2, 0.8], [0.8, 0.8]].map(([x, y]) => {
+            const point = { x: rect.left + rect.width * x, y: rect.top + rect.height * y };
+            const hit = document.elementFromPoint(point.x, point.y);
+            return { ...point, owned: hit === element || element.contains(hit), hit: hit?.getAttribute('class') };
+          }) };
+      });
+    return { bounds, motionActive, coverage: motionActive ? 'closing-transition' : 'transition-already-finished', controls };
+  });
+}
+
+async function preparePointerInput(win, beforeMotionSettles) {
   // These interactions run in the CI-owned Electron window. CDP focus
   // emulation alone does not satisfy sendInputEvent's native-window contract.
   win.show();
@@ -425,6 +467,8 @@ async function preparePointerInput(win) {
   results.push({ scenario: "neutral-pointer-precondition", zoom, point, focused: win.isFocused(), state });
   saveResults();
   await waitFor(win, () => !document.querySelector('.sidebar-ribbon[data-expanded="true"]'), 3000);
+  if (beforeMotionSettles) await beforeMotionSettles();
+  await settleRibbonMotion(win);
 }
 
 async function pointerClick(win, selector) {
