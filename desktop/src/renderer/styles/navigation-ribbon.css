@@ -46,6 +46,12 @@
   padding-top: var(--window-titlebar-height);
 }
 
+/* The rail belongs to the sidebar's stacking context. Raise that context over
+   the sibling toggle; caption controls follow the shell and remain above it. */
+:root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon[data-expanded="true"]) > .sidebar {
+  z-index: 152;
+}
+
 :root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon) > .shell-right-sidebar-toggle {
   top: calc(var(--workbench-top) + (var(--canvas-titlebar-height) - var(--control-size-toolbar)) / 2);
 }
