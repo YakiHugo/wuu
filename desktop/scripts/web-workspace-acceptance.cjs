@@ -261,17 +261,22 @@ async function runWebsiteAcceptance(h, fixture) {
       await waitFor(selector => document.querySelector(selector), pluginRow);
       await click(`${pluginRow} [role="switch"]`, 'enable-bundled-notion');
       await waitFor(() => document.querySelector('.sidebar-ribbon-main button[aria-label="Notion"]'), undefined, 'bundled Notion ribbon activation', 20000);
+      diagnostic.ribbonID = await evaluate(() => document.querySelector('.sidebar-ribbon-main button[aria-label="Notion"]').dataset.ribbonId);
+      assert.ok(diagnostic.ribbonID.startsWith('plugin:'), 'Notion is a registered plugin destination, not a website shortcut');
+      const [registeredPluginID] = JSON.parse(diagnostic.ribbonID.slice('plugin:'.length));
+      diagnostic.registeredPluginID = registeredPluginID;
       const selectedAt = Date.now();
       await click(ribbon('Notion'), 'actual-bundled-notion-ribbon');
       for (const elapsed of [0, 3000, 10000, 20000]) {
         await delay(Math.max(0, selectedAt + elapsed - Date.now()));
-        const shell = await evaluate(() => {
-          const root = [...document.querySelectorAll('.plugin-workbench-view[data-plugin-id="notion-workspace"], [data-wuu-component="plugin-view-content"][data-wuu-plugin="notion-workspace"]')]
-            .find(node => node.getBoundingClientRect().width > 0 && node.getBoundingClientRect().height > 0);
+        const shell = await evaluate(registeredPluginID => {
+          const root = [...document.querySelectorAll('.plugin-workbench-view, [data-wuu-component="plugin-view-content"]')]
+            .find(node => (node.dataset.pluginId || node.dataset.wuuPlugin) === registeredPluginID
+              && node.getBoundingClientRect().width > 0 && node.getBoundingClientRect().height > 0);
           return { mounted: Boolean(root), text: root?.innerText.slice(0, 1600) || '',
             nativeHost: root?.querySelector('[data-wuu-component="web-workspace"]')?.getAttribute('data-website-id') || null,
             alert: root?.querySelector('[role="alert"]')?.textContent || null };
-        });
+        }, registeredPluginID);
         const native = [];
         for (const view of win.contentView.children) {
           const wc = view.webContents;
