@@ -345,14 +345,15 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     return this.state(group);
   }
 
-  createTab(owner: BrowserWindow, id: string, url?: string): WebWorkspaceState {
+  createTab(owner: BrowserWindow, id: string, url?: string, options: { background?: boolean } = {}): WebWorkspaceState {
     const group = this.tabGroup(owner, id);
     if (group.tabs.length >= WEB_WORKSPACE_TAB_LIMIT) throw new Error(`Close a tab before opening another. The browser limit is ${WEB_WORKSPACE_TAB_LIMIT} tabs.`);
     const tab: WorkspaceTab = { id: group.id === WEB_WORKSPACE_RIBBON_ID ? `website:${randomUUID()}` : randomUUID(), url: url === undefined ? "about:blank" : websiteURL(url), title: "", zoomFactor: 1 };
     group.tabs.push(tab);
-    this.activate(group, tab);
+    if (options.background) this.ensurePage(group, tab);
+    else this.activate(group, tab);
     this.emit(group);
-    if (group.id === WEB_WORKSPACE_RIBBON_ID) this.options.onReveal?.(owner, group.id);
+    if (!options.background && group.id === WEB_WORKSPACE_RIBBON_ID) this.options.onReveal?.(owner, group.id);
     return this.state(group);
   }
 
@@ -919,7 +920,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     try { if (params.linkURL) link = websiteURL(params.linkURL); } catch { /* Internal and executable URLs are not browser destinations. */ }
     if (link) {
       const url = link;
-      if (page.group.tabbed) template.push({ label: "Open Link in New Tab", enabled: page.group.tabs.length < WEB_WORKSPACE_TAB_LIMIT, click: () => this.createTab(page.owner, page.group.id, url) });
+      if (page.group.tabbed) template.push({ label: "Open Link in New Tab", enabled: page.group.tabs.length < WEB_WORKSPACE_TAB_LIMIT, click: () => this.createTab(page.owner, page.group.id, url, { background: true }) });
       template.push({ label: "Copy Link Address", click: () => clipboard.writeText(url) }, { type: "separator" });
     }
     if (params.isEditable) template.push({ role: "undo" }, { role: "redo" }, { type: "separator" }, { role: "cut" }, { role: "copy" }, { role: "paste" }, { role: "selectAll" });
@@ -973,7 +974,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
         try { websiteURL(target); } catch { void this.openExternal(page, contents, target); return { action: "deny" }; }
       }
       const ribbon = page.group.id === WEB_WORKSPACE_RIBBON_ID;
-      const popup = (target === "about:blank" && !ribbon) || !page.group.tabbed || (!ribbon && page.group.tabs.length >= WEB_WORKSPACE_TAB_LIMIT) || contents !== page.contents || (!ribbon && details.disposition === "new-window")
+      const popup = (target === "about:blank" && !ribbon) || !page.group.tabbed || (!ribbon && page.group.tabs.length >= WEB_WORKSPACE_TAB_LIMIT) || contents !== page.contents || details.disposition === "new-window"
         || details.features.split(",").some(feature => /^(popup|width|height|left|top)\s*(=|$)/i.test(feature.trim()));
       if (!popup && page.group.tabs.length >= WEB_WORKSPACE_TAB_LIMIT) return { action: "deny" };
       const response: Electron.WindowOpenHandlerResponse = {

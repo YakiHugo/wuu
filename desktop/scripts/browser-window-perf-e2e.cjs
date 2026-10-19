@@ -225,6 +225,10 @@ async function run() {
   await until(() => evaluate(win.webContents, id => !!document.querySelector(`.sidebar-ribbon button[data-ribbon-id="${id}"]`), tabID), 'local website ribbon');
   const point = await evaluate(win.webContents, id => { const r = document.querySelector(`.sidebar-ribbon button[data-ribbon-id="${id}"]`).getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; }, tabID);
   win.webContents.sendInputEvent({ type: 'mouseDown', ...point, button: 'left', clickCount: 1 }); win.webContents.sendInputEvent({ type: 'mouseUp', ...point, button: 'left', clickCount: 1 });
+  // Fixture selection is outside every timed phase. Leave the hover rail so
+  // its intentional overlay cannot occlude the renderer being measured.
+  win.webContents.sendInputEvent({ type: 'mouseMove', x: 300, y: 90 });
+  await until(() => evaluate(win.webContents, () => document.querySelector('.sidebar-ribbon')?.dataset.expanded !== 'true'), 'fixture pointer leaves the hover rail');
   await until(() => { guest = webContents.getAllWebContents().find(wc => !wc.isDestroyed() && wc.getURL() === url && !wc.isLoadingMainFrame()); return guest; }, 'production native website');
   await until(() => win.contentView.children.some(view => view.webContents === guest && view.getVisible()), 'native guest visible');
   const view = win.contentView.children.find(view => view.webContents === guest);
