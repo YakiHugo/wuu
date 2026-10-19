@@ -75,6 +75,28 @@ const geometry = () => evaluate(() => {
   const style = getComputedStyle(mark);
   const panel = page.querySelector('.connection-credential-panel, .connection-credential-entry > .connection-credential-menu');
   const enabledHeading = page.querySelector('.connection-model-table-heading > :nth-child(3), .connection-model-head > :nth-child(3)');
+  // Text ranges reveal glyphs overflowing a squeezed label's own layout box.
+  const textRects = node => {
+    if (!node || !panel || !panel.getClientRects().length) return [];
+    const bounds = panel.getBoundingClientRect();
+    const ranges = [];
+    const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const text = walker.currentNode;
+      if (!text.textContent.trim() || getComputedStyle(text.parentElement).visibility !== 'visible') continue;
+      const range = document.createRange();
+      range.selectNodeContents(text);
+      ranges.push(...range.getClientRects());
+    }
+    // Input values have no DOM text nodes; their visible control is the boundary.
+    for (const input of node.querySelectorAll('input, textarea, select')) {
+      if ((input.value || input.placeholder) && getComputedStyle(input).visibility === 'visible') ranges.push(input.getBoundingClientRect());
+    }
+    return ranges.map(box => ({
+      left: Math.max(box.left, bounds.left, 0), right: Math.min(box.right, bounds.right, innerWidth),
+      top: Math.max(box.top, bounds.top, 0), bottom: Math.min(box.bottom, bounds.bottom, innerHeight),
+    })).filter(box => box.right > box.left && box.bottom > box.top);
+  };
   return {
     viewport: { width: innerWidth, height: innerHeight },
     scroll: { ...rect(scroll), clientWidth: scroll.clientWidth, scrollWidth: scroll.scrollWidth, scrollLeft: scroll.scrollLeft },
@@ -91,6 +113,11 @@ const geometry = () => evaluate(() => {
       orderButtons: [...row.querySelectorAll('.connection-model-order button')].map(rect),
     })),
     panel: panel && panel.getClientRects().length ? { ...rect(panel), clientWidth: panel.clientWidth, scrollWidth: panel.scrollWidth } : null,
+    credentialRows: [...(panel?.querySelectorAll('.settings-row') || [])].map(row => ({
+      label: row.querySelector('.settings-row-label-title')?.textContent.trim(),
+      labelText: textRects(row.querySelector('.settings-row-label-title')),
+      valueText: textRects(row.querySelector('.settings-row-control, .settings-row-control-block')),
+    })).filter(row => row.labelText.length && row.valueText.length),
   };
 });
 function assertLayout(measured) {
@@ -125,6 +152,12 @@ function assertLayout(measured) {
       measured.panel.right <= Math.min(measured.viewport.width, measured.scroll.right) + 1,
     `Credentials panel must fit the visible settings area: ${context}`);
     assert.ok(measured.panel.scrollWidth <= measured.panel.clientWidth, `Credentials panel must not overflow horizontally: ${context}`);
+    for (const row of measured.credentialRows) {
+      assert.ok(!row.labelText.some(label => row.valueText.some(value =>
+        Math.min(label.right, value.right) - Math.max(label.left, value.left) > 1 &&
+        Math.min(label.bottom, value.bottom) - Math.max(label.top, value.top) > 1)),
+      `Credentials label text must not overlap its value/control: ${JSON.stringify(row)}`);
+    }
   }
 }
 
@@ -136,71 +169,79 @@ app.whenReady().then(async () => {
   for (const detail of ['provider', 'engine']) for (const theme of ['light', 'dark']) for (const width of [1280, 760]) {
     scenario = { name: `${detail}-${theme}-${width}-20px`, detail, theme, width };
     evidence.scenarios.push(scenario);
-    const url = new URL(baseURL);
-    for (const [key, value] of Object.entries({ page: 'providers', connections: 'quota', detail, theme, size: '20' })) url.searchParams.set(key, value);
-    scenario.url = url.href;
-    win.setContentSize(width, 1000);
-    await win.loadURL(url.href);
-    await waitFor(width => innerWidth === width && document.querySelector('.connection-model-row [role="switch"]'), width);
-    await settle();
-    scenario.initial = await geometry();
-    await capture('detail');
-    assertLayout(scenario.initial);
+    try {
+      const url = new URL(baseURL);
+      for (const [key, value] of Object.entries({ page: 'providers', connections: 'quota', detail, theme, size: '20' })) url.searchParams.set(key, value);
+      scenario.url = url.href;
+      win.setContentSize(width, 1000);
+      await win.loadURL(url.href);
+      await waitFor(width => innerWidth === width && document.querySelector('.connection-model-row [role="switch"]'), width);
+      await settle();
+      scenario.initial = await geometry();
+      await capture('detail');
+      assertLayout(scenario.initial);
 
-    // Exercise the actual scrollport rather than hiding overflow in the test.
-    await evaluate(() => {
-      document.querySelector('.settings-scroll').scrollLeft = 10000;
-      document.scrollingElement.scrollLeft = 10000;
-    });
-    await settle();
-    scenario.afterHorizontalScroll = await geometry();
-    assertLayout(scenario.afterHorizontalScroll);
-    assert.equal(scenario.afterHorizontalScroll.scroll.scrollLeft, 0, 'Horizontal scrolling must not strand the page');
-    assert.equal(scenario.afterHorizontalScroll.document.scrollLeft, 0, 'Horizontal scrolling must not shift the document');
-    assert.ok(Math.abs(scenario.initial.page.left - scenario.afterHorizontalScroll.page.left) <= 1, 'Horizontal scrolling must not move the page');
-    assert.ok((await target('.connection-page-back')).reachable, 'Back must stay reachable after horizontal scroll');
+      // Exercise the actual scrollport rather than hiding overflow in the test.
+      await evaluate(() => {
+        document.querySelector('.settings-scroll').scrollLeft = 10000;
+        document.scrollingElement.scrollLeft = 10000;
+      });
+      await settle();
+      scenario.afterHorizontalScroll = await geometry();
+      assertLayout(scenario.afterHorizontalScroll);
+      assert.equal(scenario.afterHorizontalScroll.scroll.scrollLeft, 0, 'Horizontal scrolling must not strand the page');
+      assert.equal(scenario.afterHorizontalScroll.document.scrollLeft, 0, 'Horizontal scrolling must not shift the document');
+      assert.ok(Math.abs(scenario.initial.page.left - scenario.afterHorizontalScroll.page.left) <= 1, 'Horizontal scrolling must not move the page');
+      assert.ok((await target('.connection-page-back')).reachable, 'Back must stay reachable after horizontal scroll');
 
-    const toggle = '.connection-model-row [role="switch"]:not(:disabled)';
-    scenario.toggleBefore = await evaluate(selector => document.querySelector(selector).getAttribute('aria-checked'), toggle);
-    await click(toggle);
-    await waitFor(({ selector, before }) => document.querySelector(selector)?.getAttribute('aria-checked') !== before,
-      { selector: toggle, before: scenario.toggleBefore });
-    await capture('model-toggle');
-    await click(toggle);
-    await waitFor(({ selector, before }) => document.querySelector(selector)?.getAttribute('aria-checked') === before,
-      { selector: toggle, before: scenario.toggleBefore });
+      const toggle = '.connection-model-row [role="switch"]:not(:disabled)';
+      scenario.toggleBefore = await evaluate(selector => document.querySelector(selector).getAttribute('aria-checked'), toggle);
+      await click(toggle);
+      await waitFor(({ selector, before }) => document.querySelector(selector)?.getAttribute('aria-checked') !== before,
+        { selector: toggle, before: scenario.toggleBefore });
+      await capture('model-toggle');
+      await click(toggle);
+      await waitFor(({ selector, before }) => document.querySelector(selector)?.getAttribute('aria-checked') === before,
+        { selector: toggle, before: scenario.toggleBefore });
 
-    const entry = '.connection-credential-menu > summary, [data-testid="engine-auth-entry"]';
-    scenario.hasCredentials = await evaluate(selector => Boolean(document.querySelector(selector)), entry);
-    assert.ok(scenario.hasCredentials, 'Provider and engine fixtures must expose their credentials entry');
-    if (scenario.hasCredentials) {
-      await click(entry);
-      await waitFor(() => Boolean(document.querySelector('details.connection-credential-menu[open], [data-testid="engine-auth-entry"][aria-expanded="true"]')));
-      scenario.credentials = await geometry();
-      await capture('credentials');
-      assert.ok(scenario.credentials.panel, 'Opening credentials must reveal a panel');
-      assertLayout(scenario.credentials);
-      const control = '.connection-credential-panel button:not(:disabled), .connection-credential-entry > .connection-credential-menu button:not(:disabled)';
-      assert.ok((await target(control)).reachable, 'Credentials controls must remain reachable');
-      assert.equal(await evaluate(selector => {
-        const node = document.querySelector(selector);
-        node.focus({ preventScroll: true });
-        return document.activeElement === node;
-      }, control), true, 'Credentials controls must accept focus');
-      await click(entry);
-      await waitFor(() => !document.querySelector('details.connection-credential-menu[open], [data-testid="engine-auth-entry"][aria-expanded="true"]'));
+      const entry = '.connection-credential-menu > summary, [data-testid="engine-auth-entry"]';
+      scenario.hasCredentials = await evaluate(selector => Boolean(document.querySelector(selector)), entry);
+      assert.ok(scenario.hasCredentials, 'Provider and engine fixtures must expose their credentials entry');
+      if (scenario.hasCredentials) {
+        await click(entry);
+        await waitFor(() => Boolean(document.querySelector('details.connection-credential-menu[open], [data-testid="engine-auth-entry"][aria-expanded="true"]')));
+        scenario.credentials = await geometry();
+        await capture('credentials');
+        assert.ok(scenario.credentials.panel, 'Opening credentials must reveal a panel');
+        assertLayout(scenario.credentials);
+        const control = '.connection-credential-panel button:not(:disabled), .connection-credential-entry > .connection-credential-menu button:not(:disabled)';
+        assert.ok((await target(control)).reachable, 'Credentials controls must remain reachable');
+        assert.equal(await evaluate(selector => {
+          const node = document.querySelector(selector);
+          node.focus({ preventScroll: true });
+          return document.activeElement === node;
+        }, control), true, 'Credentials controls must accept focus');
+        await click(entry);
+        await waitFor(() => !document.querySelector('details.connection-credential-menu[open], [data-testid="engine-auth-entry"][aria-expanded="true"]'));
+      }
+      await click('.connection-page-back');
+      await waitFor(() => !document.querySelector('.connection-page'));
+      scenario.passed = true;
+    } catch (error) {
+      scenario.passed = false;
+      scenario.error = error.stack || String(error);
+      await capture('failure').catch(() => {});
+      console.error(`FAIL: ${scenario.name}: ${error.message}`);
     }
-    await click('.connection-page-back');
-    await waitFor(() => !document.querySelector('.connection-page'));
-    scenario.passed = true;
     save();
   }
+  const failed = evidence.scenarios.filter(result => !result.passed);
+  assert.equal(failed.length, 0, `${failed.length}/${evidence.scenarios.length} layouts failed: ${failed.map(result => result.name).join(', ')}. Evidence: ${output}`);
   console.log(`PASS: ${evidence.scenarios.length} connection detail layouts. Evidence: ${output}`);
   win.close();
   app.quit();
 }).catch(async error => {
   evidence.error = error.stack || String(error);
-  if (win && !win.isDestroyed() && scenario) await capture('failure').catch(() => {});
   save();
   console.error(error);
   app.exit(1);

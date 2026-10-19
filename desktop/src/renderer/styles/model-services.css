@@ -904,6 +904,7 @@
 .connection-model-id { min-width: 0; overflow-wrap: anywhere; font-size: var(--font-sm); color: var(--ink-soft); }
 .connection-model-name { min-width: 0; overflow-wrap: anywhere; }
 .connection-page .connection-model-row > .connection-model-enabled { order: 0; grid-column: 3; grid-row: 1; }
+.connection-page .connection-model-row > span.connection-model-enabled { display: flex; align-items: center; justify-content: flex-end; }
 .connection-page .connection-model-row > .connection-model-order { order: 0; grid-column: 4; grid-row: 1; }
 .connection-model-order { display: flex; align-items: center; gap: 0; color: var(--ink-tertiary); }
 .connection-model-order > .icon { width: 14px; flex: 0 0 14px; }
@@ -916,6 +917,9 @@
   .connection-page-header { margin-block-end: var(--space-5); }
   .connection-page-actions { margin-inline-start: 0; width: 100%; }
   .connection-credential-panel { inset-inline-start: 0; inset-inline-end: auto; width: min(460px, 100cqw); }
+  .connection-page .connection-credential-panel .settings-row { grid-template-columns: minmax(0, 1fr); align-items: stretch; gap: var(--space-2); }
+  .connection-credential-panel .settings-row-control { justify-content: flex-start; }
+  .connection-credential-panel :is(.settings-row-label-title, .settings-row-control-value) { min-width: 0; max-width: 100%; overflow-wrap: anywhere; text-align: start; }
   .connection-model-head, .connection-model-table-heading, .connection-page .connection-model-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 40px var(--connection-model-order-width); gap: var(--space-2); }
   .connection-detail-quota .connection-usage-window { grid-template-columns: 120px minmax(80px, 1fr); }
   .connection-detail-quota .connection-usage-reset { grid-column: 2; text-align: start; }
