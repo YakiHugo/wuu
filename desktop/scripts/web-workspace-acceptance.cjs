@@ -346,9 +346,16 @@ async function runWebsiteAcceptance(h, fixture) {
         }, { address, startInput });
       }
       await focusAddress(label);
-      xinput(['key', '--clearmodifiers', 'ctrl+a']);
-      await waitFor(selector => { const input = document.querySelector(selector); return document.activeElement === input
-        && input.selectionStart === 0 && input.selectionEnd === input.value.length; }, address, 'Native select-all reaches the address input');
+      const hasAddress = await evaluate(selector => document.querySelector(selector).value.length > 0, address);
+      if (diagnostic) await evaluate(hasAddress => window.__wuuAcceptanceAddressInput.snapshot(
+        'select-all-decision', undefined, { sent: hasAddress }), hasAddress);
+      // An empty field needs no replacement. Its existing 0..0 selection cannot
+      // acknowledge a native Select All command before the next typing action.
+      if (hasAddress) {
+        xinput(['key', '--clearmodifiers', 'ctrl+a']);
+        await waitFor(selector => { const input = document.querySelector(selector); return document.activeElement === input
+          && input.selectionStart === 0 && input.selectionEnd === input.value.length; }, address, 'Native select-all reaches the address input');
+      }
       xinput(['type', '--clearmodifiers', '--delay', '8', value]);
       await waitFor(({ selector, value }) => document.activeElement?.matches(selector) && document.activeElement.value === value, { selector: address, value });
     } finally {
