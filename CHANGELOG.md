@@ -25,7 +25,7 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Changed
 
-- Use a soft off-white workbench canvas across navigation, conversations, empty states, and catalog/settings pages while retaining distinct control surfaces.
+- Use a soft off-white workbench canvas across navigation, conversations, empty states, catalog/settings pages, and right-panel tools and previews while retaining distinct control surfaces.
 - Rename the plugins-and-skills navigation entry to Extensions and restore a large heading for the selected catalog category.
 - Separate plugins, settings, and account controls into a persistent icon ribbon
   beside contextual conversation, catalog, and plugin navigation, within the

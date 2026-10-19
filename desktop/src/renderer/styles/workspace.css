@@ -1,6 +1,7 @@
 /* Component color tokens for workspace.css. Light-theme values; the dark
    theme overrides these in base.css theme blocks. */
 :root {
+  --workspace-canvas-bg: var(--paper);
   --browser-status-overlay-bg: rgba(255, 255, 255, 0.86);
   --browser-error-text: var(--wuu-color-danger, #5d1f17);
   --browser-error-span-text: var(--wuu-color-danger, #6e2a22);
@@ -75,7 +76,7 @@
   grid-template-rows: var(--canvas-titlebar-height) minmax(0, 1fr);
   overflow: hidden;
   border-left: 1px solid transparent;
-  background: var(--paper);
+  background: var(--workspace-canvas-bg);
   margin-bottom: var(--conversation-pane-inset);
   /* Clip the painted canvas without moving the shared window-header row. */
   clip-path: inset(var(--conversation-pane-inset) 0 0 round 0 var(--conversation-canvas-radius) var(--conversation-canvas-radius) 0);
@@ -115,7 +116,7 @@
   height: var(--canvas-titlebar-height);
   align-items: center;
   gap: 4px;
-  background: var(--paper);
+  background: var(--workspace-canvas-bg);
   /* Clear native window controls and reserve the shell-owned sidebar toggle,
      including while the reading canvas is a full-width sheet. */
   padding: var(--conversation-pane-inset) calc(max(var(--control-toolbar-inset), var(--window-controls-inset-right)) + var(--control-size-toolbar) + var(--control-toolbar-gap)) 0 var(--workspace-row-inset);
@@ -140,7 +141,7 @@
   min-height: 0;
   grid-template-rows: auto auto minmax(0, 1fr);
   overflow: hidden;
-  background: var(--paper);
+  background: var(--workspace-canvas-bg);
 }
 
 .turn-file-diff-header {
@@ -197,7 +198,7 @@
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
-  background: var(--paper);
+  background: var(--workspace-canvas-bg);
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 12px;
   line-height: 1.55;
@@ -628,7 +629,7 @@ html[data-focus-modality="keyboard"] .workspace-tool-tab-close:focus-visible {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background: var(--paper);
+  background: var(--workspace-canvas-bg);
 }
 
 .workspace-panel-content-swap,
@@ -837,7 +838,7 @@ html.resizing-workspace-file-split * {
   padding: 10px 0;
   /* Same paper as the document and tab strip; the resizer hairline is the
    * only division, so the tree reads as part of the panel, not a gray well. */
-  background: var(--paper);
+  background: var(--workspace-canvas-bg);
 }
 
 .workspace-files-split[data-tree-side="right"] .workspace-files-tree {
@@ -970,7 +971,7 @@ html.resizing-workspace-file-split * {
   position: absolute;
   z-index: 0;
   inset: -40px 0 0;
-  background: linear-gradient(to bottom, transparent, var(--paper) 40px);
+  background: linear-gradient(to bottom, transparent, var(--workspace-canvas-bg) 40px);
   content: "";
   pointer-events: none;
 }
@@ -1260,7 +1261,7 @@ html[data-focus-modality="keyboard"] .workspace-tool-menu :is(button, summary):f
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background: var(--paper);
+  background: var(--workspace-canvas-bg);
 }
 
 .workspace-terminal-panel {
@@ -1387,7 +1388,7 @@ html[data-focus-modality="keyboard"] .workspace-tool-menu :is(button, summary):f
   min-height: 0;
   min-width: 0;
   grid-template-rows: auto minmax(0, 1fr);
-  background: var(--paper);
+  background: var(--workspace-canvas-bg);
 }
 
 /* A chrome row: the first and last glyphs sit on the pane inset and the
@@ -1486,13 +1487,13 @@ html[data-focus-modality="keyboard"] .workspace-browser-url-form:focus-within {
   position: relative;
   min-width: 0;
   min-height: 0;
-  background: var(--paper);
+  background: var(--workspace-canvas-bg);
 }
 
 .workspace-browser-host {
   position: absolute;
   inset: 0;
-  background: var(--paper);
+  background: var(--workspace-canvas-bg);
 }
 
 .workspace-browser-host[hidden] {
@@ -1606,7 +1607,7 @@ html[data-focus-modality="keyboard"] .workspace-browser-url-form:focus-within {
 }
 
 .workspace-scroll-region {
-  background: var(--paper);
+  background: var(--workspace-canvas-bg);
   overflow: hidden;
 }
 
@@ -1697,14 +1698,14 @@ html[data-focus-modality="keyboard"] .workspace-browser-url-form:focus-within {
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  background: var(--paper);
+  background: var(--workspace-canvas-bg);
 }
 
 .workspace-file-editor-scroll {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background: var(--paper);
+  background: var(--workspace-canvas-bg);
 }
 
 .workspace-file-editor-scroll.markdown-reading {
@@ -1717,7 +1718,7 @@ html[data-focus-modality="keyboard"] .workspace-browser-url-form:focus-within {
   min-height: 0;
   place-items: center;
   overflow: auto;
-  background: var(--paper);
+  background: var(--workspace-canvas-bg);
   padding: var(--space-6);
 }
 
@@ -1751,7 +1752,7 @@ html[data-focus-modality="keyboard"] .workspace-browser-url-form:focus-within {
   min-width: 0;
   min-height: 0;
   border: 0;
-  background: var(--paper);
+  background: var(--workspace-canvas-bg);
 }
 
 /* The side inset follows the panel, not the window. */
@@ -1901,7 +1902,7 @@ html[data-focus-modality="keyboard"] .workspace-browser-url-form:focus-within {
   min-height: 100%;
   border: 0;
   border-radius: 0;
-  background: var(--paper);
+  background: var(--workspace-canvas-bg);
   color: var(--ink);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 12px;
@@ -2028,7 +2029,7 @@ html[data-focus-modality="keyboard"] .workspace-browser-url-form:focus-within {
   min-height: 0;
   grid-template-rows: auto minmax(0, 1fr) auto;
   overflow: hidden;
-  background: var(--paper);
+  background: var(--workspace-canvas-bg);
 }
 
 /* The file row is a chrome row: its first glyph sits on the pane inset and
@@ -2204,7 +2205,7 @@ html[data-focus-modality="keyboard"] .workspace-browser-url-form:focus-within {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background: var(--paper);
+  background: var(--workspace-canvas-bg);
 }
 
 .workspace-diff-code-scroll {
@@ -2221,7 +2222,7 @@ html[data-focus-modality="keyboard"] .workspace-browser-url-form:focus-within {
   box-sizing: border-box;
   border: 0;
   border-radius: 0;
-  background: var(--paper);
+  background: var(--workspace-canvas-bg);
   color: var(--ink);
   font-family: var(--font-mono);
   font-size: var(--appearance-code-size);

@@ -153,10 +153,10 @@ function workspaceTerminalTheme(theme: AppliedTheme, host?: HTMLElement): ITheme
   const hues = WORKSPACE_TERMINAL_HUES;
   return resolveCssColors(
     {
-      background: "var(--paper)",
+      background: "var(--workspace-canvas-bg)",
       foreground: "var(--ink)",
       cursor: "var(--ink)",
-      cursorAccent: "var(--paper)",
+      cursorAccent: "var(--workspace-canvas-bg)",
       selectionBackground: "var(--selection-bg)",
       ...WORKSPACE_TERMINAL_NEUTRALS[theme],
       ...hues,

@@ -126,6 +126,7 @@ html:not([data-app-background]) .navigation-ribbon-layout:has(.sidebar-ribbon) :
 }
 
 .navigation-ribbon-layout:has(.sidebar-ribbon) .workspace-right-panel {
+  --workspace-canvas-bg: var(--workbench-canvas-bg);
   margin-top: var(--workbench-top);
   clip-path: inset(0 round 0 var(--conversation-canvas-radius) var(--conversation-canvas-radius) 0);
 }
