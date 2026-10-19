@@ -6,6 +6,7 @@ import { WEB_WORKSPACE_ZOOM_MIN, WEB_WORKSPACE_ZOOM_MAX, WEB_WORKSPACE_TAB_LIMIT
 import type { WebWorkspaceMenuAction, WebWorkspaceMenuRequest, WebWorkspaceBounds, WebWorkspaceCommand, WebWorkspaceDestination, WebWorkspaceLegacyDestination, WebWorkspaceInitializationState, WebWorkspaceFindOptions, WebWorkspaceFindResult, WebWorkspaceState, WebWorkspaceTabState } from "../shared/webWorkspace";
 import { BROWSER_PARTITION, BROWSER_WORKSPACE_TAB_PREFIX, type BrowserWorkspaceSource, type BrowserWorkspaceAttachment, type BrowserViewHandle, type BrowserParentWindowHandle, type BrowserPermissionRequestDetails, type BrowserSessionPermissionDelegate } from "./browserHostWindows";
 import { createBrowserView } from "./browserView";
+import { captureVisiblePage, safePageURL, type PageContextSnapshot } from "../shared/pageContext";
 import type { WebWorkspaceLibrary } from "./webWorkspaceLibrary";
 import type { WebWorkspaceDownloads } from "./webWorkspaceDownloads";
 
@@ -85,11 +86,14 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
   private permissionPrompts = new Set<number>();
   private discardTimer: ReturnType<typeof setInterval>;
   private discarding = false;
+  private detachedWindows = new Map<BrowserWindow, WorkspacePage>();
 
   constructor(
     private readonly onState: (owner: BrowserWindow, state: WebWorkspaceState) => void,
     private readonly onFocusAddress: (owner: BrowserWindow, id: string, newTabId?: string) => void,
     private readonly options: {
+      onViewAttached?: (owner: BrowserWindow) => void;
+      onFullscreen?: (owner: BrowserWindow, fullscreen: boolean) => void;
       onReveal?: (owner: BrowserWindow, id: string) => void;
       onFocusFind?: (owner: BrowserWindow, id: string) => void;
       onLibraryChange?: (owner: BrowserWindow) => void;
@@ -342,6 +346,24 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     });
   }
 
+  /** Capture only the exact visible tab nominated by an explicit capsule send. */
+  async pageContext(owner: BrowserWindow, id: string, tabId: string): Promise<PageContextSnapshot> {
+    if (typeof id !== "string" || typeof tabId !== "string") throw new Error("Invalid page context target.");
+    const group = this.group(owner, id), page = this.activeTab(group)?.page;
+    if (!page || page.tab.id !== tabId || !page.bounds || page.automation?.external || page.contents.isDestroyed()) {
+      throw new Error("The source page is no longer visible. Return to it and send again.");
+    }
+    const generation = page.navigationGeneration;
+    const url = page.contents.getURL();
+    const visible = await page.contents.executeJavaScriptInIsolatedWorld(998, [{ code: `(${captureVisiblePage.toString()})()` }]) as { text: string; selection: string };
+    if (this.groups.get(id) !== group || this.activeTab(group)?.page !== page || !page.bounds || page.contents.isDestroyed()
+      || page.navigationGeneration !== generation || page.contents.getURL() !== url) {
+      throw new Error("The page changed while reading its context. Send again on the intended page.");
+    }
+    return { kind: "website", pageId: BROWSER_WORKSPACE_TAB_PREFIX + tabId, title: page.contents.getTitle().slice(0, 200),
+      url: safePageURL(url), text: visible.text.slice(0, 6000), selection: visible.selection.slice(0, 2000), capturedAt: new Date().toISOString() };
+  }
+
   /** One bounded, in-memory backdrop for chrome overlays; no capture subscription. */
   async capture(owner: BrowserWindow, id: string): Promise<string | null> {
     const group = this.group(owner, id);
@@ -560,6 +582,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
   destroyAll(): void {
     clearInterval(this.discardTimer);
     for (const group of [...this.groups.values()]) this.destroyGroup(group);
+    this.closeDetachedWindows();
     this.flushLibrary();
     this.options.downloads?.destroyAll();
   }
@@ -680,8 +703,8 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
   private state(group: WorkspaceGroup): WebWorkspaceState {
     const active = this.activeTab(group);
     return {
-      ...(active ? this.tabState(active) : { url: "about:blank", title: "", loading: false, canGoBack: false, canGoForward: false }), id: group.id,
-      ...(group.tabbed ? { tabs: group.tabs.map(tab => this.tabState(tab)), activeTabId: group.activeTabId, canReopenTab: group.closedTabs.length > 0 } : {}),
+      ...(active ? this.tabState(active) : { url: "about:blank", title: "", loading: false, canGoBack: false, canGoForward: false }), id: group.id, activeTabId: group.activeTabId,
+      ...(group.tabbed ? { tabs: group.tabs.map(tab => this.tabState(tab)), canReopenTab: group.closedTabs.length > 0 } : {}),
     };
   }
 
@@ -723,11 +746,16 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     tab.page = page;
     this.pages.set(page.id, page);
     view.setVisible(false);
+    // Chromium can focus a newly attached hidden view before bounds arrive.
+    // Apply the visibility contract even when group layout has no bounds change.
+    page.contents.on("focus", () => this.layout(page));
     group.owner.contentView.addChildView(view);
+    this.options.onViewAttached?.(group.owner);
     this.secureContents(page, page.contents);
     page.contents.on("before-input-event", (event, input) => this.handleInput(page, event, input));
     page.contents.on("enter-html-full-screen", () => {
       page.htmlFullscreen = true;
+      this.options.onFullscreen?.(group.owner, true);
       // HTML fullscreen belongs to this native page, not the shell's ribbon
       // viewport. Restore its focus after the permission dialog so Chromium
       // receives the user's Escape key and handles fullscreen exit itself.
@@ -737,6 +765,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     });
     page.contents.on("leave-html-full-screen", () => {
       page.htmlFullscreen = false;
+      this.options.onFullscreen?.(group.owner, false);
       this.layout(page);
       if (!page.contents.isDestroyed() && page.bounds && view.getVisible()) page.contents.focus();
     });
@@ -879,6 +908,14 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     for (const tab of group.tabs) if (tab.page) this.destroyPage(tab.page);
   }
 
+  private closeDetachedWindows(owner?: BrowserWindow): void {
+    for (const [window, page] of this.detachedWindows) {
+      if (owner && page.owner !== owner) continue;
+      this.detachedWindows.delete(window);
+      if (!window.isDestroyed()) window.destroy();
+    }
+  }
+
   private layoutGroup(group: WorkspaceGroup): void {
     for (const tab of group.tabs) {
       if (!tab.page) continue;
@@ -947,6 +984,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
       // Renderer recovery releases all native resources but keeps the safe
       // session metadata. Destinations restore lazily with the same profile.
       for (const group of [...this.groups.values()]) if (group.owner === owner) this.destroyGroup(group);
+      this.closeDetachedWindows(owner);
       this.flushLibrary();
     };
     // Moving and resizing together can emit resize before the native content
@@ -1051,7 +1089,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     Menu.buildFromTemplate(template).popup({ window: page.owner });
   }
 
-  private secureContents(page: WorkspacePage, contents: WebContents): void {
+  private secureContents(page: WorkspacePage, contents: WebContents, detached = false): void {
     const contentsID = contents.id;
     const owned: PermissionOwner = { page, grants: new Set(), navigationGeneration: 0 };
     this.contentsOwners.set(contentsID, owned);
@@ -1093,11 +1131,15 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
         try { websiteURL(target); } catch { void this.openExternal(page, contents, target); return { action: "deny" }; }
       }
       const ribbon = page.group.id === WEB_WORKSPACE_RIBBON_ID;
+      const requestedPopup = details.features.split(",").some(feature => /^(popup|width|height|left|top)\s*(=|$)/i.test(feature.trim()));
+      // A user's separate window survives its source tab. Agent-created and
+      // feature/OAuth popups retain the existing opener-bound lifecycle.
+      const separateWindow = !restricted && page.group.tabbed && details.disposition === "new-window" && !requestedPopup;
       const popup = (target === "about:blank" && !ribbon) || !page.group.tabbed || (!ribbon && page.group.tabs.length >= WEB_WORKSPACE_TAB_LIMIT) || contents !== page.contents || details.disposition === "new-window"
-        || details.features.split(",").some(feature => /^(popup|width|height|left|top)\s*(=|$)/i.test(feature.trim()));
+        || requestedPopup;
       if (!popup && page.group.tabs.length >= WEB_WORKSPACE_TAB_LIMIT) return { action: "deny" };
       const response: Electron.WindowOpenHandlerResponse = {
-        action: "allow", outlivesOpener: !popup,
+        action: "allow", outlivesOpener: !popup || separateWindow,
         overrideBrowserWindowOptions: {
           parent: page.owner, width: 1000, height: 750, autoHideMenuBar: true,
           ...(restricted ? { show: false } : {}),
@@ -1110,8 +1152,21 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
           },
         },
       };
-      if (!popup) response.createWindow = options => {
-        const view = createBrowserView({ ...options, webPreferences: { ...options.webPreferences, preload: join(__dirname, "../preload/browserPage.cjs") } });
+      if (separateWindow) response.createWindow = options => {
+        const window = new BrowserWindow(options);
+        this.attachPopup(page, contents, window, true);
+        // Native modifier clicks can omit a guest WebContents. Electron's
+        // custom createWindow path then leaves the initial navigation to us.
+        if (!(options as WebContentsViewConstructorOptions).webContents) {
+          const post = details.postBody;
+          const headers = post ? `Content-Type: ${post.contentType}${post.boundary ? `; boundary=${post.boundary}` : ""}` : undefined;
+          void window.webContents.loadURL(target, { httpReferrer: details.referrer, postData: post?.data, extraHeaders: headers })
+            .catch(error => { if (error.code !== "ERR_ABORTED") console.warn("[web-workspace] Could not load website window", error); });
+        }
+        return window.webContents;
+      };
+      else if (!popup) response.createWindow = options => {
+        const view = createBrowserView(options);
         if (this.pages.get(page.id) !== page || this.groups.get(page.group.id) !== page.group) {
           view.webContents.close();
           return view.webContents;
@@ -1142,15 +1197,20 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
       };
       return response;
     });
-    contents.on("did-create-window", popup => {
-      page.popups.add(popup);
-      this.secureContents(page, popup.webContents);
-      const showOrigin = () => popup.setTitle(`Website: ${requestOrigin(popup.webContents.getURL()) ?? requestOrigin(contents.getURL()) ?? "New window"}`);
-      popup.webContents.on("did-navigate", showOrigin);
-      popup.webContents.on("page-title-updated", event => { event.preventDefault(); showOrigin(); });
-      showOrigin();
-      popup.once("closed", () => page.popups.delete(popup));
-    });
+    contents.on("did-create-window", popup => this.attachPopup(page, contents, popup, detached));
+  }
+
+  private attachPopup(page: WorkspacePage, opener: WebContents, popup: BrowserWindow, detached: boolean): void {
+    page.discardProtected = true;
+    if (detached) this.detachedWindows.set(popup, page);
+    else page.popups.add(popup);
+    this.secureContents(page, popup.webContents, detached);
+    const openerOrigin = requestOrigin(opener.getURL());
+    const showOrigin = () => popup.setTitle(`Website: ${requestOrigin(popup.webContents.getURL()) ?? openerOrigin ?? "New window"}`);
+    popup.webContents.on("did-navigate", showOrigin);
+    popup.webContents.on("page-title-updated", event => { event.preventDefault(); showOrigin(); });
+    showOrigin();
+    popup.once("closed", () => { page.popups.delete(popup); this.detachedWindows.delete(popup); });
   }
   private async openExternal(page: WorkspacePage, contents: WebContents, value: string): Promise<void> {
     if (this.automationRestricted(page)) return;
@@ -1170,7 +1230,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
         message: `This website wants to open a ${url.protocol.slice(0, -1)} link.`,
         detail: value, buttons: ["Cancel", "Open"], defaultId: 0, cancelId: 0, noLink: true,
       });
-      if (response === 1 && !this.automationRestricted(page) && !contents.isDestroyed() && this.pages.get(page.id) === page
+      if (response === 1 && !this.automationRestricted(page) && !contents.isDestroyed() && this.contentsOwners.get(contents.id)?.page === page
         && requestOrigin(contents.getURL()) === origin) await shell.openExternal(value);
     } catch (error) {
       console.warn("[web-workspace] Could not open external link", error);

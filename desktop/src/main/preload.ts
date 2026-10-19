@@ -1,3 +1,4 @@
+import type { PageContextApi } from "../shared/pageContext";
 import { contextBridge, ipcRenderer, webFrame } from "electron";
 import {
   MESSAGE_FLOW_FONT_SIZE_RANGE,
@@ -27,6 +28,7 @@ import {
   type WuuDesktopApi,
 } from "../shared/protocol";
 
+import type { ChromeOverlayApi, ChromeOverlayEvent } from "../shared/chromeOverlay";
 import type { ActivityPreviewAppearance } from "../shared/activityPreview";
 import type { WebWorkspaceApi, WebWorkspaceState } from "../shared/webWorkspace";
 import type { WebWorkspaceDownloadState } from "../shared/webWorkspaceDownloads";
@@ -707,6 +709,15 @@ browserApi.onBrowserDock = (handler) => {
   return () => ipcRenderer.removeListener("wuu:browser-dock", listener);
 };
 if (!process.argv.includes("--wuu-browser-disabled")) {
+  (api as WuuDesktopApi & { chromeOverlay: ChromeOverlayApi }).chromeOverlay = {
+    show: request => ipcRenderer.invoke("wuu:chrome-overlay-show", request),
+    hide: (token, generation) => ipcRenderer.invoke("wuu:chrome-overlay-hide", token, generation),
+    onEvent: listener => {
+      const receive = (_event: Electron.IpcRendererEvent, message: ChromeOverlayEvent) => listener(message);
+      ipcRenderer.on("wuu:chrome-overlay-event", receive);
+      return () => ipcRenderer.removeListener("wuu:chrome-overlay-event", receive);
+    },
+  };
   (api as WuuDesktopApi & { webWorkspace: WebWorkspaceApi }).webWorkspace = {
     reportPopover: (token, bounds) => ipcRenderer.invoke("wuu:web-workspace-popover", token, bounds),
     onPopoverDismiss: handler => {
@@ -782,8 +793,12 @@ browserApi.addBrowserExtension = () =>
   ipcRenderer.invoke("wuu:browser-extensions-add") as Promise<BrowserExtensionRecord[]>;
 browserApi.setBrowserExtensionEnabled = (id, enabled) =>
   ipcRenderer.invoke("wuu:browser-extensions-set-enabled", id, enabled) as Promise<BrowserExtensionRecord[]>;
+browserApi.reloadBrowserExtension = (id) =>
+  ipcRenderer.invoke("wuu:browser-extensions-reload", id) as Promise<BrowserExtensionRecord[]>;
 browserApi.removeBrowserExtension = (id) =>
   ipcRenderer.invoke("wuu:browser-extensions-remove", id) as Promise<BrowserExtensionRecord[]>;
+
+(api as WuuDesktopApi & PageContextApi).readPageContext = (id, tabId) => ipcRenderer.invoke("wuu:page-context-read", id, tabId);
 
 contextBridge.exposeInMainWorld("wuu", api);
 

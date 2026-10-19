@@ -8,9 +8,11 @@ import type { WebWorkspaceDownloadCommand } from "../shared/webWorkspaceDownload
 import { NativeTooltip } from "./nativeTooltip";
 import { NativeBrowserPopover } from "./nativeBrowserPopover";
 import type { WebWorkspacePopoverBounds } from "../shared/webWorkspace";
+import { ChromeOverlayHost, chromeOverlayScheme } from "./chromeOverlayHost";
+import type { ChromeOverlayRequest } from "../shared/chromeOverlay";
 import type { WebWorkspaceTooltip, WebWorkspaceMenuRequest, WebWorkspaceBounds, WebWorkspaceCommand, WebWorkspaceDestination, WebWorkspaceLegacyDestination, WebWorkspaceFindOptions } from "../shared/webWorkspace";
 import { importBrowserCookies, listBrowserProfiles } from "./browserCookieImport";
-import { BrowserExtensionManager } from "./browserExtensions";
+import { BrowserExtensionManager, type BrowserExtensionConsent } from "./browserExtensions";
 import { saveArtifactFile } from "./artifactSave";
 import { showArtifactItemMenu } from "./artifactItemMenu";
 import type { DesktopZoomAction } from "../shared/DesktopPageZoom";
@@ -271,7 +273,7 @@ if (process.argv.includes("--safe-mode")) {
 }
 // Electron forwards fetch/CORS privileges through one set of child-process
 // switches; a second registration would replace the first set.
-protocol.registerSchemesAsPrivileged([...renderableFileSchemes, pluginModuleScheme]);
+protocol.registerSchemesAsPrivileged([...renderableFileSchemes, pluginModuleScheme, chromeOverlayScheme]);
 
 let mainWindow: BrowserWindow | null = null;
 // Live system notifications are kept referenced so the OS cannot collect
@@ -355,11 +357,17 @@ const webWorkspaceLibrary = new WebWorkspaceLibrary(join(app.getPath("userData")
 const webWorkspaceDownloads = new WebWorkspaceDownloads(
   (owner, items) => sendToWindow(owner, "wuu:web-workspace-downloads", items),
 );
+const chromeOverlayHost = new ChromeOverlayHost(
+  (owner, event) => sendToWindow(owner, "wuu:chrome-overlay-event", event),
+  join(__dirname, "../renderer"), join(__dirname, "../preload/chromeOverlay.cjs"), !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : undefined,
+);
 const webWorkspaceHost = new WebWorkspaceHost(
   (owner, state) => sendToWindow(owner, "wuu:web-workspace-state", state),
   (owner, id, newTabId) => sendToWindow(owner, "wuu:web-workspace-focus-address", { id, newTabId }),
   {
     library: webWorkspaceLibrary, downloads: webWorkspaceDownloads,
+    onViewAttached: owner => chromeOverlayHost.prepare(owner),
+    onFullscreen: (owner, fullscreen) => chromeOverlayHost.setFullscreen(owner, fullscreen),
     onReveal: (owner, id) => sendToWindow(owner, "wuu:web-workspace-reveal", id),
     onFocusFind: (owner, id) => sendToWindow(owner, "wuu:web-workspace-focus-find", id),
     onLibraryChange: (owner) => sendToWindow(owner, "wuu:web-workspace-library", webWorkspaceLibrary.getState()),
@@ -514,9 +522,8 @@ function requireAppContextSender(event: IpcMainInvokeEvent): void {
 }
 
 function requireBrowserSettingsSender(event: IpcMainInvokeEvent): BrowserWindow {
-  const host = BrowserWindow.fromWebContents(event.sender);
-  const main = windowRegistry.mainWindow();
-  if (!host || host.isDestroyed() || !main || host !== main) {
+  const host = windowRegistry.mainWindow();
+  if (!host || !isAppContextSender(event)) {
     throw new Error("Browser settings are available from Wuu's main window only.");
   }
   return host;
@@ -528,6 +535,36 @@ function requireBrowserExtensionManager(): BrowserExtensionManager {
   }
   return browserExtensionManager;
 }
+
+function browserExtensionConsent(host: BrowserWindow, legacy = false): BrowserExtensionConsent {
+  return async (manifest, source, previous) => {
+    if (host.isDestroyed()) return false;
+    const display = (items: string[]) => items.length ? items.join(", ") : mainTranslate("browserExtensionNone");
+    const warnings = {
+      serviceWorker: "browserExtensionServiceWorker", action: "browserExtensionAction",
+      options: "browserExtensionOptions", browserUI: "browserExtensionBrowserUI", devtools: "browserExtensionDevtools",
+    } as const;
+    const { response } = await dialog.showMessageBox(host, {
+      type: "warning",
+      message: mainTranslate(previous ? "browserExtensionReviewUpdate" : "browserExtensionReview", { name: `${manifest.name} ${manifest.version}` }),
+      detail: [
+        mainTranslate("browserExtensionTrust"),
+        mainTranslate("browserExtensionPermissions", { value: display(manifest.permissions) }),
+        mainTranslate("browserExtensionSites", { value: display(manifest.sites) }),
+        mainTranslate("browserExtensionOptional", { value: display([...manifest.optionalPermissions, ...manifest.optionalSites]) }),
+        ...(manifest.unsupportedPermissions.length ? [mainTranslate("browserExtensionUnsupported", { value: display(manifest.unsupportedPermissions) })] : []),
+        mainTranslate("browserExtensionCompatibility"),
+        ...manifest.compatibility.map(warning => mainTranslate(warnings[warning])),
+        ...(legacy ? [mainTranslate("browserExtensionMigration")] : []),
+        mainTranslate("browserExtensionSource", { path: source }),
+      ].join("\n\n"),
+      buttons: [mainTranslate("browserExtensionCancel"), mainTranslate("browserExtensionLoad")],
+      defaultId: 0, cancelId: 0, noLink: true,
+    });
+    return response === 1 && !host.isDestroyed();
+  };
+}
+
 
 async function showProjectDirectoryDialog(
   options: OpenDialogOptions,
@@ -2877,6 +2914,11 @@ app.whenReady().then(async () => {
     if (!isAppContextSender(event)) throw new Error("Website destinations are available from Wuu's main window only.");
     return windowRegistry.mainWindow()!;
   };
+  ipcMain.handle("wuu:chrome-overlay-show", (event, request: ChromeOverlayRequest) => chromeOverlayHost.show(webWorkspaceSender(event), request));
+  ipcMain.handle("wuu:chrome-overlay-hide", (event, token: string, generation: number) => chromeOverlayHost.hide(webWorkspaceSender(event), token, generation));
+  ipcMain.handle("wuu:chrome-overlay-ready", event => chromeOverlayHost.ready(event));
+  ipcMain.on("wuu:chrome-overlay-painted", (event, token: string, generation: number) => chromeOverlayHost.painted(event, token, generation));
+  ipcMain.on("wuu:chrome-overlay-command", (event, message) => chromeOverlayHost.command(event, message));
   ipcMain.handle("wuu:web-workspace-tabs-initialize", (event, destinations: WebWorkspaceLegacyDestination[]) =>
     webWorkspaceHost.initializeTabs(webWorkspaceSender(event), destinations));
   ipcMain.handle("wuu:web-workspace-open", (event, destination: WebWorkspaceDestination) =>
@@ -2888,6 +2930,8 @@ app.whenReady().then(async () => {
   ipcMain.handle("wuu:web-workspace-popover", (event, token: string, bounds: WebWorkspacePopoverBounds | null) =>
     nativeBrowserPopovers.get(webWorkspaceSender(event))?.report(token, bounds));
   ipcMain.handle("wuu:web-workspace-capture", (event, id: string) => webWorkspaceHost.capture(webWorkspaceSender(event), id));
+  ipcMain.handle("wuu:page-context-read", (event, id: string, tabId: string) =>
+    webWorkspaceHost.pageContext(webWorkspaceSender(event), id, tabId));
   ipcMain.handle("wuu:web-workspace-bounds", (event, id: string, bounds: WebWorkspaceBounds | null) =>
     webWorkspaceHost.reportBounds(webWorkspaceSender(event), id, bounds));
   ipcMain.handle("wuu:web-workspace-shortcut-target", (event, id: string, active: boolean) =>
@@ -2972,18 +3016,27 @@ app.whenReady().then(async () => {
       properties: ["openDirectory"],
     });
     if (result.canceled || !result.filePaths[0]) return manager.list();
-    return manager.addFromDirectory(result.filePaths[0]);
+    return manager.addFromDirectory(result.filePaths[0], browserExtensionConsent(host));
   });
   ipcMain.handle(
     "wuu:browser-extensions-set-enabled",
-    (event, id: unknown, enabled: unknown) => {
-      requireBrowserSettingsSender(event);
+    async (event, id: unknown, enabled: unknown) => {
+      const host = requireBrowserSettingsSender(event);
       if (typeof id !== "string" || !id.trim() || typeof enabled !== "boolean") {
         throw new Error("Extension id and enabled state are required.");
       }
-      return requireBrowserExtensionManager().setEnabled(id, enabled);
+      const manager = requireBrowserExtensionManager();
+      const legacy = (await manager.list()).some(extension => extension.id === id && extension.needsReview);
+      return manager.setEnabled(id, enabled, browserExtensionConsent(host, legacy));
     },
   );
+  ipcMain.handle("wuu:browser-extensions-reload", async (event, id: unknown) => {
+    const host = requireBrowserSettingsSender(event);
+    if (typeof id !== "string" || !id.trim()) throw new Error("Extension id is required.");
+    const manager = requireBrowserExtensionManager();
+    const legacy = (await manager.list()).some(extension => extension.id === id && extension.needsReview);
+    return manager.reload(id, browserExtensionConsent(host, legacy));
+  });
   ipcMain.handle("wuu:browser-extensions-remove", (event, id: unknown) => {
     requireBrowserSettingsSender(event);
     if (typeof id !== "string" || !id.trim()) {

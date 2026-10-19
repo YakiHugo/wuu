@@ -149,7 +149,7 @@ function PluginAssetIcon({
   );
 }
 
-function loadPluginIconURL(pluginId: string, fingerprint: string, path: string): Promise<string> {
+export function loadPluginIconURL(pluginId: string, fingerprint: string, path: string): Promise<string> {
   const key = `${pluginId}\u0000${fingerprint}\u0000${path}`;
   const existing = pluginIconURLs.get(key);
   if (existing) return existing;

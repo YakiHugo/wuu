@@ -1,13 +1,15 @@
-import { useContext, useEffect, useId, useRef, useState } from "react";
+import { useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { PhoneNavigationContext } from './PhoneNavigationContext';
 import { DesktopUpdateButton } from "./DesktopUpdateButton";
-import { BarChart3, ChevronsUpDown, LogOut, Settings, Smartphone, UserRound } from "./WuuIcons";
+import { SidebarAccountPanel, SidebarAccountTrigger } from "./SidebarAccountParts";
+import { chromeOverlayApi, NativeRibbonFooterContext, useChromeOverlay } from "./ChromeOverlay";
+import type { ChromeAccountAction, ChromeAccountPanel, ChromeAccountTrigger, ChromeOverlayRect } from "../shared/chromeOverlay";
 import type { AccountView } from "./AccountPanel";
 import { hostSupports } from "./HostCapabilities";
 import { ENABLE_ACCOUNT } from "./FeatureFlags";
 import { useRetainHoverOwner } from "./HoverReveal";
 import { useI18n } from "./i18n";
-import { composerMenuWidth, FloatingMenuPortal, handleFloatingMenuKeyDown, useFloatingMenuFocus } from "./ComposerFloatingMenu";
+import { composerMenuWidth, FloatingMenuPortal, useFloatingMenuFocus } from "./ComposerFloatingMenu";
 import "./SidebarAccountMenu.css";
 
 export function SidebarAccountMenu({ disabled, localOnly = false, matchTriggerWidth = true, onOpenSettings, onOpenAccount }: {
@@ -19,6 +21,10 @@ export function SidebarAccountMenu({ disabled, localOnly = false, matchTriggerWi
 }): React.JSX.Element {
   const { t } = useI18n();
   const phoneNavigation = useContext(PhoneNavigationContext);
+  const nativeRibbon = useContext(NativeRibbonFooterContext);
+  const [nativeAnchor, setNativeAnchor] = useState<ChromeOverlayRect | null>(null);
+  const [nativeBounds, setNativeBounds] = useState<ChromeOverlayRect | null>(null);
+  const useNative = Boolean(chromeOverlayApi());
   const id = useId();
   const anchor = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
@@ -55,7 +61,7 @@ export function SidebarAccountMenu({ disabled, localOnly = false, matchTriggerWi
     };
   }, [driver, disabled, open]);
 
-  useFloatingMenuFocus(panel, "account", open);
+  useFloatingMenuFocus(panel, "account", open && !useNative);
   useEffect(() => {
     if (!open) return;
     const outside = (event: PointerEvent) => {
@@ -65,7 +71,7 @@ export function SidebarAccountMenu({ disabled, localOnly = false, matchTriggerWi
     return () => document.removeEventListener("pointerdown", outside, true);
   }, [open]);
 
-  const close = () => { setOpen(false); anchor.current?.focus(); };
+  const close = () => { setOpen(false); setNativeAnchor(null); anchor.current?.focus(); };
   const navigate = (page: "providers" | "usage") => { close(); onOpenSettings(page); };
   const logout = async () => {
     if (!driver || busy) return;
@@ -80,36 +86,55 @@ export function SidebarAccountMenu({ disabled, localOnly = false, matchTriggerWi
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally { setBusy(false); }
   };
-  const avatar = <span className="sidebar-account-avatar" aria-hidden="true">{account.username ? (account.display_name || account.username).slice(0, 2).toUpperCase() : <UserRound size={18} />}</span>;
+  const name = account.display_name || account.username || t("account.localMode");
+  const initials = account.username ? name.slice(0, 2).toUpperCase() : undefined;
+  const triggerModel: ChromeAccountTrigger = { title: name, initials, disabled, open, label: t("account.menu") };
+  const panelModel: ChromeAccountPanel = { label: t("account.menu"),
+    profile: account.username ? { title: name, initials: initials!, server: account.server } : undefined,
+    rows: [
+      ...(accountEnabled && phoneNavigation ? [{ action: "devices" as const, label: t("account.computersAndAccount") }] : []),
+      { action: "usage", label: t("settings.usage") },
+      ...(driver && onOpenAccount ? [{ action: "account" as const, label: t(account.username ? "account.manage" : "account.linkDevices") }] : []),
+      { action: "providers", label: t("sidebar.settings") },
+      ...(account.username ? [{ action: "logout" as const, label: t(busy ? "account.busy" : "account.logout"), disabled: busy }] : []),
+    ], error, notice: notice ? t("account.localLogout") : undefined,
+  };
+  const action = (value: ChromeAccountAction) => {
+    if (value === "logout") void logout();
+    else if (value === "usage" || value === "providers") navigate(value);
+    else if (value === "devices") { close(); phoneNavigation?.openDevices(); }
+    else if (value === "account") { close(); onOpenAccount?.(); }
+  };
+  useLayoutEffect(() => {
+    nativeRibbon?.publishAccount(triggerModel, bounds => { setNativeAnchor(bounds); setOpen(value => !value); });
+    return () => nativeRibbon?.publishAccount(undefined);
+  }, [nativeRibbon, JSON.stringify(triggerModel)]);
+  useLayoutEffect(() => {
+    if (!open || !useNative || !panel.current || !anchor.current) return;
+    const measure = () => {
+      const source = nativeAnchor ?? anchor.current!.getBoundingClientRect();
+      const width = Math.min(window.innerWidth - 16, Math.max(composerMenuWidth(240), matchTriggerWidth ? source.width : 0));
+      const height = Math.min(window.innerHeight - 16, panel.current!.scrollHeight);
+      setNativeBounds({ x: Math.max(8, Math.min(window.innerWidth - width - 8, source.x)),
+        y: Math.max(8, source.y - height - 6), width, height });
+    };
+    measure();
+    const observer = new ResizeObserver(measure); observer.observe(panel.current);
+    return () => observer.disconnect();
+  }, [open, useNative, nativeAnchor, matchTriggerWidth, JSON.stringify(panelModel)]);
+  useChromeOverlay(open && useNative, nativeBounds, { kind: "account", panel: panelModel }, command => {
+    if (command.type === "account-action") action(command.action);
+    if (command.type === "dismiss" && (command.reason === "escape" || command.reason === "tab")) anchor.current?.focus();
+  }, () => { setOpen(false); setNativeAnchor(null); }, true);
 
+  const content = <SidebarAccountPanel panelRef={panel} id={id} model={panelModel} onAction={action} onClose={() => setOpen(false)} trigger={anchor.current}
+    onBlur={event => { if (!useNative && event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node) && event.relatedTarget !== anchor.current) setOpen(false); }} />;
   return <div className="sidebar-account">
-    <button ref={anchor} className="sidebar-account-trigger" type="button" disabled={disabled}
-      aria-label={t("account.menu")} aria-haspopup="menu" aria-expanded={open} aria-controls={open ? id : undefined}
-      onClick={() => setOpen(!open)} onKeyDown={event => {
-        if (event.key === "ArrowUp" || event.key === "ArrowDown") { event.preventDefault(); setOpen(true); }
-      }}>
-      {avatar}<span className="sidebar-account-name">{account.display_name || account.username || t("account.localMode")}</span><ChevronsUpDown size={14} aria-hidden="true" />
-    </button>
+    <SidebarAccountTrigger model={triggerModel} anchorRef={anchor} controls={open ? id : undefined} onOpen={() => { setNativeAnchor(null); setOpen(!open); }} />
     <DesktopUpdateButton />
-    {open && <FloatingMenuPortal anchorRef={anchor} owner="sidebar-account" placement="above" align="left"
-      width={composerMenuWidth(240)} matchAnchorWidth={matchTriggerWidth} flip>
-      <div ref={panel} id={id} role="menu" aria-label={t("account.menu")} className="select-menu-panel sidebar-account-menu"
-        onBlur={event => { if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node) && event.relatedTarget !== anchor.current) setOpen(false); }}
-        onKeyDown={event => handleFloatingMenuKeyDown(event, () => setOpen(false), anchor.current)}>
-        {/* Without an account the trigger already says local use; a profile
-            header would only repeat it. */}
-        {account.username ? <>
-          <div className="sidebar-account-profile">{avatar}<div><strong>{account.display_name || account.username}</strong><span>{account.server}</span></div></div>
-          <div className="sidebar-account-divider" role="separator" />
-        </> : null}
-        {accountEnabled && phoneNavigation && <button role="menuitem" className="select-menu-item" onClick={() => { close(); phoneNavigation.openDevices(); }}><UserRound size={18} aria-hidden="true" /><span>{t('account.computersAndAccount')}</span></button>}
-        <button role="menuitem" className="select-menu-item" onClick={() => navigate("usage")}><BarChart3 size={18} aria-hidden="true" /><span>{t("settings.usage")}</span></button>
-        {driver && onOpenAccount && <button role="menuitem" className="select-menu-item" onClick={() => { close(); onOpenAccount(); }}><Smartphone size={18} aria-hidden="true" /><span>{t(account.username ? "account.manage" : "account.linkDevices")}</span></button>}
-        <button role="menuitem" data-settings-page="providers" className="select-menu-item" onClick={() => navigate("providers")}><Settings size={18} aria-hidden="true" /><span>{t("sidebar.settings")}</span></button>
-        {account.username && <button role="menuitem" className="select-menu-item" disabled={busy} onClick={() => void logout()}><LogOut size={18} aria-hidden="true" /><span>{t(busy ? "account.busy" : "account.logout")}</span></button>}
-        {error && <p className="sidebar-account-message settings-error" role="alert">{error}</p>}
-        {notice && <p className="sidebar-account-message" role="status">{t("account.localLogout")}</p>}
-      </div>
-    </FloatingMenuPortal>}
+    {open && (useNative ? <div aria-hidden="true" style={{ position: "fixed", visibility: "hidden", pointerEvents: "none", width: composerMenuWidth(240),
+      "--floating-menu-available-width": `${composerMenuWidth(240)}px`, "--floating-menu-available-height": "400px" } as React.CSSProperties}>{content}</div>
+      : <FloatingMenuPortal anchorRef={anchor} owner="sidebar-account" placement="above" align="left"
+        width={composerMenuWidth(240)} matchAnchorWidth={matchTriggerWidth} flip>{content}</FloatingMenuPortal>)}
   </div>;
 }

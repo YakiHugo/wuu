@@ -44,18 +44,61 @@ module.exports = async function acceptChrome(h, view) {
     const screen = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'x11grab', '-video_size', '1920x1200', '-i', process.env.DISPLAY, '-frames:v', '1', '-y', path.join(output, 'hover-screen-' + label + '.png')]);
     assert.equal(screen.status, 0, String(screen.stderr));
     const railExpanded = await evaluate(() => document.querySelector('.sidebar-ribbon')?.dataset.expanded === 'true');
-    let backdrop;
-    if (railExpanded) {
-      await until(() => evaluate(() => { const image = document.querySelector('.web-workspace-stage:not([hidden]) .web-workspace-backdrop'); return image?.complete && image.naturalWidth > 100; }), 'hover overlay has a decoded page backdrop');
-      backdrop = await evaluate(() => { const image = document.querySelector('.web-workspace-stage:not([hidden]) .web-workspace-backdrop'); return { width: image.naturalWidth, height: image.naturalHeight }; });
-      assert.deepEqual(view.getBounds(), boundsBeforeHover, 'Hover expansion does not change native page bounds');
-    }
-    const sample = { width, height, zoom, theme, anchor, hint, railExpanded, backdrop, visibleDuringHover: view.getVisible(), menu: [] };
+    const ribbon = win.contentView.children.find(child => child.webContents?.getURL() === 'wuu-chrome://ui/chrome-overlay.html?surface=ribbon');
+    assert.ok(railExpanded && ribbon, 'Hover opens the bounded trusted ribbon');
+    await until(() => ribbon.getVisible(), 'Native ribbon has painted');
+    const tickBefore = await wc.executeJavaScript('window.ticks');
+    await delay(150);
+    const nativeRibbon = { bounds: ribbon.getBounds(), beforeTicks: tickBefore, afterTicks: await wc.executeJavaScript('window.ticks'),
+      title: await ribbon.webContents.executeJavaScript(`document.querySelector('[data-ribbon-id="${fixtureTabs.animated.id}"]')?.getAttribute('title')`) };
+    assert.deepEqual(view.getBounds(), boundsBeforeHover, 'Hover expansion keeps the native page viewport');
+    assert.equal(view.getVisible(), true, 'The page stays live below the ribbon');
+    assert.equal(wc.isFocused(), focusBeforeHover, 'Pointer hover never steals page focus');
+    assert.ok(nativeRibbon.afterTicks > tickBefore, 'Animation continues below the native ribbon');
+    assert.ok(nativeRibbon.bounds.width < view.getBounds().width, 'The ribbon does not install a window-sized invisible hit area');
+    const sample = { width, height, zoom, theme, anchor, hint, railExpanded, nativeRibbon, visibleDuringHover: view.getVisible(), menu: [] };
     samples.push(sample);
+
+    // The account panel is a second bounded view over the same live page.
+    const accountPoint = await ribbon.webContents.executeJavaScript(`(()=>{const r=document.querySelector('.sidebar-account-trigger').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+    const rb = ribbon.getBounds();
+    await nativeInput(['mousemove', String(Math.round(b.x + rb.x + accountPoint.x * zoom)), String(Math.round(b.y + rb.y + accountPoint.y * zoom)), 'click', '1']);
+    const account = win.contentView.children.find(child => child.webContents?.getURL() === 'wuu-chrome://ui/chrome-overlay.html?surface=account');
+    await until(() => account?.getVisible(), 'Account panel has painted');
+    const accountBefore = await wc.executeJavaScript('window.ticks'); await delay(150);
+    sample.account = { bounds: account.getBounds(), beforeTicks: accountBefore, afterTicks: await wc.executeJavaScript('window.ticks'), visible: view.getVisible(),
+      authority: await account.webContents.executeJavaScript('({wuu:typeof window.wuu,require:typeof require,bridge:Object.keys(window.wuuChromeOverlay).sort()})') };
+    assert.ok(sample.account.visible && sample.account.afterTicks > accountBefore, 'Account menu keeps the webpage animating');
+    assert.deepEqual(sample.account.authority, { wuu: 'undefined', require: 'undefined', bridge: ['command','onState','painted','ready'] }, 'Native chrome has only its narrow bridge');
+    // Stale messages and commands for another surface must have no effect.
+    await account.webContents.executeJavaScript(`(async()=>{const state=await window.wuuChromeOverlay.ready();window.wuuChromeOverlay.command({token:state.token,generation:state.generation-1,command:{type:'account-action',action:'providers'}});window.wuuChromeOverlay.command({token:state.token,generation:state.generation,command:{type:'new-tab'}})})()`);
+    await settle();
+    assert.equal(view.getVisible(), true, 'Stale and cross-surface commands do not navigate the shell');
+    await capture('account-' + label);
+    // Test the first click while the account is still open, rather than after
+    // explicitly closing it: transparent native views must not eat page input.
+    const outsideInput = await wc.executeJavaScript(`(()=>{scrollTo(0,0);const r=document.querySelector('#draft').getBoundingClientRect();return{x:r.right-8,y:r.y+r.height/2}})()`);
+    const liveBounds = view.getBounds();
+    await nativeInput(['mousemove', String(Math.round(b.x + liveBounds.x + outsideInput.x)), String(Math.round(b.y + liveBounds.y + outsideInput.y)), 'click', '1']);
+    assert.equal(await wc.executeJavaScript('document.activeElement.id'), 'draft', 'The first click while account is open reaches the live webpage');
+    await until(() => !account.getVisible(), 'Outside click dismisses account');
+    await nativeInput(['mousemove', String(Math.round(b.x + (anchor.x + anchor.width / 2) * zoom)), String(Math.round(b.y + (anchor.y + anchor.height / 2) * zoom))]);
+    await until(() => ribbon.getVisible(), 'Ribbon reopens after outside dismissal');
+    await nativeInput(['mousemove', String(Math.round(b.x + rb.x + accountPoint.x * zoom)), String(Math.round(b.y + rb.y + accountPoint.y * zoom)), 'click', '1']);
+    await until(() => account.getVisible(), 'Account reopens for keyboard dismissal');
+    await nativeInput(['key', 'Escape']);
+    await until(() => !account.getVisible(), 'Escape dismisses account');
     await nativeInput(['mousemove', String(b.x + width - 80), String(b.y + 40)]);
-    await until(() => win.getChildWindows().every(window => !window.isVisible()), 'Leaving the ribbon dismisses the hint');
-    await until(() => view.getVisible(), 'Leaving the ribbon restores the same live page');
+    await until(() => !ribbon.getVisible(), 'Leaving the ribbon dismisses its native panel');
+    assert.equal(view.getVisible(), true, 'Leaving chrome never hides the webpage');
     assert.deepEqual(view.getBounds(), boundsBeforeHover, 'Rail collapse keeps native page bounds unchanged');
+
+    // Real pointer input outside the panel reaches the original page without
+    // a page-sized transparent overlay eating the first click.
+    const draftPoint = await wc.executeJavaScript(`(()=>{scrollTo(0,0);const r=document.querySelector('#draft').getBoundingClientRect();return{x:r.x+Math.min(r.width-4,200),y:r.y+r.height/2}})()`);
+    const pb = view.getBounds();
+    await nativeInput(['mousemove', String(Math.round(b.x + pb.x + draftPoint.x)), String(Math.round(b.y + pb.y + draftPoint.y)), 'click', '1']);
+    assert.equal(await wc.executeJavaScript('document.activeElement.id'), 'draft', 'The first click outside native chrome reaches the webpage');
     for (let cycle = 0; cycle < 3; cycle++) {
       await wc.executeJavaScript(`scrollTo(0,${300 + cycle * 180});document.documentElement.style.background='${['#dc5572', '#45a688', '#6766c1'][cycle]}';void 0;`);
       const before = await wc.executeJavaScript('({ticks:window.ticks,scroll:scrollY})');
@@ -106,10 +149,8 @@ module.exports = async function acceptChrome(h, view) {
   for (const navigation of report.linkNavigation) assert.ok(navigation.visible && !navigation.events.some(event => !event.visible), 'Following a link must not hide the native website');
   fs.writeFileSync(path.join(output, 'browser-chrome.json'), JSON.stringify(samples, null, 2));
   for (const sample of samples) {
-    assert.equal(sample.visibleDuringHover, !sample.railExpanded, 'Only the intentional expanded rail occludes the native website');
-    if (sample.railExpanded) assert.ok(sample.backdrop.width > 100 && sample.backdrop.height > 100, 'Expanded rail retains native page pixels beneath it');
-    assert.ok(sample.hint, 'Hover produces a visible hint');
-    assert.ok(Math.abs(sample.hint.y - sample.anchor.y) < sample.anchor.height + sample.hint.height + 12, 'A ribbon hint stays beside its trigger instead of moving to the toolbar');
+    assert.equal(sample.visibleDuringHover, true, 'Hover chrome preserves the live native website');
+    assert.ok(sample.nativeRibbon.title, 'The bounded ribbon retains its full native label hint');
     for (const menu of sample.menu) {
       assert.ok(menu.open.visible && !menu.events.includes(false), 'Opening options keeps the live webpage visible');
       assert.ok(menu.open.ticks > menu.before.ticks, 'The webpage keeps animating under options');

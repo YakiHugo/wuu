@@ -1,12 +1,13 @@
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { DesktopUpdateState } from "../shared/protocol";
-import { Download, RefreshCw, RotateCw } from "./WuuIcons";
-import { Tooltip } from "./Tooltip";
+import { DesktopUpdateButtonSurface } from "./DesktopUpdateButtonSurface";
+import { NativeRibbonFooterContext } from "./ChromeOverlay";
+import type { ChromeDesktopUpdate } from "../shared/chromeOverlay";
 import { useI18n } from "./i18n";
-import "./DesktopUpdateButton.css";
 
 export function DesktopUpdateButton(): React.JSX.Element | null {
   const { t } = useI18n();
+  const nativeRibbon = useContext(NativeRibbonFooterContext);
   const [state, setState] = useState<DesktopUpdateState>({ kind: "unsupported" });
   const [pending, setPending] = useState(false);
   const [requestFailed, setRequestFailed] = useState(false);
@@ -26,7 +27,6 @@ export function DesktopUpdateButton(): React.JSX.Element | null {
     return () => { active = false; unsubscribe(); };
   }, []);
 
-  if (state.kind === "unsupported" || state.kind === "idle") return null;
   const version = "version" in state ? state.version : "";
   const downloading = state.kind === "downloading";
   const busy = pending || downloading || state.kind === "checking" || state.kind === "prompting" || state.kind === "installing";
@@ -51,25 +51,12 @@ export function DesktopUpdateButton(): React.JSX.Element | null {
     } finally { setPending(false); }
   };
 
-  return <div className="desktop-update" data-state={state.kind}>
-    <Tooltip content={label}>
-      <button type="button" className="desktop-update-button" aria-label={label}
-        aria-disabled={busy} onClick={() => void activate()}>
-        <span className="desktop-update-glyph" key={state.kind} aria-hidden="true">
-          {downloading ? <>
-            <svg className="desktop-update-ring" viewBox="0 0 28 28" fill="none">
-              <circle className="desktop-update-track" cx="14" cy="14" r="11" />
-              <circle className="desktop-update-progress" cx="14" cy="14" r="11" pathLength="100"
-                strokeDasharray="100" strokeDashoffset={100 - state.percent} />
-            </svg>
-            <Download className="desktop-update-download" />
-          </> : state.kind === "ready" || state.kind === "installing" ? <RotateCw />
-            : state.kind === "checking" ? <RefreshCw /> : <Download />}
-        </span>
-      </button>
-    </Tooltip>
-    {downloading && <span className="sr-only" role="progressbar" aria-label={t("desktopUpdate.progress")}
-      aria-valuemin={0} aria-valuemax={100} aria-valuenow={state.percent} />}
-    <span className="sr-only" role="status">{downloading ? t("desktopUpdate.progress") : label}</span>
-  </div>;
+  const model: ChromeDesktopUpdate | undefined = state.kind === "unsupported" || state.kind === "idle" ? undefined
+    : { state: state.kind, label, progressLabel: t("desktopUpdate.progress"), busy, percent: downloading ? state.percent : undefined };
+  const activateRef = useRef(activate); activateRef.current = activate;
+  useLayoutEffect(() => {
+    nativeRibbon?.publishUpdate(model, () => void activateRef.current());
+    return () => nativeRibbon?.publishUpdate(undefined);
+  }, [nativeRibbon, JSON.stringify(model)]);
+  return model ? <DesktopUpdateButtonSurface model={model} onActivate={() => void activate()} /> : null;
 }

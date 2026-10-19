@@ -175,6 +175,18 @@ const leftToggle = '.section-sidebar-toggle';
 const rightToggle = '.shell-right-sidebar-toggle';
 function pick(selector, text) { return { selector, text }; }
 async function point(target, scroll = true) {
+  const query = typeof target === 'string' ? { selector: target } : target;
+  for (const view of [...win.contentView.children].reverse()) {
+    if (!view.webContents || !view.getVisible() || !view.webContents.getURL().startsWith('wuu-chrome://ui/chrome-overlay.html')) continue;
+    const p = await view.webContents.executeJavaScript(`(({selector,text}) => {
+      const node = [...document.querySelectorAll(selector)].find(n => (text === undefined || (n.getAttribute('aria-label') || n.textContent || '').trim() === text) && n.getBoundingClientRect().width > 0);
+      if (!node) return null;
+      const r = node.getBoundingClientRect(), x = r.x + r.width / 2, y = r.y + r.height / 2;
+      if (!node.contains(document.elementFromPoint(x,y)) || node.disabled) throw new Error('Native chrome target is occluded or disabled');
+      return {x,y};
+    })(${JSON.stringify(query)})`);
+    if (p) { const b = view.getBounds(), z = view.webContents.getZoomFactor(), shellZoom = win.webContents.getZoomFactor(); return { x: (b.x + p.x*z)/shellZoom, y: (b.y+p.y*z)/shellZoom, nativeChrome: true }; }
+  }
   return evaluate(async ({ selector, text, scroll }) => {
     const nodes = [...document.querySelectorAll(selector)];
     const node = nodes.find(n => (text === undefined || (n.getAttribute('aria-label') || n.textContent || '').trim() === text)
@@ -211,21 +223,21 @@ async function click(target, label, evidence = true) {
   const p = await point(target);
   const inRail = await evaluate(p => Boolean(document.elementFromPoint(p.x, p.y)?.closest('.sidebar-ribbon')), p);
   if (evidence) await capture(`before-${label}`);
-  // sendInputEvent uses device-independent window pixels; DOM hit testing
-  // uses CSS pixels. Page zoom changes their ratio (display DPR is separate).
+  // Route through the OS so a native chrome view cannot be bypassed by a
+  // renderer-only event sent to the placeholder underneath it.
   const zoom = win.webContents.getZoomFactor();
-  const inputPoint = { x: Math.round(p.x * zoom), y: Math.round(p.y * zoom) };
-  win.webContents.sendInputEvent({ type: 'mouseMove', ...inputPoint });
-  win.webContents.sendInputEvent({ type: 'mouseDown', button: 'left', clickCount: 1, ...inputPoint });
-  win.webContents.sendInputEvent({ type: 'mouseUp', button: 'left', clickCount: 1, ...inputPoint });
-  report.actions.push({ label, atMs: Date.now() - started, point: p });
+  const bounds = win.getContentBounds();
+  const input = spawnSync('xdotool', ['mousemove', String(Math.round(bounds.x + p.x * zoom)), String(Math.round(bounds.y + p.y * zoom)), 'click', '1'], { encoding: 'utf8', timeout: 5000 });
+  assert.equal(input.status, 0, input.stderr || String(input.error));
+  report.actions.push({ label, input: 'native-x11', atMs: Date.now() - started, point: p });
   await settle();
   if (evidence) await capture(`after-${label}`);
   if (inRail) {
     // End ordinary pointer navigation before measuring contextual controls
     // beneath the intentional hover overlay. Explicit hover/focus journeys
     // still drive and assert expansion themselves; no Escape or forced blur.
-    win.webContents.sendInputEvent({ type: 'mouseMove', x: Math.round(300 * zoom), y: Math.round(90 * zoom) });
+    const moved = spawnSync('xdotool', ['mousemove', String(Math.round(bounds.x + Math.min(300 * zoom, bounds.width - 20))), String(Math.round(bounds.y + 90 * zoom))], { encoding: 'utf8', timeout: 5000 });
+    assert.equal(moved.status, 0, moved.stderr || String(moved.error));
     report.actions.push({ label: `${label}-leave-rail`, atMs: Date.now() - started });
     await settle();
   }

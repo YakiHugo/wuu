@@ -92,7 +92,8 @@ import {
 export { reorderSidebarSections } from "./SortableSidebarSection";
 import { SidebarPointerSensor } from "./SidebarPointerSensor";
 import { PluginBlocksIcon } from "./PluginBlocksIcon";
-import { PluginIcon } from "./PublicIcon";
+import { PluginIcon, loadPluginIconURL } from "./PublicIcon";
+import type { RibbonIconModel } from "../shared/chromeOverlay";
 import { SidebarBrand } from "./SidebarBrand";
 import { moveMenuFocus } from "./MenuKeyboardNavigation";
 import { useI18n } from "./i18n";
@@ -1786,11 +1787,28 @@ export function AppSidebar({
     state.activeProjectId, state.initialized, state.lastViewedTurnByThreadID, t,
   ]);
 
+  const [ribbonPluginIcons, setRibbonPluginIcons] = useState<Record<string, RibbonIconModel>>({});
+  const ribbonIconSources = JSON.stringify(pluginNavigationEntries.map(entry => ({ id: entry.pluginId, fingerprint: entry.generation, icon: entry.icon })));
+  useEffect(() => {
+    let active = true;
+    const sources = JSON.parse(ribbonIconSources) as { id: string; fingerprint: string; icon?: import("../shared/protocol").ExtensionIconDescriptor }[];
+    void Promise.all(sources.map(async source => {
+      if (!source.icon || "name" in source.icon) return [source.id, { kind: "public", name: source.icon?.name }] as const;
+      const paths = "path" in source.icon && source.icon.path ? [source.icon.path] : [source.icon.light!, source.icon.dark!];
+      try {
+        const urls = await Promise.all(paths.map(path => loadPluginIconURL(source.id, source.fingerprint, path)));
+        return [source.id, { kind: "image", light: urls[0], dark: urls[1] }] as const;
+      } catch { return [source.id, { kind: "public" }] as const; }
+    })).then(entries => { if (active) setRibbonPluginIcons(Object.fromEntries(entries)); });
+    return () => { active = false; };
+  }, [ribbonIconSources]);
+
   const nativeSidebar = (
     <>
       <HoverRevealScopeContext.Provider value={null}>
       <NavigationRibbon
         ribbonRef={ribbonRef}
+        footerSettings={{ title: t("sidebar.settings"), active: settingsActive, disabled: !state.initialized, onSelect: () => activateNative(onOpenSettings) }}
         websites={websites}
         onNewTab={onNewTab ? () => activateNative(onNewTab) : undefined}
         onCloseTab={onCloseTab}
@@ -1803,6 +1821,7 @@ export function AppSidebar({
             id: "conversations",
             title: t("sidebar.conversations"),
             icon: <MessagesSquare aria-hidden="true" />,
+            nativeIcon: { kind: "conversations" },
             active: conversationsActive,
             component: "conversations-section",
             onSelect: () => activateNative(() => onShowConversations?.()),
@@ -1811,6 +1830,7 @@ export function AppSidebar({
             id: "catalog",
             title: t("skills.sectionSkills"),
             icon: <PluginBlocksIcon aria-hidden="true" />,
+            nativeIcon: { kind: "catalog" },
             active: pluginCatalogActive,
             disabled: !hasRuntimeContext,
             onSelect: () => activateNative(onOpenSkillsTab),
@@ -1819,6 +1839,7 @@ export function AppSidebar({
             id: `plugin:${JSON.stringify([entry.pluginId, entry.navigationId ?? entry.id])}`,
             title: entry.title,
             icon: <PluginIcon icon={entry.icon} pluginId={entry.pluginId} fingerprint={entry.generation} />,
+            nativeIcon: ribbonPluginIcons[entry.pluginId] ?? { kind: "public" as const },
             active: !activeWebsiteId && activePluginMainView !== undefined && activePluginMainView.id === entry.instanceId,
             component: "plugin-navigation-item",
             pluginId: entry.pluginId,
