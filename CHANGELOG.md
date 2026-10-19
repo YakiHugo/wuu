@@ -56,6 +56,10 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 ### Fixed
 
 - Keep contextual sidebar controls beneath the expanded macOS navigation rail while preserving traffic-light access and restoring the controls after hover.
+- Dismiss native browser tooltips when the workbench renderer reloads or crashes.
+
+- Honor Shift-click's separate website window and keep context-menu links in background tabs in the experimental browser workbench.
+
 - Preserve native browser text and image sharpness behind account and browser menus on high-density displays.
 - Restore window dragging from empty browser toolbar space while keeping its address field and buttons interactive.
 - Center the compact account control with settings and the other ribbon icons.

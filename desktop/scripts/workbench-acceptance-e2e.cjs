@@ -209,6 +209,7 @@ async function capture(label) {
 }
 async function click(target, label, evidence = true) {
   const p = await point(target);
+  const inRail = await evaluate(p => Boolean(document.elementFromPoint(p.x, p.y)?.closest('.sidebar-ribbon')), p);
   if (evidence) await capture(`before-${label}`);
   // sendInputEvent uses device-independent window pixels; DOM hit testing
   // uses CSS pixels. Page zoom changes their ratio (display DPR is separate).
@@ -220,6 +221,14 @@ async function click(target, label, evidence = true) {
   report.actions.push({ label, atMs: Date.now() - started, point: p });
   await settle();
   if (evidence) await capture(`after-${label}`);
+  if (inRail) {
+    // End ordinary pointer navigation before measuring contextual controls
+    // beneath the intentional hover overlay. Explicit hover/focus journeys
+    // still drive and assert expansion themselves; no Escape or forced blur.
+    win.webContents.sendInputEvent({ type: 'mouseMove', x: Math.round(300 * zoom), y: Math.round(90 * zoom) });
+    report.actions.push({ label: `${label}-leave-rail`, atMs: Date.now() - started });
+    await settle();
+  }
 }
 async function fill(target, text) {
   await click(target, 'focus-input', false);

@@ -29,9 +29,17 @@ export class NativeTooltip {
       window.setIgnoreMouseEvents(true);
       this.ready = window.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent('<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'"><style>html,body{margin:0;background:transparent}body{overflow:hidden}#hint{box-sizing:border-box;overflow-wrap:anywhere;white-space:pre-line}</style><div id="hint"></div>'));
       owner.on("blur", this.hide).on("hide", this.hide).on("minimize", this.hide).on("resize", this.hide).on("move", this.hide);
+      // Reloads and crashes cannot run the old renderer's tooltip cleanup.
+      // Retire its hint before a replacement document can reuse a React token.
+      const ownerContents = owner.webContents;
+      const onNavigation = (details: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>): void => {
+        if (details.isMainFrame && !details.isSameDocument) this.hide();
+      };
+      ownerContents.on("did-start-navigation", onNavigation).on("render-process-gone", this.hide);
       owner.once("closed", () => {
         owner.removeListener("blur", this.hide).removeListener("hide", this.hide).removeListener("minimize", this.hide)
           .removeListener("resize", this.hide).removeListener("move", this.hide);
+        ownerContents.removeListener("did-start-navigation", onNavigation).removeListener("render-process-gone", this.hide);
         if (!window.isDestroyed()) window.destroy();
         this.window = undefined; this.owner = undefined; this.ready = undefined;
         this.hide();
