@@ -78,7 +78,7 @@ async function run() {
   await waitFor(win, () => Boolean(document.querySelector(".settings-shell")), 3000);
 
   await evaluate(win, () => {
-    const button = document.querySelector(".settings-sidebar-toggle");
+    const button = document.querySelector(".section-sidebar-toggle");
     if (!(button instanceof HTMLButtonElement)) {
       throw new Error("Settings sidebar toggle not found.");
     }
@@ -99,23 +99,23 @@ async function run() {
   await capture(win, "settings-sidebar-hit-before.png");
 
   win.webContents.sendInputEvent({ type: "mouseMove", x: before.centerX, y: before.centerY });
-  await waitFor(
-    win,
-    () => document.querySelector(".settings-shell")?.classList.contains("sidebar-drawer-open") || null,
-    3000
-  );
-
-  const transformSamples = [];
-  for (let index = 0; index < 8; index += 1) {
-    transformSamples.push(await drawerTranslateX(win));
+  for (let sample = 0; sample < 12; sample++) {
+    await delay(40);
+    assert.equal(await evaluate(win, () => !!document.querySelector('.sidebar-drawer-open')), false,
+      "Hovering the persistent toggle must not reveal the secondary pane");
+  }
+  await revealDrawerAtEdge(win);
+  const hitSamples = [];
+  for (let index = 0; index < 8; index++) {
+    hitSamples.push(await toggleHitState(win));
     await delay(35);
   }
-  assert.ok(
-    new Set(transformSamples.map((value) => Math.round(value))).size >= 3,
-    `Drawer should animate through multiple transform positions: ${transformSamples.join(", ")}`
-  );
+  assert.ok(hitSamples.every(sample => sample.hitOwnedByToggle && sample.visible),
+    `The toggle must remain clickable throughout drawer reveal: ${JSON.stringify(hitSamples)}`);
   await settleChrome(win);
 
+  win.webContents.sendInputEvent({ type: "mouseMove", x: before.centerX, y: before.centerY });
+  await evaluate(win, () => new Promise(requestAnimationFrame));
   const after = await toggleHitState(win);
   assert.equal(after.centerX, before.centerX, "Hover must not move the sidebar click target horizontally");
   assert.equal(after.centerY, before.centerY, "Hover must not move the sidebar click target vertically");
@@ -123,11 +123,11 @@ async function run() {
   assert.equal(after.visible, true, `Toggle must remain visible after drawer opens: ${JSON.stringify(after)}`);
   assert.equal(after.hovered, true, `The real Electron pointer must still hover the toggle: ${JSON.stringify(after)}`);
   const readability = await sidebarReadabilityState(win);
-  assert.ok(readability.width >= 240, `Narrow-window drawer must stay readable: ${JSON.stringify(readability)}`);
-  assert.equal(readability.backWhiteSpace, "nowrap", `Back label must stay on one line: ${JSON.stringify(readability)}`);
-  assert.equal(readability.providerWhiteSpace, "nowrap", `Provider label must stay on one line: ${JSON.stringify(readability)}`);
-  assert.equal(readability.backFullyVisible, true, `Back label should fit at the readable floor: ${JSON.stringify(readability)}`);
-  assert.equal(readability.providerFullyVisible, true, `Provider label should fit at the readable floor: ${JSON.stringify(readability)}`);
+  assert.ok(readability.width > 0 && readability.labels.length >= 2, `Narrow-window drawer must stay readable: ${JSON.stringify(readability)}`);
+  for (const label of readability.labels) {
+    assert.equal(label.whiteSpace, "nowrap", `Navigation labels remain on one line: ${JSON.stringify(readability)}`);
+    assert.ok(label.fits, `Built-in navigation labels fit their secondary pane: ${JSON.stringify(readability)}`);
+  }
   await capture(win, "settings-sidebar-hit-after.png");
 
   win.webContents.sendInputEvent({ type: "mouseDown", button: "left", clickCount: 1, x: after.centerX, y: after.centerY });
@@ -138,16 +138,16 @@ async function run() {
     3000
   );
 
-  results.push({ scenario: "real-pointer-hover-and-dock", before, after, readability, transformSamples });
+  results.push({ scenario: "real-pointer-hover-and-dock", before, after, readability, hitSamples });
   saveResults();
-  console.log(`PASS: shared titlebar axis, unclipped controls, and stable page/drawer click targets. Evidence: ${evidenceDir}`);
+  console.log(`PASS: independent workbench rows, unclipped controls, and stable page/drawer click targets. Evidence: ${evidenceDir}`);
   win.close();
   app.quit();
 }
 
 // Exercise the real app, not copies of header markup or stylesheet literals.
 // Page switching must preserve the control's hit box and rendered glyph;
-// Default text and zoom preserve the native center; larger text or zoom must not clip chrome.
+// Shell controls and content headings retain their respective rows without clipping.
 async function verifyTitlebarContinuity(win) {
   for (const theme of ["light", "dark"]) {
     for (const font of [13, 15, 20]) {
@@ -180,15 +180,7 @@ async function verifyTitlebarContinuity(win) {
           if (zoom === 1 && font !== 13) await capture(win, `${scenario}-conversation.png`);
           assert.deepEqual(main.clippedChrome, [], `Main chrome must fit: ${JSON.stringify({ theme, font, zoom, layout, main })}`);
           if (layout !== "docked") {
-            await evaluate(win, () => {
-              const button = document.querySelector('[data-wuu-component="sidebar-toggle"]');
-              const rect = button.getBoundingClientRect();
-              button.dispatchEvent(new PointerEvent("pointerover", {
-                bubbles: true, pointerType: "mouse",
-                clientX: rect.x + rect.width / 2, clientY: rect.y + rect.height / 2,
-              }));
-            });
-            await waitFor(win, () => Boolean(document.querySelector(".sidebar-drawer-open")), 3000);
+            await revealDrawerAtEdge(win);
             await settleChrome(win);
             const drawer = await chromeToggleGeometry(win);
             results.push({ scenario, page: "conversation-drawer", geometry: drawer });
@@ -215,17 +207,13 @@ async function verifyTitlebarContinuity(win) {
             assert.ok(Math.abs(main[key] - settings[key]) < 0.1, `Switching pages moved/resized ${key}: ${context}`);
           }
           assert.equal(settings.icon, main.icon, `Switching pages changed the sidebar glyph: ${context}`);
-          if (Math.abs((main.header.height + (main.canvasTop ?? 0)) * zoom - 56) < 0.1) {
-            assert.ok(Math.abs((main.y + main.height / 2) * zoom - 28) < 0.1, `Renderer must meet the expected native chrome axis: ${context}`);
-          }
           assert.ok(main.hit && settings.hit, `The visible toggle must own its center hit: ${context}`);
-          await evaluate(win, () => document.querySelector(".settings-back-button").click());
-          await waitFor(win, () => Boolean(document.querySelector(".app-shell")), 3000);
-          await evaluate(win, () => {
-            document.querySelector('[data-wuu-component="sidebar-toggle"]').dispatchEvent(new PointerEvent("pointerout", {
-              bubbles: true, pointerType: "mouse", clientX: 550, clientY: 700, relatedTarget: document.body,
-            }));
-          });
+          await evaluate(win, () => document.querySelector('[data-ribbon-id="conversations"]').click());
+          await waitFor(win, () => !document.querySelector(".app-shell[data-settings-open]"), 3000);
+          // Move the real pointer off the edge, including at zoom levels where
+          // the CSS viewport is shorter than the native window.
+          const outside = await evaluate(win, () => ({ x: innerWidth - 40, y: innerHeight - 40 }));
+          win.webContents.sendInputEvent({ type: "mouseMove", x: Math.round(outside.x * zoom), y: Math.round(outside.y * zoom) });
           await waitFor(win, () => !document.querySelector(".sidebar-drawer-open, .sidebar-drawer-closing"), 3000);
         }
       }
@@ -254,10 +242,9 @@ async function chromeToggleGeometry(win) {
     const icon = button.querySelector("svg");
     const glyph = icon.getBoundingClientRect();
     const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
-    const headers = new Set([
-      button.closest(".traffic-spacer, .titlebar, .settings-titlebar"),
-      document.querySelector(".titlebar"),
-    ].filter(Boolean));
+    const settingsOpen = document.querySelector('.app-shell').hasAttribute('data-settings-open');
+    const activeHeader = document.querySelector(settingsOpen ? '.settings-titlebar' : '.conversation-pane .titlebar');
+    const headers = [activeHeader];
     const clippedChrome = [];
     for (const header of headers) {
       const bounds = header.getBoundingClientRect();
@@ -269,25 +256,36 @@ async function chromeToggleGeometry(win) {
         }
       }
     }
-    const header = document.querySelector(".titlebar, .settings-titlebar").getBoundingClientRect();
-    const peers = [...document.querySelectorAll([
-      '[data-wuu-component="sidebar-toggle"]', '.conversation-title-heading h1',
-      '.conversation-title-heading .icon-button', '[data-wuu-component="right-sidebar-toggle"]',
-      '.title-actions .icon-button', '.settings-crumb-root', '.settings-crumb-separator',
-      '.settings-titlebar-slot > .settings-page-title', '.settings-titlebar-slot .settings-page-actions button',
-    ].join(','))].filter(element => element.checkVisibility({ checkVisibilityCSS: true, checkOpacity: true }))
+    const header = activeHeader.getBoundingClientRect();
+    const headerStyle = getComputedStyle(activeHeader);
+    const peers = [...activeHeader.querySelectorAll('h1, .conversation-title-heading .icon-button, .title-actions .icon-button, .settings-page-actions button')]
+      .filter(element => element.checkVisibility({ checkVisibilityCSS: true, checkOpacity: true }))
       .map(element => {
         const box = element.getBoundingClientRect();
         const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
         return { target: element.dataset.wuuComponent || element.className || element.tagName,
           bounds: box.toJSON(), centerY: box.y + box.height / 2,
           button: element instanceof HTMLButtonElement, hit: element === hit || element.contains(hit),
-          coveredByDrawer: Boolean(document.querySelector('.sidebar-drawer-open .sidebar')?.contains(hit)) };
+          coveredByDrawer: Boolean(document.querySelector(settingsOpen ? '.sidebar-drawer-open .settings-sidebar' : '.sidebar-drawer-open .sidebar')?.contains(hit)) };
       });
-    const canvas = document.querySelector('.conversation-pane, .settings-main');
+    const shellRow = document.querySelector('.mac-window-controls') ? activeHeader : document.querySelector('.workbench-window-chrome');
+    const shellBounds = shellRow.getBoundingClientRect();
+    const shellStyle = getComputedStyle(shellRow);
+    const shellControls = [...document.querySelectorAll('.section-sidebar-toggle, .shell-right-sidebar-toggle, .shell-page-history-controls button')]
+      .filter(element => element.checkVisibility({ checkVisibilityCSS: true, checkOpacity: true }))
+      .map(element => {
+        const box = element.getBoundingClientRect();
+        const target = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+        return { target: element.dataset.wuuComponent, bounds: box.toJSON(),
+          hit: target === element || element.contains(target),
+          noDrag: getComputedStyle(element).getPropertyValue('-webkit-app-region') === 'no-drag' };
+      });
     return {
       header: header.toJSON(), peers,
-      canvasTop: canvas ? canvas.getBoundingClientRect().top + parseFloat(getComputedStyle(canvas, '::before').top) : null,
+      contentAxis: (header.top + parseFloat(headerStyle.paddingTop) + header.bottom - parseFloat(headerStyle.paddingBottom)) / 2,
+      shellRow: shellBounds.toJSON(), shellControls,
+      shellAxis: (shellBounds.top + parseFloat(shellStyle.paddingTop) + shellBounds.bottom - parseFloat(shellStyle.paddingBottom)) / 2,
+      viewport: { width: innerWidth, height: innerHeight },
       x: rect.x, y: rect.y, width: rect.width, height: rect.height,
       iconWidth: glyph.width, iconHeight: glyph.height, icon: icon.innerHTML,
       hit: button === hit || button.contains(hit),
@@ -299,7 +297,7 @@ async function chromeToggleGeometry(win) {
 
 async function toggleHitState(win) {
   return evaluate(win, () => {
-    const toggle = document.querySelector(".settings-titlebar .settings-sidebar-toggle");
+    const toggle = document.querySelector(".section-sidebar-toggle");
     if (!(toggle instanceof HTMLButtonElement)) {
       throw new Error("Settings sidebar toggle not found.");
     }
@@ -319,37 +317,25 @@ async function toggleHitState(win) {
   });
 }
 
-async function drawerTranslateX(win) {
-  return evaluate(win, () => {
-    const drawer = document.querySelector(".settings-sidebar");
-    if (!(drawer instanceof HTMLElement)) {
-      throw new Error("Settings sidebar drawer not found.");
-    }
-    const transform = getComputedStyle(drawer).transform;
-    return transform === "none" ? 0 : new DOMMatrixReadOnly(transform).m41;
+async function revealDrawerAtEdge(win) {
+  const point = await evaluate(win, () => {
+    const edge = document.querySelector('.app-shell > .sidebar-hover-zone');
+    const box = edge.getBoundingClientRect();
+    return { x: box.left + box.width / 2, y: box.top + Math.min(80, box.height / 2) };
   });
+  const zoom = win.webContents.getZoomFactor();
+  win.webContents.sendInputEvent({ type: "mouseMove", x: Math.round(point.x * zoom), y: Math.round(point.y * zoom) });
+  await waitFor(win, () => !!document.querySelector('.app-shell.sidebar-drawer-open'), 3000);
 }
 
 async function sidebarReadabilityState(win) {
   return evaluate(win, () => {
-    const drawer = document.querySelector(".settings-sidebar");
-    const backLabel = document.querySelector(".settings-back-button > span");
-    const providerLabel = [...document.querySelectorAll(".settings-nav-item .settings-nav-label")]
-      .find((label) => /^(Model providers|模型服务)$/.test(label.textContent.trim()));
-    if (
-      !(drawer instanceof HTMLElement) ||
-      !(backLabel instanceof HTMLElement) ||
-      !(providerLabel instanceof HTMLElement)
-    ) {
-      throw new Error("Settings sidebar readability targets not found.");
-    }
-    return {
-      width: drawer.getBoundingClientRect().width,
-      backWhiteSpace: getComputedStyle(backLabel).whiteSpace,
-      providerWhiteSpace: getComputedStyle(providerLabel).whiteSpace,
-      backFullyVisible: backLabel.scrollWidth <= backLabel.clientWidth,
-      providerFullyVisible: providerLabel.scrollWidth <= providerLabel.clientWidth
-    };
+    const drawer = document.querySelector('.settings-sidebar');
+    if (!(drawer instanceof HTMLElement)) throw new Error('Settings secondary pane missing');
+    return { width: drawer.getBoundingClientRect().width,
+      labels: [...drawer.querySelectorAll('[data-wuu-page="general"] .settings-nav-label, [data-wuu-page="providers"] .settings-nav-label')]
+        .map(label => ({ text: label.textContent, whiteSpace: getComputedStyle(label).whiteSpace,
+          fits: label.clientWidth > 0 && label.scrollWidth <= label.clientWidth })) };
   });
 }
 
@@ -390,19 +376,21 @@ function delay(ms) {
 
 function assertTopRow(geometry, context) {
   const details = JSON.stringify({ ...context, geometry });
-  const axis = ((geometry.canvasTop ?? geometry.header.y) + geometry.header.bottom) / 2;
-  assert.ok(geometry.peers.length >= 3, `The actual page chrome must be present: ${details}`);
-  if (context.zoom === 1 && context.font <= 15) {
-    assert.ok(Math.abs(axis - 28) < 0.1, `Default text and zoom keep the shared 28 DIP axis: ${details}`);
-    if (geometry.canvasTop !== null) assert.ok(geometry.header.height < 56,
-      `The canvas header stays compact without moving controls: ${details}`);
-  }
-  if (geometry.canvasTop !== null) {
-    const fullInset = 2 * Math.round(context.font / 4);
-    assert.ok(geometry.canvasTop > 0 && geometry.canvasTop <= fullInset + 0.1,
-      `The canvas retains responsive top breathing room: ${details}`);
-    if (context.layout !== "narrow") assert.ok(Math.abs(geometry.canvasTop - fullInset) < 0.1,
-      `Wide windows retain the font-relative canvas inset: ${details}`);
+  const axis = geometry.contentAxis;
+  assert.ok(geometry.peers.length >= 2, `Active page title and actions must remain present: ${details}`);
+  const expectedControls = ["sidebar-toggle", "page-history-back", "page-history-forward",
+    ...(context.page === "settings" ? [] : ["right-sidebar-toggle"])];
+  assert.deepEqual(geometry.shellControls.map(control => control.target).sort(), expectedControls.sort(),
+    `The active surface exposes its history and sidebar controls: ${details}`);
+  for (const control of geometry.shellControls) {
+    const box = control.bounds;
+    assert.ok(control.hit && control.noDrag, `Shell controls retain no-drag click targets: ${details}`);
+    assert.ok(box.width > 0 && box.height > 0 && box.left >= 0 && box.right <= geometry.viewport.width + 0.1,
+      `Shell controls fit the window: ${details}`);
+    assert.ok(box.top >= geometry.shellRow.top - 0.1 && box.bottom <= geometry.shellRow.bottom + 0.1,
+      `Shell controls fit their actual workbench row: ${details}`);
+    assert.ok(Math.abs(box.top + box.height / 2 - geometry.shellAxis) < 0.6,
+      `Shell controls share their own row, separate from content headings: ${details}`);
   }
   for (const peer of geometry.peers) {
     assert.ok(Math.abs(peer.centerY - axis) < 0.6, `Peer controls must share the titlebar axis: ${details}`);
@@ -410,7 +398,7 @@ function assertTopRow(geometry, context) {
       `Chrome must not be vertically clipped: ${details}`);
     // A hover drawer overlays the canvas without shifting its header. Its
     // covered controls cannot receive clicks until the drawer closes.
-    if (peer.button) assert.ok(peer.hit || (context.page === "conversation-drawer"
+    if (peer.button) assert.ok(peer.hit || (["conversation-drawer", "settings"].includes(context.page)
       && peer.target !== "sidebar-toggle" && peer.coveredByDrawer),
     `Visible controls must own their center hit: ${details}`);
   }
@@ -419,7 +407,7 @@ function assertTopRow(geometry, context) {
 function saveResults(failure) {
   fs.writeFileSync(path.join(evidenceDir, "results.json"), JSON.stringify({
     platform: process.platform, electron: process.versions.electron, rendererHtml,
-    nativeTrafficLights: { expectedPositionDIP: { x: 18, y: 21 }, expectedCenterDIP: 28,
+    nativeTrafficLights: {
       verification: "Renderer geometry only; native macOS traffic-light pixels require a macOS acceptance run." },
     account: "Not exercised: account UI is disabled in production bundles.",
     linuxCaption: "Not mounted by this synthetic bridge; onboarding-workspaces E2E covers the real main/preload caption.",

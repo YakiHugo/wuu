@@ -124,8 +124,8 @@ app.whenReady().then(async () => {
   await evaluate(win, () => document.querySelector('.system-permissions-error button').click());
   await waitFor(win, () => document.querySelectorAll('.system-permission-granted').length === 2);
   await capture(win, 'permissions-granted');
-  await evaluate(win, () => document.querySelector('.settings-back-button').click());
-  await waitFor(win, () => Boolean(document.querySelector('.composer textarea')) && !document.querySelector('.settings-back-button'));
+  await evaluate(win, () => document.querySelector('[data-ribbon-id="conversations"]').click());
+  await waitFor(win, () => Boolean(document.querySelector('.composer textarea')) && !document.querySelector('.app-shell[data-settings-open]'));
   assert.ok(guideClosed > 0, 'Leaving permission settings closes the guide');
   win.setContentSize(1150, 900);
   await evaluate(win, () => { document.documentElement.dataset.theme = 'light'; document.documentElement.style.setProperty('--conversation-message-font-size', '15px'); });

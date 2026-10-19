@@ -210,12 +210,20 @@ async function run() {
   await until(() => win && !win.webContents.isLoadingMainFrame() && win.webContents.getURL() === pathToFileURL(path.join(desktop, 'out/renderer/index.html')).href, 'shipping app loaded');
   win.setBounds({ x: 150, y: 120, width: 1240, height: 800 }); win.show(); win.focus();
   await until(() => evaluate(win.webContents, () => !!window.wuu && !!document.querySelector('.sidebar-ribbon')), 'shipping ribbon ready');
-  await evaluate(win.webContents, url => {
+  const tabID = await evaluate(win.webContents, async url => {
+    // Fixture creation precedes every timed phase. The same harness runs on
+    // the old A/B baseline and the current flat-ribbon browser model.
+    if (window.wuu.webWorkspace.initializeTabs) {
+      await window.wuu.webWorkspace.initializeTabs([]);
+      const state = await window.wuu.webWorkspace.createTab('ribbon-browser', url);
+      return state.activeTabId;
+    }
     localStorage.setItem('wuu.navigation-ribbon.v1', JSON.stringify({ websites: [{ id: 'website:performance', title: 'Performance fixture', url }], order: [] }));
     dispatchEvent(new Event('wuu-navigation-ribbon-change'));
+    return 'website:performance';
   }, url);
-  await until(() => evaluate(win.webContents, () => !!document.querySelector('.sidebar-ribbon button[aria-label="Performance fixture"]')), 'local website ribbon');
-  const point = await evaluate(win.webContents, () => { const r = document.querySelector('.sidebar-ribbon button[aria-label="Performance fixture"]').getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; });
+  await until(() => evaluate(win.webContents, id => !!document.querySelector(`.sidebar-ribbon button[data-ribbon-id="${id}"]`), tabID), 'local website ribbon');
+  const point = await evaluate(win.webContents, id => { const r = document.querySelector(`.sidebar-ribbon button[data-ribbon-id="${id}"]`).getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; }, tabID);
   win.webContents.sendInputEvent({ type: 'mouseDown', ...point, button: 'left', clickCount: 1 }); win.webContents.sendInputEvent({ type: 'mouseUp', ...point, button: 'left', clickCount: 1 });
   await until(() => { guest = webContents.getAllWebContents().find(wc => !wc.isDestroyed() && wc.getURL() === url && !wc.isLoadingMainFrame()); return guest; }, 'production native website');
   await until(() => win.contentView.children.some(view => view.webContents === guest && view.getVisible()), 'native guest visible');

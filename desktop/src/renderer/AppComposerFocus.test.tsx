@@ -696,7 +696,7 @@ describe("main composer focus continuity", () => {
     await act(async () => agentsPage!.click());
     await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="settings-engine-codex-enabled"]')!.click());
     expect(window.wuu.updateEngines).toHaveBeenCalledWith({ codex: { enabled: false } });
-    await act(async () => container.querySelector<HTMLButtonElement>(".settings-back-button")!.click());
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-ribbon-id="conversations"]')!.click());
     await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="在 Focus Project 中新建对话"]')!.click());
     await flushAsync();
     expect(finishInventory).toBeTypeOf("function");
@@ -1020,22 +1020,31 @@ describe("main composer focus continuity", () => {
     window.wuu.listSkills = vi.fn().mockResolvedValue({ skills: [] });
     await enterCommand(mainComposer("dock"), "Retain the failed Skills send");
     expect(window.wuu.startTurn).toHaveBeenCalled();
-    const skills = Array.from(container.querySelectorAll<HTMLButtonElement>("button.nav-item"))
-      .find(button => button.textContent?.trim() === translateCurrent("skills.sectionSkills"));
-    expect(skills).toBeDefined();
+    const skills = container.querySelector<HTMLButtonElement>('[data-ribbon-id="catalog"]');
+    expect(skills).not.toBeNull();
     await act(async () => { skills!.click(); });
     await flushAsync();
-    expect(container.querySelector('textarea[aria-label="main composer dock"]')).toBeNull();
+    const skillsSection = Array.from(container.querySelectorAll<HTMLButtonElement>(".sidebar-section-item"))
+      .find(button => button.textContent?.trim() === translateCurrent("skills.tabSkills"));
+    expect(skillsSection).toBeDefined();
+    await act(async () => { skillsSection!.click(); });
+    await flushAsync();
+    // Workbench retains the composer under the catalog rather than unmounting it.
+    expect(mainComposer("dock").closest('[data-native-section="catalog"]')).not.toBeNull();
+    expect(container.querySelector(".catalog-section-pane")?.hasAttribute("hidden")).toBe(false);
+    expect(container.querySelector(".scroll-region")?.hasAttribute("inert")).toBe(true);
     await act(async () => { rejectSend(new Error("deferred send failed")); });
+    await flushAsync();
+    await act(async () => { container.querySelector<HTMLButtonElement>('[data-ribbon-id="conversations"]')!.click(); });
     await flushAsync();
     const source = Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
       .find(button => button.textContent?.trim() === "focus continuity");
     expect(source).toBeDefined();
     await act(async () => { source!.click(); });
     await flushAsync();
-    expect(mainComposer("dock").value).toBe("");
+    expect(mainComposer("dock").value).toBe("Retain the failed Skills send");
     expect(Array.from(container.querySelectorAll("[data-user-message-id]"))
-      .some(item => item.textContent?.includes("Retain the failed Skills send"))).toBe(true);
+      .some(item => item.textContent?.includes("Retain the failed Skills send"))).toBe(false);
   });
 
   it("restores a removed queue message to its saved tab when Skills opens before dequeue acknowledgement", async () => {
@@ -1051,12 +1060,21 @@ describe("main composer focus continuity", () => {
     });
     await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="edit Recover queue after Skills"]')!.click(); });
     expect(window.wuu.dequeueTurn).toHaveBeenCalledWith("thread-focus", "held-skills");
-    const skills = Array.from(container.querySelectorAll<HTMLButtonElement>("button.nav-item"))
-      .find(button => button.textContent?.trim() === translateCurrent("skills.sectionSkills"))!;
+    const skills = container.querySelector<HTMLButtonElement>('[data-ribbon-id="catalog"]')!;
     await act(async () => { skills.click(); });
     await flushAsync();
-    expect(container.querySelector('textarea[aria-label="main composer dock"]')).toBeNull();
+    const skillsSection = Array.from(container.querySelectorAll<HTMLButtonElement>(".sidebar-section-item"))
+      .find(button => button.textContent?.trim() === translateCurrent("skills.tabSkills"));
+    expect(skillsSection).toBeDefined();
+    await act(async () => { skillsSection!.click(); });
+    await flushAsync();
+    // Workbench retains the composer under the catalog rather than unmounting it.
+    expect(mainComposer("dock").closest('[data-native-section="catalog"]')).not.toBeNull();
+    expect(container.querySelector(".catalog-section-pane")?.hasAttribute("hidden")).toBe(false);
+    expect(container.querySelector(".scroll-region")?.hasAttribute("inert")).toBe(true);
     await act(async () => { acknowledge({ ok: true }); });
+    await flushAsync();
+    await act(async () => { container.querySelector<HTMLButtonElement>('[data-ribbon-id="conversations"]')!.click(); });
     await flushAsync();
     const source = Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
       .find(button => button.textContent?.trim() === "focus continuity")!;

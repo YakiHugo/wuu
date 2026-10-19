@@ -235,9 +235,12 @@ describe("sidebar attention view", () => {
     // The settings page is a lazy import behind Suspense, so let it resolve.
     await act(async () => settingsItem!.click());
     await flushAsync();
-    // Settings replaces the workbench: the sidebar is gone while it is open.
+    // Settings overlays the workbench; the conversation stays mounted but inert.
     expect(settingsView()).not.toBeNull();
-    expect(container.querySelector(".app-shell")).toBeNull();
+    expect(container.querySelector(".app-shell")).not.toBeNull();
+    expect(container.querySelector(".settings-workbench-layer")).not.toBeNull();
+    expect(container.querySelector('[data-wuu-component="conversation-pane"]')?.hasAttribute("inert")).toBe(true);
+    expect(container.querySelector(".sidebar-content")?.getAttribute("aria-hidden")).toBe("true");
 
     act(() => {
       window.dispatchEvent(new Event("wuu:workbench-back"));
