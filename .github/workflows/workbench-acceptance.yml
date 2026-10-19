@@ -19,6 +19,24 @@ on:
       - 'desktop/electron.vite.config.ts'
       - 'desktop/package*.json'
       - '.github/workflows/workbench-acceptance.yml'
+  pull_request:
+    branches: [experiment/workbench]
+    paths:
+      - 'desktop/src/**'
+      - 'desktop/scripts/workbench-acceptance-e2e.cjs'
+      - 'desktop/scripts/web-workspace-acceptance.cjs'
+      - 'desktop/scripts/browser-media-acceptance.cjs'
+      - 'desktop/scripts/browser-task-ownership-e2e*'
+      - 'desktop/scripts/browser-pip-e2e*'
+      - 'desktop/scripts/context-chat-capsule-e2e*'
+      - 'internal/**'
+      - 'scripts/plugin-credentials-e2e/**'
+      - 'plugins/feishu-workspace/**'
+      - 'plugins/notion-workspace/**'
+      - 'desktop/scripts/fixtures/conversation-corpus/**'
+      - 'desktop/electron.vite.config.ts'
+      - 'desktop/package*.json'
+      - '.github/workflows/workbench-acceptance.yml'
   workflow_dispatch:
     inputs:
       layout_matrix:

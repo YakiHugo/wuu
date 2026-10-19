@@ -294,12 +294,78 @@ async function runWebsiteAcceptance(h, fixture) {
     report.actions.push({ label, input: 'native-x11', point: p, atMs: Date.now() - started }); save();
   }
   async function typeAddress(value, label) {
-    await focusAddress(label);
-    xinput(['key', '--clearmodifiers', 'ctrl+a']);
-    await waitFor(selector => { const input = document.querySelector(selector); return document.activeElement === input
-      && input.selectionStart === 0 && input.selectionEnd === input.value.length; }, address, 'Native select-all reaches the address input');
-    xinput(['type', '--clearmodifiers', '--delay', '8', value]);
-    await waitFor(({ selector, value }) => document.activeElement?.matches(selector) && document.activeElement.value === value, { selector: address, value });
+    // Observe only this runner's synthetic local URL entry. Keep native typing
+    // and the exact-value assertion unchanged; never repair dropped characters.
+    const diagnostic = value.startsWith(origin + '/');
+    const nativeEvents = [];
+    const observeInput = (_event, input) => {
+      if (nativeEvents.length < 160) nativeEvents.push({ type: 'before-input', at: Date.now() - started,
+        key: input.key, inputType: input.type, control: input.control, alt: input.alt, meta: input.meta, shift: input.shift });
+    };
+    const observeFocus = () => {
+      if (nativeEvents.length < 160) nativeEvents.push({ type: 'shell-focus', at: Date.now() - started,
+        focused: win.webContents.isFocused(), focusedContentsID: webContents.getFocusedWebContents()?.id });
+    };
+    try {
+      if (diagnostic) {
+        win.webContents.on('before-input-event', observeInput);
+        win.webContents.on('focus', observeFocus);
+        win.webContents.on('blur', observeFocus);
+        await evaluate(({ address, startInput }) => {
+          const events = [], cleanup = [];
+          let stopped = false;
+          const field = selector => {
+            const input = document.querySelector(selector);
+            return { value: input?.value, selection: [input?.selectionStart, input?.selectionEnd], active: document.activeElement === input };
+          };
+          const snapshot = (type, event, details) => {
+            if (stopped || events.length >= 240) return;
+            events.push({ type, at: performance.now(), key: event?.key, data: event?.data, inputType: event?.inputType,
+              trusted: event?.isTrusted, focused: document.hasFocus(),
+              active: document.activeElement?.tagName + '.' + document.activeElement?.className,
+              address: field(address), search: field(startInput), details });
+          };
+          const observe = event => {
+            if (!['selectionchange', 'focusin', 'focusout'].includes(event.type)
+              && !event.target?.matches?.(address + ',' + startInput)) return;
+            snapshot(event.type, event);
+            if (event.type === 'input') queueMicrotask(() => snapshot('after-input-microtask'));
+          };
+          const types = ['keydown', 'keyup', 'beforeinput', 'input', 'selectionchange', 'focusin', 'focusout'];
+          types.forEach(type => document.addEventListener(type, observe, true));
+          cleanup.push(() => types.forEach(type => document.removeEventListener(type, observe, true)));
+          window.__wuuAcceptanceAddressInput = { snapshot, stop: () => {
+            snapshot('finished'); stopped = true; cleanup.forEach(stop => stop()); return events;
+          } };
+          const api = window.wuu.webWorkspace;
+          cleanup.push(api.onState(state => snapshot('tab-state', undefined,
+            { id: state.id, tab: state.activeTabId, loading: state.loading })));
+          cleanup.push(api.onFocusAddress((id, newTabId) => snapshot('address-focus-request', undefined, { id, newTabId })));
+          cleanup.push(api.onPopoverDismiss(token => snapshot('popover-dismiss', undefined, { token })));
+          snapshot('before-address-focus');
+        }, { address, startInput });
+      }
+      await focusAddress(label);
+      xinput(['key', '--clearmodifiers', 'ctrl+a']);
+      await waitFor(selector => { const input = document.querySelector(selector); return document.activeElement === input
+        && input.selectionStart === 0 && input.selectionEnd === input.value.length; }, address, 'Native select-all reaches the address input');
+      xinput(['type', '--clearmodifiers', '--delay', '8', value]);
+      await waitFor(({ selector, value }) => document.activeElement?.matches(selector) && document.activeElement.value === value, { selector: address, value });
+    } finally {
+      if (diagnostic) {
+        win.webContents.removeListener('before-input-event', observeInput);
+        win.webContents.removeListener('focus', observeFocus);
+        win.webContents.removeListener('blur', observeFocus);
+        const events = await evaluate(() => {
+          const trace = window.__wuuAcceptanceAddressInput;
+          delete window.__wuuAcceptanceAddressInput;
+          return trace?.stop();
+        }).catch(error => ({ error: String(error) }));
+        report.nativeAddressInputTraces ||= [];
+        report.nativeAddressInputTraces.push({ label, expected: value, nativeEvents, events });
+        save();
+      }
+    }
   }
   async function click(target, label, evidence = true, retainHover = false) {
     if (evidence) await capture(`before-${label}`);
