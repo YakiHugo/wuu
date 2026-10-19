@@ -24,7 +24,7 @@ function fixture(wrappers = {}) {
 test('empty CDP URL needs no fallback when packaged worker actually responds; native behavior preserved', () => {
   const { context, NativeWorker, records } = fixture();
   const options = { type: 'module' };
-  const worker = new context.Worker(new URL(root + 'ts.worker-hash.js'), options);
+  const worker = new context.Worker(new URL(root + 'ts.worker-BMazTI8A.js'), options);
   assert.ok(worker instanceof NativeWorker && worker instanceof context.Worker);
   assert.equal(context.Worker.sentinel, 42);
   assert.equal(worker.options, options);
@@ -38,7 +38,7 @@ test('empty CDP URL needs no fallback when packaged worker actually responds; na
 });
 
 test('PDF blob wrapper must import packaged worker and receive native response', async () => {
-  const url = root + 'pdf.worker-hash.mjs';
+  const url = root + 'pdf.worker.min-wgc6bjNh.mjs';
   const { context, records } = fixture({ 'blob:null/pdf': `await import("${url}");` });
   const worker = new context.Worker('blob:null/pdf', { type: 'module' });
   worker.emit('message', { data: { action: 'ready' } });
@@ -55,6 +55,24 @@ test('PDF blob wrapper must import packaged worker and receive native response',
   assert.equal(findPackagedWorker(records(), 'pdf.worker', root), null, 'terminated worker cannot conceal fake-worker fallback');
 });
 
+// These names are from the actual electron-vite release output, not invented
+// basename approximations. Vite preserves PDF.js's .min source suffix.
+test('real emitted PDF worker basename and supported non-minified variant are matched exactly', () => {
+  const valid = { sourceURL: root + 'pdf.worker.min-wgc6bjNh.mjs', responses: 28,
+    pdfDocument: true, pdfRenderPage: true, terminated: false, errors: [] };
+  for (const file of ['pdf.worker.min-wgc6bjNh.mjs', 'pdf.worker-wgc6bjNh.mjs', 'pdf.worker.min-wgc6bjNh.js']) {
+    assert.ok(findPackagedWorker([{ ...valid, sourceURL: root + file }], 'pdf.worker', root), file);
+  }
+  for (const url of [root + 'pdf.worker.minimum-wgc6bjNh.mjs', root + 'pdf.worker.min-wgc6bjNh.mjs.extra',
+    root + 'pdf.worker.min-.mjs', root + 'pdf.worker.min-wgc6bjNh.mjs%0A', root + 'nested/pdf.worker.min-wgc6bjNh.mjs',
+    root + 'nested%2Fpdf.worker.min-wgc6bjNh.mjs', root + 'nested%5Cpdf.worker.min-wgc6bjNh.mjs',
+    root + '../pdf.worker.min-wgc6bjNh.mjs', root + 'pdf.worker.min-wgc6bjNh.mjs?source=packaged',
+    root + 'pdf.worker.min-wgc6bjNh.mjs#packaged', root.replace('/assets/', '/assets-other/') + 'pdf.worker.min-wgc6bjNh.mjs',
+    'https://example.com/pdf.worker.min-wgc6bjNh.mjs']) {
+    assert.equal(findPackagedWorker([{ ...valid, sourceURL: url }], 'pdf.worker', root), null, url);
+  }
+});
+
 test('failed workers, absent workers, wrong roots and spoofed blob wrappers fail closed', async () => {
   assert.equal(findPackagedWorker([], 'pdf.worker', root), null);
   for (const url of ['https://example.com/ts.worker.js', 'file:///checkout/ts.worker.js', root + '../ts.worker.js', root + 'other.js']) {
@@ -64,7 +82,7 @@ test('failed workers, absent workers, wrong roots and spoofed blob wrappers fail
   }
   for (const type of ['error', 'messageerror']) {
     const { context, records } = fixture();
-    const worker = new context.Worker(root + 'ts.worker-hash.js');
+    const worker = new context.Worker(root + 'ts.worker-BMazTI8A.js');
     worker.emit('message'); worker.emit(type, { message: 'failed' });
     assert.equal(findPackagedWorker(records(), 'ts.worker', root), null, type);
   }

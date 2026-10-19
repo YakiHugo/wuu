@@ -140,7 +140,10 @@ function findPackagedWorker(records, name, assetRoot) {
     const url = new URL(record.sourceURL);
     if (url.protocol !== "file:" || url.search || url.hash || !url.href.startsWith(assetRoot)) return false;
     const file = decodeURIComponent(url.href.slice(assetRoot.length));
-    return !file.includes("/") && !file.includes("\\") && file.startsWith(`${name}-`) && /\.(?:m?js)$/.test(file);
+    // Vite preserves the source basename: PDF.js imports pdf.worker.min.mjs.
+    const expected = name === "pdf.worker" ? /^pdf\.worker(?:\.min)?-[A-Za-z0-9_-]+\.(?:m?js)$/
+      : name === "ts.worker" ? /^ts\.worker-[A-Za-z0-9_-]+\.js$/ : null;
+    return expected?.exec(file)?.[0] === file;
   }) || null;
 }
 
