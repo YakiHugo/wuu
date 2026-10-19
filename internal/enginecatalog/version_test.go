@@ -16,6 +16,7 @@ func TestObserveVersion(t *testing.T) {
 	for _, tc := range []struct{ name, id, script, want string }{
 		{"codex", "codex", `test "$#" = 1 && test "$1" = --version || exit 9; echo 'codex-cli 0.114.0'`, "0.114.0"},
 		{"claude", "claude", `echo '2.1.226 (Claude Code)'`, "2.1.226"},
+		{"unexpected suffix", "claude", `echo '2.1.226 (fake)'`, ""},
 		{"failure", "codex", `echo 'codex-cli 0.114.0'; exit 1`, ""},
 		{"diagnostic", "codex", `echo 'Please sign in with your account'`, ""},
 		{"multiline", "codex", `printf 'codex-cli 0.114.0\nextra output\n'`, ""},

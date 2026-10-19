@@ -1515,16 +1515,16 @@ type ThreadHandoffParams struct {
 
 // EngineInfo describes one agent engine for the settings surface.
 type EngineInfo struct {
-	ID           string   `json:"id"`
-	DisplayName  string   `json:"display_name,omitempty"`
-	Protocol     string   `json:"protocol,omitempty"`
-	InstallURL   string   `json:"install_url,omitempty"`
+	ID          string `json:"id"`
+	DisplayName string `json:"display_name,omitempty"`
+	Protocol    string `json:"protocol,omitempty"`
+	InstallURL  string `json:"install_url,omitempty"`
 	// Version is the legacy engine descriptor version, not necessarily the CLI version.
-	Version      string   `json:"version,omitempty"`
+	Version string `json:"version,omitempty"`
 	// CLIVersion is observed from the resolved executable; omitted when unknown.
 	CLIVersion string `json:"cli_version,omitempty"`
 	// UpdateURL opens vendor guidance. Wuu does not manage CLI installation.
-	UpdateURL string `json:"update_url,omitempty"`
+	UpdateURL    string   `json:"update_url,omitempty"`
 	Capabilities []string `json:"capabilities,omitempty"`
 	// Enabled reports whether the engine is registered (settings-driven).
 	Enabled bool `json:"enabled"`
