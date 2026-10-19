@@ -149,6 +149,9 @@ function renderSettings(props: {
   onRefreshEngineInventory?: () => Promise<EngineListResult | undefined>;
   onUpdateEngineInventory?: (params: EngineUpdateParams) => Promise<EngineListResult>;
   initialPage?: SettingsPage;
+  page?: SettingsPage;
+  onPageChange?: (page: SettingsPage) => void;
+  browserSettingsAllowed?: boolean;
   runningProviderNames?: string[];
   codexPets?: CodexPetsSnapshot;
   codexPetsLoading?: boolean;
@@ -176,6 +179,9 @@ function renderSettings(props: {
     <SettingsView
         initialized={props.initialized}
         initialPage={props.initialPage ?? "general"}
+        page={props.page}
+        onPageChange={props.onPageChange}
+        browserSettingsAllowed={props.browserSettingsAllowed}
         running={props.running ?? false}
         usage={props.usage}
         usageLoading={props.usageLoading}
@@ -224,6 +230,40 @@ function renderSettings(props: {
 }
 
 describe("SettingsView shell", () => {
+  it("reports settings navigation once and restores a history page without recording it again", () => {
+    installBuildInfoStub({ core: {}, desktop: {} } as BuildInfoResult);
+    const onPageChange = vi.fn();
+    const props = { initialized: baseInitialized(), page: "general" as const, onPageChange };
+    renderSettings(props);
+    const appearance = container.querySelector<HTMLButtonElement>('[data-wuu-page="appearance"]');
+    expect(appearance).not.toBeNull();
+    act(() => { appearance?.click(); });
+    expect(onPageChange).toHaveBeenCalledExactlyOnceWith("appearance");
+    renderSettings({ ...props, page: "appearance" });
+    expect(container.querySelector('.settings-page')?.getAttribute('data-wuu-page')).toBe("appearance");
+    act(() => { appearance?.click(); });
+    expect(onPageChange).toHaveBeenCalledTimes(1);
+
+    renderSettings({ ...props, page: "usage" });
+    expect(container.querySelector('.settings-page')?.getAttribute('data-wuu-page')).toBe("usage");
+    expect(onPageChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("normalizes controlled browser navigation when the window disallows browser settings", () => {
+    installBuildInfoStub({ core: {}, desktop: {} } as BuildInfoResult);
+    Object.assign(window.wuu, {
+      listBrowserProfiles: vi.fn(), importBrowserCookies: vi.fn(),
+      listBrowserExtensions: vi.fn(), addBrowserExtension: vi.fn(),
+      setBrowserExtensionEnabled: vi.fn(), removeBrowserExtension: vi.fn(),
+    });
+    const onPageChange = vi.fn();
+    renderSettings({ initialized: baseInitialized(), page: "browser", browserSettingsAllowed: false, onPageChange });
+    expect(onPageChange).toHaveBeenCalledExactlyOnceWith("providers");
+    expect(container.querySelector('.settings-page')?.getAttribute('data-wuu-page')).toBe("providers");
+    expect(container.querySelector('.settings-nav [data-wuu-page="browser"]')).toBeNull();
+  });
+
+
   it("omits native settings and does not request desktop build info on a browser host", async () => {
     installBuildInfoStub({ core: undefined, desktop: { version: "test", date: "1970-01-01" } });
     window.wuu.unsupportedMethods = ["getBuildInfo", "listCodexPets", "getRemoteControlSnapshot"];
@@ -290,14 +330,15 @@ describe("SettingsView shell", () => {
 
     Object.defineProperty(document, "elementFromPoint", {
       configurable: true,
-      value: vi.fn(() => toggle),
+      value: vi.fn(() => container.querySelector(".sidebar-hover-zone")),
     });
     act(() => {
-      toggle?.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+      container.querySelector(".sidebar-hover-zone")?.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
       vi.advanceTimersByTime(240);
     });
     expect(shell?.classList.contains("sidebar-drawer-open")).toBe(true);
 
+    Object.defineProperty(document, "elementFromPoint", { configurable: true, value: vi.fn(() => toggle) });
     act(() => {
       sidebar?.dispatchEvent(
         new MouseEvent("pointerout", {
@@ -330,10 +371,10 @@ describe("SettingsView shell", () => {
 
     Object.defineProperty(document, "elementFromPoint", {
       configurable: true,
-      value: vi.fn(() => toggle),
+      value: vi.fn(() => container.querySelector(".sidebar-hover-zone")),
     });
     act(() => {
-      toggle?.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+      container.querySelector(".sidebar-hover-zone")?.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
       vi.advanceTimersByTime(240);
     });
     expect(shell?.classList.contains("sidebar-drawer-open")).toBe(true);

@@ -46,12 +46,13 @@ export interface RibbonBrowserActions {
 }
 
 
-export function NavigationRibbon({ items, websites = [], activeWebsiteId, onSelectWebsite, onNewTab, onCloseTab, onPinTab, onReorderTabs, footer, ribbonRef, footerSettings }: {
+export function NavigationRibbon({ items, websites = [], activeWebsiteId, onSelectWebsite, onNewTab, onCloseTab, onPinTab, onReorderTabs, footer, ribbonRef, footerSettings, onExpandedChange }: {
   items: NavigationRibbonItem[];
   activeWebsiteId?: string | null;
   onSelectWebsite?: (website: RibbonWebsite) => void;
   footer?: ReactNode;
   ribbonRef?: Ref<HTMLElement>;
+  onExpandedChange?: (expanded: boolean) => void;
   footerSettings?: { title: string; disabled: boolean; active: boolean; onSelect: () => void };
 } & RibbonBrowserActions): JSX.Element {
   const { t } = useI18n();
@@ -171,6 +172,10 @@ export function NavigationRibbon({ items, websites = [], activeWebsiteId, onSele
 
   const menuWebsite = menu && websites.find((website) => website.id === menu.id);
   const expanded = nativeOpen || pointerInside || keyboardFocusWithin || dragging || Boolean(menuWebsite) || retainedLayers > 0;
+  useLayoutEffect(() => {
+    onExpandedChange?.(expanded);
+  }, [expanded, onExpandedChange]);
+  useLayoutEffect(() => () => onExpandedChange?.(false), [onExpandedChange]);
   useLayoutEffect(() => {
     if (!nativeAvailable || !expanded || !navRef.current) { setNativeOpen(false); return; }
     const nav = navRef.current, rect = nav.getBoundingClientRect();

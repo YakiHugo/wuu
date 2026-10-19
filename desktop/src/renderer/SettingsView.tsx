@@ -49,6 +49,7 @@ import {
   useState,
   useSyncExternalStore
 } from "react";
+import { availableSettingsPage, browserSettingsAvailable, isConfigurablePlugin, remoteControlAvailable } from "./SettingsPageAvailability";
 import { SidePanelToggleIcon } from "./SidePanelToggleIcon";
 import { useSidebarDrawerState, type SidebarDrawerPhase } from "./SidebarDrawerState";
 import { sidebarDrawerExitMs, sidebarMotionMs } from "./AppLayoutState";
@@ -56,7 +57,6 @@ import { SelectMenu, type SelectMenuOption } from "./SelectMenu";
 import type {
   CodexPetsSnapshot,
   DesktopBuildInfo,
-  ExtensionInventoryRecord,
   InitializeResult,
   MCPAuthStartResult,
   MCPServerStatus,
@@ -78,7 +78,7 @@ export type ArchivedSessionView = {
   archive_project_id?: string;
   archive_project_name?: string;
 };
-import { ENABLE_REMOTE_CONTROL, ENABLE_SUBSCRIPTIONS } from "./FeatureFlags";
+import { ENABLE_SUBSCRIPTIONS } from "./FeatureFlags";
 import { AppearanceTypography } from "./AppearanceTypography";
 import { BackgroundSettings } from "./background/BackgroundSettings";
 import { DefaultEnvironmentRow, ExecutionEnvironmentSettings } from "./ExecutionEnvironmentSettings";
@@ -170,21 +170,6 @@ const NATIVE_PAGE_SEARCH_KEY: Record<NativeSettingsPage, Parameters<Translate>[0
   archive: "settings.searchKeywords.archive",
 };
 
-function remoteControlAvailable(): boolean {
-  return ENABLE_REMOTE_CONTROL && hostSupports("getRemoteControlSnapshot");
-}
-
-function browserSettingsAvailable(): boolean {
-  return Boolean(
-    window.wuu?.listBrowserProfiles &&
-      window.wuu.importBrowserCookies &&
-      window.wuu.listBrowserExtensions &&
-      window.wuu.addBrowserExtension &&
-      window.wuu.setBrowserExtensionEnabled &&
-      window.wuu.removeBrowserExtension,
-  );
-}
-
 // App-level preferences stay at the top of the rail; less frequent setup follows
 // under labeled groups. Page IDs stay flat for plugin snapshots and deep links
 // ("advanced" is still the built-in agent page).
@@ -231,20 +216,6 @@ type CopyState = "idle" | "copying" | "copied";
 
 const COPY_RESET_MS = 1500;
 
-function availableSettingsPage(page: SettingsPage | undefined, browserSettingsAllowed: boolean): SettingsPage {
-  const next = page ?? "providers";
-  if (next === "subscriptions" && !ENABLE_SUBSCRIPTIONS) {
-    return "providers";
-  }
-  if (next === "remote" && !remoteControlAvailable()) {
-    return "providers";
-  }
-  if (next === "browser" && (!browserSettingsAllowed || !browserSettingsAvailable())) {
-    return "providers";
-  }
-  return next;
-}
-
 export function SettingsView({
   browserSettingsAllowed = true,
   embedded = false,
@@ -253,6 +224,8 @@ export function SettingsView({
   onSidebarPointerLeave,
   initialized,
   initialPage,
+  page,
+  onPageChange,
   running,
   usage,
   usageLoading = false,
@@ -302,6 +275,8 @@ export function SettingsView({
   onSidebarPointerLeave?: (event: ReactPointerEvent<HTMLElement>) => void;
   initialized?: InitializeResult;
   initialPage?: SettingsPage;
+  page?: SettingsPage;
+  onPageChange?: (page: SettingsPage) => void;
   running: boolean;
   usage?: SettingsUsageResponse;
   usageLoading?: boolean;
@@ -349,9 +324,10 @@ export function SettingsView({
     [runningProviderNames],
   );
   const [desktopBuild, setDesktopBuild] = useState<DesktopBuildInfo | undefined>();
-  const [activePage, setActivePage] = useState<SettingsPage>(() =>
+  const [localPage, setActivePage] = useState<SettingsPage>(() =>
     availableSettingsPage(initialPage, browserSettingsAllowed),
   );
+  const activePage = availableSettingsPage(page ?? localPage, browserSettingsAllowed);
   const [navQuery, setNavQuery] = useState("");
   const customPluginSettingsPages = useSyncExternalStore(
     (listener) => pluginHost.subscribe(listener),
@@ -418,12 +394,19 @@ export function SettingsView({
   }, [initialPage, browserSettingsAllowed]);
 
   useLayoutEffect(() => {
+    if (page !== undefined && activePage !== page) onPageChange?.(activePage);
+  }, [activePage, page, onPageChange]);
+
+  useLayoutEffect(() => {
     const missingGeneratedPage = activePage.startsWith("plugin-settings:")
       && activePluginSettingsRecord === undefined;
     const missingCustomPage = activePage.startsWith("plugin-view:")
       && activeCustomPluginPage === undefined;
-    if (missingGeneratedPage || missingCustomPage) setActivePage("providers");
-  }, [activeCustomPluginPage, activePage, activePluginSettingsRecord]);
+    if (missingGeneratedPage || missingCustomPage) {
+      setActivePage("providers");
+      onPageChange?.("providers");
+    }
+  }, [activeCustomPluginPage, activePage, activePluginSettingsRecord, onPageChange]);
 
   useLayoutEffect(() => {
     if (settingsScrollRef.current) {
@@ -664,8 +647,8 @@ export function SettingsView({
 
   // Mirror the main view's sidebar collapse/hover logic so the settings shell
   // behaves the same way: a persistent `sidebarCollapsed` flag hides the rail
-  // and only the left-edge hover zone + the toggle button can reopen it as a
-  // drawer overlay. Navigating between settings pages does not close it;
+  // and only the left-edge hover zone can reopen it as a drawer overlay.
+  // The toggle explicitly pins or collapses it. Navigating between settings pages does not close it;
   // pointer exit and window-level dismissal remain the close signals.
   const fallbackShellRef = useRef<HTMLDivElement>(null);
   const effectiveShellRef = shellRef ?? fallbackShellRef;
@@ -675,6 +658,7 @@ export function SettingsView({
     scheduleSidebarDrawerOpen,
     cancelSidebarDrawerOpen,
     openSidebarDrawer,
+    closeSidebarDrawer,
     scheduleSidebarDrawerCloseFromPointerLeave
   } = useSidebarDrawerState({
     appShellRef: effectiveShellRef,
@@ -746,6 +730,13 @@ export function SettingsView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   ]), [browserSettingsAllowed, customPluginSettingsPages, pluginSettingsRecords, t]);
 
+  function selectPage(nextPage: SettingsPage): void {
+    const next = availableSettingsPage(nextPage, browserSettingsAllowed);
+    if (next === activePage) return;
+    setActivePage(next);
+    onPageChange?.(next);
+  }
+
   const sidebarToggle = (
     <button
       type="button"
@@ -753,8 +744,7 @@ export function SettingsView({
       data-wuu-component="sidebar-toggle"
       aria-label={sidebarCollapsed ? t("settings.expandSidebar") : t("settings.collapseSidebar")}
       aria-pressed={!sidebarCollapsed}
-      onClick={onToggleSidebar}
-      onPointerEnter={scheduleSidebarDrawerOpen}
+      onClick={() => { closeSidebarDrawer(); onToggleSidebar(); }}
       onPointerLeave={(event) =>
         scheduleSidebarDrawerCloseFromPointerLeave(event.nativeEvent)
       }
@@ -829,7 +819,7 @@ export function SettingsView({
                 {group.pages.map((page) => {
                   const Icon = NATIVE_PAGE_ICONS[page];
                   return (
-                    <SettingsNavItem key={page} icon={<Icon className="icon-lg" />} active={activePage === page} onClick={() => setActivePage(page)}>
+                    <SettingsNavItem key={page} pageID={page} icon={<Icon className="icon-lg" />} active={activePage === page} onClick={() => selectPage(page)}>
                       {settingsPageTitle(page, t)}
                     </SettingsNavItem>
                   );
@@ -844,9 +834,10 @@ export function SettingsView({
                   return (
                     <SettingsNavItem
                       key={pageId}
+                      pageID={pageId}
                       icon={<PluginBlocksIcon className="icon-lg" />}
                       active={activePage === pageId}
-                      onClick={() => setActivePage(pageId)}
+                      onClick={() => selectPage(pageId)}
                     >
                       {plugin.name}
                     </SettingsNavItem>
@@ -857,9 +848,10 @@ export function SettingsView({
                   return (
                     <SettingsNavItem
                       key={pageId}
+                      pageID={pageId}
                       icon={<PluginIcon icon={entry.icon} pluginId={entry.pluginId} fingerprint={entry.generation} className="icon-lg" />}
                       active={activePage === pageId}
-                      onClick={() => setActivePage(pageId)}
+                      onClick={() => selectPage(pageId)}
                     >
                       {entry.title}
                     </SettingsNavItem>
@@ -897,8 +889,6 @@ export function SettingsView({
             {/* Match the main shell's docked/collapsed slots. Keep the collapsed
              * toggle inside the drag strip so native hit testing honors no-drag. */}
             {sidebarCollapsed && !embedded ? sidebarToggle : null}
-            <span className="settings-crumb-root">{t("settings.navigation")}</span>
-            <span className="settings-crumb-separator" aria-hidden="true">/</span>
             <div ref={setTitlebarSlot} className="settings-titlebar-slot" />
           </div>
           <div ref={settingsScrollRef} className="settings-scroll">
@@ -922,7 +912,7 @@ export function SettingsView({
                     viewTypeId={activeCustomPluginPage.view}
                     context={Object.freeze({ surface: "settings" })}
                     settings={settingsPageHost}
-                    onFailure={() => setActivePage("providers")}
+                    onFailure={() => selectPage("providers")}
                   />
                 </>
               ) : activePage === "subscriptions" && ENABLE_SUBSCRIPTIONS ? (
@@ -981,7 +971,7 @@ export function SettingsView({
                   onUpdateEngineInventory={onUpdateEngineInventory}
                   onSave={onSave}
                   onGeneralSave={onGeneralSave}
-                  onAddService={() => setActivePage("providers")}
+                  onAddService={() => selectPage("providers")}
                   desktopBuild={desktopBuild}
                   copyState={copyState}
                   onCopyVersion={copyVersionInfo}
@@ -1045,7 +1035,7 @@ export function SettingsView({
       busy={running || usageLoading || mcpLoading || codexPetsLoading || Boolean(mcpBusyServer)}
       hasError={Boolean(advancedError || usageError || mcpError || codexPetsError)}
       fallback={nativeSettings}
-      onOpenPage={(pageId) => setActivePage(pageId as SettingsPage)}
+      onOpenPage={(pageId) => selectPage(pageId as SettingsPage)}
       onAdvancedSave={onAdvancedSave}
       onGeneralSave={onGeneralSave}
       onRefresh={onRefreshModelCatalog}
@@ -1058,11 +1048,13 @@ export function SettingsView({
 /* -------------------------------------------------------------------------- */
 
 function SettingsNavItem({
+  pageID,
   icon,
   active,
   onClick,
   children
 }: {
+  pageID?: SettingsPage;
   icon: ReactNode;
   active: boolean;
   onClick: () => void;
@@ -1072,6 +1064,7 @@ function SettingsNavItem({
     <button
       className={`settings-nav-item${active ? " active" : ""}`}
       data-wuu-component="settings-navigation-item"
+      data-wuu-page={pageID}
       type="button"
       aria-current={active ? "page" : undefined}
       onClick={onClick}
@@ -2434,17 +2427,6 @@ function settingsPageTitle(page: NativeSettingsPage, t: Translate): string {
     case "archive":
       return t("settings.archive");
   }
-}
-
-function isConfigurablePlugin(
-  extension: ExtensionInventoryRecord,
-): boolean {
-  const approved = extension.approval_state === "official"
-    || extension.approval_state === "granted";
-  return extension.kind === "plugin"
-    && approved
-    && extension.enabled !== false
-    && (extension.contributions?.settings?.length ?? 0) > 0;
 }
 
 function pluginSettingsPageId(pluginId: string): `plugin-settings:${string}` {

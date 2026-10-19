@@ -461,6 +461,7 @@ export function AppSidebar({
   settingsActive = false,
   onLeaveSettings,
   onRibbonPresenceChange,
+  onRibbonExpandedChange,
   catalogSection = "plugins",
   onSelectCatalogSection,
   activeWebsiteId,
@@ -548,6 +549,7 @@ export function AppSidebar({
   settingsActive?: boolean;
   onLeaveSettings?: () => void;
   onRibbonPresenceChange?: (present: boolean) => void;
+  onRibbonExpandedChange?: (expanded: boolean) => void;
   catalogSection?: SkillsCatalogSection;
   onSelectCatalogSection?: (section: SkillsCatalogSection) => void;
   activeWebsiteId?: string | null;
@@ -1808,6 +1810,7 @@ export function AppSidebar({
       <HoverRevealScopeContext.Provider value={null}>
       <NavigationRibbon
         ribbonRef={ribbonRef}
+        onExpandedChange={onRibbonExpandedChange}
         footerSettings={{ title: t("sidebar.settings"), active: settingsActive, disabled: !state.initialized, onSelect: () => activateNative(onOpenSettings) }}
         websites={websites}
         onNewTab={onNewTab ? () => activateNative(onNewTab) : undefined}

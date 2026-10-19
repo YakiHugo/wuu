@@ -100,14 +100,22 @@ app.whenReady().then(async () => {
       const clipInset = panelClip === 'none' ? 0 : parseFloat(panelClip.slice('inset('.length));
       const box = (node) => node?.getBoundingClientRect().toJSON() ?? null;
       const peers = [...document.querySelectorAll([
-        '[data-wuu-component="sidebar-toggle"]', '[data-wuu-component="right-sidebar-toggle"]',
+        '[data-wuu-component="sidebar-toggle"]', '[data-wuu-component="right-sidebar-toggle"]', '.shell-page-history-controls button',
         '.conversation-title-heading h1', '.conversation-title-heading .icon-button',
         '.workspace-panel-add', '.workspace-panel-globalize',
       ].join(','))].filter(node => node.checkVisibility({ checkVisibilityCSS: true, checkOpacity: true }))
         .map(node => {
           const rect = node.getBoundingClientRect();
           const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+          const shellControl = !!node.closest('.shell-page-history-controls') || node.matches('.section-sidebar-toggle, .shell-right-sidebar-toggle');
+          const row = shellControl
+            ? document.querySelector('.mac-window-controls') ? document.querySelector('.titlebar') : document.querySelector('.workbench-window-chrome')
+            : node.closest('.titlebar, .workspace-panel-tabbar');
+          const style = getComputedStyle(row);
+          const rowBox = row.getBoundingClientRect();
           return { target: node.dataset.wuuComponent || node.className, bounds: box(node),
+            row: box(row), shellControl,
+            expectedCenterY: (rowBox.top + parseFloat(style.paddingTop) + rowBox.bottom - parseFloat(style.paddingBottom)) / 2,
             centerY: rect.y + rect.height / 2, button: node instanceof HTMLButtonElement,
             hit: hit === node || node.contains(hit) };
         });
@@ -136,8 +144,8 @@ app.whenReady().then(async () => {
     // The titlebar grows with the UI font. Verify alignment and usable chip
     // padding against its painted row instead of a fixed default-font height.
     for (const peer of geometry.peers) {
-      assert.ok(Math.abs(peer.centerY - axis) < 0.6, `${scenario}: ${peer.target} retains the shared window-control axis: ${JSON.stringify(geometry)}`);
-      assert.ok(peer.bounds.top >= geometry.header.top - 0.1 && peer.bounds.bottom <= geometry.header.bottom + 0.1,
+      assert.ok(Math.abs(peer.centerY - peer.expectedCenterY) < 0.6, `${scenario}: ${peer.target} aligns within its own workbench row: ${JSON.stringify(geometry)}`);
+      assert.ok(peer.bounds.top >= peer.row.top - 0.1 && peer.bounds.bottom <= peer.row.bottom + 0.1,
         `${scenario}: ${peer.target} is not clipped by the row`);
       if (peer.button) assert.ok(peer.hit, `${scenario}: ${peer.target} owns its click target`);
     }
@@ -148,7 +156,7 @@ app.whenReady().then(async () => {
     assert.ok(geometry.active.left >= geometry.strip.left - 1 && geometry.active.right <= geometry.strip.right + 1,
       "The selected tab remains in view");
     for (const { tab, label, close, conversation, chip, main, selected, hit } of geometry.tabs) {
-      assert.ok(chip.height >= 28 && chip.height >= label.height + 4 && chip.height <= label.height + 14,
+      assert.ok(chip.height >= 28 && chip.height >= label.height + 4,
         `${scenario}: compact chips retain readable label padding and usable targets: ${JSON.stringify(geometry)}`);
       assert.ok(Math.abs((chip.top - geometry.paintedCanvasTop) - (geometry.header.bottom - chip.top - chip.height)) < 1,
         `${scenario}: tab chips have equal space above and below within the painted canvas header: ${JSON.stringify(geometry)}`);

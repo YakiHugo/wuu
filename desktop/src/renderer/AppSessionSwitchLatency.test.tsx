@@ -1,3 +1,5 @@
+import type { ChromeOverlayApi, ChromeOverlayEvent, ChromeOverlayRequest } from "../shared/chromeOverlay";
+import { WEB_WORKSPACE_RIBBON_ID, type WebWorkspaceApi, type WebWorkspaceState } from "../shared/webWorkspace";
 import { readComposerDraftRecovery } from "./ComposerDraftRecovery";
 import { openComposerAttachmentPicker } from "./test/attachmentPicker";
 /**
@@ -21,6 +23,8 @@ vi.mock("./FeatureFlags", async (importOriginal) => ({
   ...await importOriginal<typeof import("./FeatureFlags")>(),
   ENABLE_ENVIRONMENT_PANEL: true,
 }));
+
+vi.mock("./WebWorkspace", () => ({ WebWorkspacePanel: () => <div data-testid="native-website-probe" /> }));
 
 const turnListFixture = vi.hoisted(() => ({ renderTurns: false }));
 
@@ -72,6 +76,8 @@ import { App } from "./App";
 import { requestOpenThreadInSplit } from "./ConversationSplitBridge";
 import * as ComposerMessages from "./ComposerMessages";
 import { mockAnimationFrames } from "./AnimationFrameTestHarness";
+import { translateCurrent } from "./i18n";
+import { ConfirmDialogHost } from "./ConfirmDialog";
 
 let container: HTMLDivElement;
 let root: Root | null = null;
@@ -408,9 +414,30 @@ async function pickPendingAttachment(owner: Element, extension: "pdf" | "png" | 
 const mainComposerSelector = '[data-main-conversation-composer="dock"]';
 const attachmentCardSelector = ".composer-attachment-card";
 
+function pageHistoryButton(direction: "back" | "forward"): HTMLButtonElement {
+  const button = container.querySelector<HTMLButtonElement>(
+    `[data-wuu-component="page-history-${direction}"]`,
+  );
+  expect(button).not.toBeNull();
+  return button!;
+}
+
+async function clickPageHistoryTarget(button: HTMLButtonElement | null | undefined): Promise<void> {
+  expect(button).toBeTruthy();
+  await act(async () => { button!.click(); });
+  await flushAsync();
+}
+
+async function renderPageHistoryApp(): Promise<void> {
+  await act(async () => { root = createRoot(container); root.render(<><App /><ConfirmDialogHost /></>); });
+  await flushAsync();
+  expect(activeThreadProbe()?.dataset.threadId).toBe(threadAID);
+}
+
 describe("session tab switch latency", () => {
   beforeEach(() => {
     installWindowStubs();
+    HTMLElement.prototype.scrollIntoView = vi.fn();
     turnListFixture.renderTurns = false;
     serverEventHandlers = [];
     container = document.createElement("div");
@@ -430,6 +457,412 @@ describe("session tab switch latency", () => {
     container.remove();
     Reflect.deleteProperty(globalThis, "ResizeObserver");
     delete (globalThis as { wuu?: WuuDesktopApi }).wuu;
+  });
+
+  it("app history reactivates the existing plugin instance and skips it after unloading", async () => {
+    installWuuApi();
+    await renderPageHistoryApp();
+    const { desktopPluginHost, desktopWorkbenchController } = await import("./plugins/DesktopPluginRuntime");
+    const pluginId = "test:page-history";
+    try {
+      await act(async () => {
+        await desktopPluginHost.activateGeneration({ pluginId, generation: "history-one", register(api) {
+          api.registerViewType({ id: "history-page", title: "History plugin", defaultRegion: "primary",
+            render: () => <input data-testid="history-plugin-draft" defaultValue="plugin draft" /> });
+        } });
+        await desktopWorkbenchController.openPluginView(pluginId, "history-page", { region: "primary", persistence: "durable", reveal: true });
+      });
+      await flushAsync();
+      const input = container.querySelector<HTMLInputElement>('[data-testid="history-plugin-draft"]');
+      expect(input).not.toBeNull();
+      const instance = desktopWorkbenchController.getSnapshot().views.find(view => view.pluginId === pluginId)!;
+      await clickPageHistoryTarget(pageHistoryButton("back"));
+      expect(desktopWorkbenchController.getSnapshot().views.find(view => view.pluginId === pluginId)?.id).toBe(instance.id);
+      await clickPageHistoryTarget(pageHistoryButton("forward"));
+      expect(container.querySelector('[data-testid="history-plugin-draft"]')).not.toBeNull();
+      expect(desktopWorkbenchController.getSnapshot().activeViewByRegion.primary).toBe(instance.id);
+      await clickPageHistoryTarget(pageHistoryButton("back"));
+      await act(async () => { desktopPluginHost.unload(pluginId); });
+      expect(pageHistoryButton("forward").disabled).toBe(true);
+    } finally {
+      await act(async () => { desktopPluginHost.unload(pluginId); });
+    }
+  });
+
+  it.each([false, true])("app history replays ribbon destinations without driving website navigation and skips a removed website (native presenter=%s)", async (nativePresenter) => {
+    installWuuApi();
+    Object.defineProperty(window.wuu, "platform", { configurable: true, value: "darwin" });
+    const overlayListeners = new Set<(event: ChromeOverlayEvent) => void>();
+    const showOverlay = vi.fn<(request: ChromeOverlayRequest) => Promise<void>>().mockResolvedValue(undefined);
+    if (nativePresenter) {
+      // jsdom lacks Chromium's iterable computed style declaration.
+      const readComputedStyle = window.getComputedStyle.bind(window);
+      vi.spyOn(window, "getComputedStyle").mockImplementation((...args) => {
+        const computed = readComputedStyle(...args);
+        Object.defineProperty(computed, Symbol.iterator, { value: function* () {
+          for (let index = 0; index < computed.length; index++) yield computed.item(index);
+        } });
+        return computed;
+      });
+      (window.wuu as typeof window.wuu & { chromeOverlay?: ChromeOverlayApi }).chromeOverlay = {
+        show: showOverlay, hide: vi.fn().mockResolvedValue(undefined),
+        onEvent: listener => { overlayListeners.add(listener); return () => { overlayListeners.delete(listener); }; },
+      };
+    }
+    let nativeState: WebWorkspaceState = { id: WEB_WORKSPACE_RIBBON_ID, url: "https://example.com/", title: "History site", loading: false, canGoBack: true, canGoForward: false,
+      activeTabId: "website:history", tabs: [{ id: "website:history", url: "https://example.com/", title: "History site", loading: false, canGoBack: true, canGoForward: false, zoomFactor: 1 }] };
+    const listeners = new Set<(state: WebWorkspaceState) => void>();
+    const command = vi.fn();
+    const selectTab = vi.fn(async (_id: string, tabId: string) => {
+      nativeState = { ...nativeState, activeTabId: tabId };
+      listeners.forEach(listener => listener(nativeState));
+      return nativeState;
+    });
+    (window.wuu as typeof window.wuu & { webWorkspace?: WebWorkspaceApi }).webWorkspace = { initializeTabs: vi.fn(async () => nativeState), command, selectTab,
+      onState: (listener: (state: WebWorkspaceState) => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    } as unknown as WebWorkspaceApi;
+    await renderPageHistoryApp();
+    await act(async () => { setMainComposerPrompt("retained behind website"); });
+    await clickPageHistoryTarget(container.querySelector('[data-wuu-component="website-navigation-item"]'));
+    expect(container.querySelector('[data-wuu-component="app-shell"]')?.hasAttribute("data-web-workspace-open")).toBe(true);
+    const history = container.querySelector<HTMLElement>('[data-wuu-component="page-history-controls"]')!;
+    const ribbon = container.querySelector<HTMLElement>(".sidebar-ribbon")!;
+    const toggle = container.querySelector<HTMLButtonElement>(".section-sidebar-toggle")!;
+    expect(history.hidden).toBe(false);
+    await act(async () => pageHistoryButton("back").focus());
+    await act(async () => ribbon.dispatchEvent(new MouseEvent("pointerover", { bubbles: true })));
+    await vi.waitFor(async () => {
+      await act(async () => {});
+      expect(ribbon.dataset.expanded).toBe("true");
+    });
+    expect(history.hidden).toBe(true);
+    expect(history.hasAttribute("inert")).toBe(true);
+    expect(toggle.hidden).toBe(true);
+    expect(toggle.hasAttribute("inert")).toBe(true);
+    expect(document.activeElement).toBe(container.querySelector(".app-shell"));
+    await act(async () => ribbon.dispatchEvent(new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body })));
+    if (nativePresenter) {
+      expect(history.hidden).toBe(true);
+      expect(toggle.hidden).toBe(true);
+      const request = showOverlay.mock.calls.map(([request]) => request).findLast(request => request.model.kind === "ribbon")!;
+      expect(request).toBeDefined();
+      await act(async () => overlayListeners.forEach(listener => listener({
+        token: request.token, generation: request.generation, command: { type: "pointer", inside: false },
+      })));
+      // Closing motion retracts the DOM ribbon but native ownership persists
+      // until the matching presenter dismissal completes that opening.
+      expect(ribbon.dataset.expanded).toBeUndefined();
+      expect(history.hidden).toBe(true);
+      expect(toggle.hidden).toBe(true);
+      await act(async () => overlayListeners.forEach(listener => listener({
+        token: request.token, generation: request.generation, command: { type: "dismiss", reason: "leave" },
+      })));
+    }
+    expect(ribbon.dataset.expanded).toBeUndefined();
+    expect(history.hidden).toBe(false);
+    expect(history.hasAttribute("inert")).toBe(false);
+    expect(toggle.hidden).toBe(false);
+    expect(toggle.hasAttribute("inert")).toBe(false);
+    expect(document.activeElement).toBe(container.querySelector(".app-shell"));
+    // Native webpage navigation changes URL/history state, not the app route.
+    await act(async () => {
+      nativeState = { ...nativeState, url: "https://example.com/previous", canGoBack: false,
+        tabs: nativeState.tabs?.map(tab => ({ ...tab, url: "https://example.com/previous", canGoBack: false })) };
+      listeners.forEach(listener => listener(nativeState));
+    });
+    await clickPageHistoryTarget(pageHistoryButton("back"));
+    expect(container.querySelector('[data-wuu-component="app-shell"]')?.hasAttribute("data-web-workspace-open")).toBe(false);
+    expect(mainComposerTextarea().value).toBe("retained behind website");
+    await clickPageHistoryTarget(pageHistoryButton("forward"));
+    expect(container.querySelector('[data-wuu-component="app-shell"]')?.hasAttribute("data-web-workspace-open")).toBe(true);
+    await clickPageHistoryTarget(pageHistoryButton("back"));
+    expect(selectTab).toHaveBeenCalledWith(WEB_WORKSPACE_RIBBON_ID, "website:history");
+    expect(command).not.toHaveBeenCalled();
+    await act(async () => { nativeState = { ...nativeState, tabs: [], activeTabId: undefined }; listeners.forEach(listener => listener(nativeState)); });
+    expect(pageHistoryButton("forward").disabled).toBe(true);
+  });
+
+  it("page history disables both ends initially and replays existing sessions without adding visits", async () => {
+    const { resumeThread } = installWuuApi();
+    window.wuu.startThread = vi.fn();
+    await renderPageHistoryApp();
+    expect(pageHistoryButton("back").disabled).toBe(true);
+    expect(pageHistoryButton("forward").disabled).toBe(true);
+    await clickPageHistoryTarget(threadRowButton("session switch B"));
+    expect(activeThreadProbe()?.dataset.threadId).toBe(threadBID);
+    expect(pageHistoryButton("back").disabled).toBe(false);
+    expect(pageHistoryButton("forward").disabled).toBe(true);
+    for (let replay = 0; replay < 3; replay += 1) {
+      await clickPageHistoryTarget(pageHistoryButton("back"));
+      expect(activeThreadProbe()?.dataset.threadId).toBe(threadAID);
+      expect(pageHistoryButton("back").disabled).toBe(true);
+      expect(pageHistoryButton("forward").disabled).toBe(false);
+      await clickPageHistoryTarget(pageHistoryButton("forward"));
+      expect(activeThreadProbe()?.dataset.threadId).toBe(threadBID);
+      expect(pageHistoryButton("forward").disabled).toBe(true);
+    }
+    expect(resumeThread.mock.calls.every(([id]) => id === threadAID || id === threadBID)).toBe(true);
+    expect(window.wuu.startThread).not.toHaveBeenCalled();
+  }, 30_000);
+
+  it("page history discards the forward branch after a new session is selected", async () => {
+    const { threadsByID } = installWuuApi();
+    const third = { ...threadB(), id: "history-third", preview: "history third" };
+    threadsByID.set(third.id, third);
+    await renderPageHistoryApp();
+    await clickPageHistoryTarget(threadRowButton("session switch B"));
+    await clickPageHistoryTarget(pageHistoryButton("back"));
+    await clickPageHistoryTarget(threadRowButton(third.preview));
+    expect(activeThreadProbe()?.dataset.threadId).toBe(third.id);
+    expect(pageHistoryButton("forward").disabled).toBe(true);
+    await clickPageHistoryTarget(pageHistoryButton("back"));
+    expect(activeThreadProbe()?.dataset.threadId).toBe(threadAID);
+    expect(pageHistoryButton("back").disabled).toBe(true);
+    await clickPageHistoryTarget(pageHistoryButton("forward"));
+    expect(activeThreadProbe()?.dataset.threadId).toBe(third.id);
+    expect(pageHistoryButton("forward").disabled).toBe(true);
+  });
+
+  it("page history keeps its current visit after a failed restore and permits retry", async () => {
+    const { resumeThread } = installWuuApi();
+    await renderPageHistoryApp();
+    await clickPageHistoryTarget(threadRowButton("session switch B"));
+    await act(async () => { setMainComposerPrompt("keep B after a failed history replay"); });
+    const pending = deferred<{ thread: Thread }>();
+    resumeThread.mockImplementationOnce(() => pending.promise);
+    await clickPageHistoryTarget(pageHistoryButton("back"));
+    expect(resumeThread).toHaveBeenLastCalledWith(threadAID);
+    expect(pageHistoryButton("back").disabled).toBe(true);
+    expect(pageHistoryButton("forward").disabled).toBe(true);
+    await act(async () => { pending.reject(new Error("History resume temporarily unavailable")); });
+    await flushAsync();
+    expect(activeThreadProbe()?.dataset.threadId).toBe(threadBID);
+    expect(mainComposerTextarea().value).toBe("keep B after a failed history replay");
+    expect(pageHistoryButton("back").disabled).toBe(false);
+    expect(pageHistoryButton("forward").disabled).toBe(true);
+    await clickPageHistoryTarget(pageHistoryButton("back"));
+    expect(activeThreadProbe()?.dataset.threadId).toBe(threadAID);
+    expect(pageHistoryButton("back").disabled).toBe(true);
+    await clickPageHistoryTarget(pageHistoryButton("forward"));
+    expect(activeThreadProbe()?.dataset.threadId).toBe(threadBID);
+    expect(mainComposerTextarea().value).toBe("keep B after a failed history replay");
+    expect(pageHistoryButton("forward").disabled).toBe(true);
+  });
+
+  it.each(["success", "failure"] as const)("page history keeps newer navigation when an older replay finishes late (newer resume=%s)", async (outcome) => {
+    const { threadsByID, resumeThread } = installWuuApi();
+    const third = { ...threadB(), id: "history-third", preview: "history third" };
+    threadsByID.set(third.id, third);
+    await renderPageHistoryApp();
+    await clickPageHistoryTarget(threadRowButton("session switch B"));
+    const pending = deferred<{ thread: Thread }>();
+    resumeThread.mockImplementationOnce(() => pending.promise);
+    await clickPageHistoryTarget(pageHistoryButton("back"));
+    expect(resumeThread).toHaveBeenLastCalledWith(threadAID);
+    const newerResume = deferred<{ thread: Thread }>();
+    resumeThread.mockImplementationOnce(() => newerResume.promise);
+    await clickPageHistoryTarget(threadRowButton(third.preview));
+    await act(async () => {
+      if (outcome === "failure") newerResume.reject(new Error("Newer session is temporarily unavailable"));
+      else newerResume.resolve({ thread: third });
+    });
+    await flushAsync();
+    const expectedThreadID = outcome === "failure" ? threadBID : third.id;
+    expect(activeThreadProbe()?.dataset.threadId).toBe(expectedThreadID);
+    expect(pageHistoryButton("back").disabled).toBe(false);
+    expect(pageHistoryButton("forward").disabled).toBe(true);
+    await act(async () => { setMainComposerPrompt("newer navigation draft"); });
+    await act(async () => {
+      emitNotification("thread/resumed", { thread: threadA() });
+      pending.resolve({ thread: threadA() });
+    });
+    await flushAsync();
+    expect(activeThreadProbe()?.dataset.threadId).toBe(expectedThreadID);
+    expect(mainComposerTextarea().value).toBe("newer navigation draft");
+    expect(pageHistoryButton("forward").disabled).toBe(true);
+    if (outcome === "success") {
+      await clickPageHistoryTarget(pageHistoryButton("back"));
+      expect(activeThreadProbe()?.dataset.threadId).toBe(threadBID);
+    }
+    await clickPageHistoryTarget(pageHistoryButton("back"));
+    expect(activeThreadProbe()?.dataset.threadId).toBe(threadAID);
+    expect(pageHistoryButton("back").disabled).toBe(true);
+  });
+
+  it("page history keeps settings navigation when an older session replay finishes late", async () => {
+    const { resumeThread } = installWuuApi();
+    window.wuu.listEngines = vi.fn().mockResolvedValue({ engines: [] });
+    window.wuu.getBuildInfo = vi.fn().mockResolvedValue({ desktop: { version: "test" } });
+    window.wuu.listMCPServers = vi.fn().mockResolvedValue({ servers: [] });
+    await renderPageHistoryApp();
+    await clickPageHistoryTarget(threadRowButton("session switch B"));
+    await act(async () => { setMainComposerPrompt("B draft before pending replay"); });
+    const pending = deferred<{ thread: Thread }>();
+    resumeThread.mockImplementationOnce(() => pending.promise);
+    await clickPageHistoryTarget(pageHistoryButton("back"));
+    expect(resumeThread).toHaveBeenLastCalledWith(threadAID);
+    await clickPageHistoryTarget(container.querySelector(".sidebar-account-trigger"));
+    await clickPageHistoryTarget(document.querySelector('[data-settings-page="providers"]'));
+    await act(async () => { await import("./SettingsView"); });
+    await flushAsync();
+    expect(container.querySelector('[data-wuu-component="settings-page"]')?.getAttribute("data-wuu-page")).toBe("providers");
+    await act(async () => {
+      emitNotification("thread/resumed", { thread: threadA() });
+      pending.resolve({ thread: threadA() });
+    });
+    await flushAsync();
+    expect(container.querySelector('[data-wuu-component="settings-page"]')?.getAttribute("data-wuu-page")).toBe("providers");
+    await clickPageHistoryTarget(container.querySelector('[data-wuu-component="conversations-section"]'));
+    expect(activeThreadProbe()?.dataset.threadId).toBe(threadBID);
+    expect(mainComposerTextarea().value).toBe("B draft before pending replay");
+  });
+
+  it.each([false, true])("page history ignores a replay target deleted before its resume settles (newer navigation=%s)", async (newerNavigation) => {
+    const { threadsByID, resumeThread } = installWuuApi();
+    const third = { ...threadB(), id: "history-third", preview: "history third" };
+    threadsByID.set(third.id, third);
+    window.wuu.deleteThread = vi.fn().mockImplementation(async (id: string) => { threadsByID.delete(id); });
+    await renderPageHistoryApp();
+    await clickPageHistoryTarget(threadRowButton("session switch B"));
+    await act(async () => { setMainComposerPrompt("B draft while A is deleted"); });
+    const pending = deferred<{ thread: Thread }>();
+    resumeThread.mockImplementationOnce(() => pending.promise);
+    await clickPageHistoryTarget(pageHistoryButton("back"));
+    expect(resumeThread).toHaveBeenLastCalledWith(threadAID);
+    const newerResume = deferred<{ thread: Thread }>();
+    if (newerNavigation) {
+      resumeThread.mockImplementationOnce(() => newerResume.promise);
+      await clickPageHistoryTarget(threadRowButton(third.preview));
+      expect(resumeThread).toHaveBeenLastCalledWith(third.id);
+    }
+    await act(async () => {
+      threadRowButton("session switch A")!.closest(".thread-row")!.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }),
+      );
+    });
+    await clickPageHistoryTarget([...document.querySelectorAll<HTMLButtonElement>(".thread-row-context-menu-item")]
+      .find(button => button.textContent === translateCurrent("threadSidebar.delete")));
+    await clickPageHistoryTarget(document.querySelector('[role="dialog"] [data-confirm-action="confirm"]'));
+    expect(window.wuu.deleteThread).toHaveBeenCalledWith(threadAID);
+    expect(threadRowButton("session switch A")).toBeUndefined();
+    if (newerNavigation) {
+      await act(async () => {
+        emitNotification("thread/resumed", { thread: third });
+        newerResume.resolve({ thread: third });
+      });
+      await flushAsync();
+      expect(activeThreadProbe()?.dataset.threadId).toBe(third.id);
+      await act(async () => { setMainComposerPrompt("C draft after newer navigation"); });
+    }
+    await act(async () => {
+      emitNotification("thread/resumed", { thread: threadA() });
+      pending.resolve({ thread: threadA() });
+    });
+    await flushAsync();
+    expect(activeThreadProbe()?.dataset.threadId).toBe(newerNavigation ? third.id : threadBID);
+    expect(mainComposerTextarea().value).toBe(newerNavigation ? "C draft after newer navigation" : "B draft while A is deleted");
+    expect(mainComposerTextarea().disabled).toBe(false);
+    expect(pageHistoryButton("back").disabled).toBe(!newerNavigation);
+    expect(pageHistoryButton("forward").disabled).toBe(true);
+    if (newerNavigation) {
+      await clickPageHistoryTarget(pageHistoryButton("back"));
+      expect(activeThreadProbe()?.dataset.threadId).toBe(threadBID);
+      expect(mainComposerTextarea().value).toBe("B draft while A is deleted");
+      expect(pageHistoryButton("back").disabled).toBe(true);
+    }
+  });
+
+  it("page history restores each session draft and preserves a background stream", async () => {
+    const { threadsByID } = installWuuApi();
+    turnListFixture.renderTurns = true;
+    threadsByID.set(threadAID, runningThreadA());
+    await renderPageHistoryApp();
+    await act(async () => { setMainComposerPrompt("unsent history draft A"); });
+    await clickPageHistoryTarget(threadRowButton("session switch B"));
+    await act(async () => { setMainComposerPrompt("unsent history draft B"); });
+    await act(async () => {
+      emitNotification("item/agentMessage/delta", {
+        thread_id: threadAID,
+        turn_id: threadA().turns[0].id,
+        item_id: threadA().turns[0].items[1].id,
+        delta: " streamed while visiting B",
+      });
+    });
+    await flushAsync();
+    await clickPageHistoryTarget(pageHistoryButton("back"));
+    expect(activeThreadProbe()?.dataset.threadId).toBe(threadAID);
+    expect(mainComposerTextarea().value).toBe("unsent history draft A");
+    expect(activeThreadProbe()?.textContent).toContain("streamed while visiting B");
+    expect(activeThreadProbe()?.dataset.latestTurnStatus).toBe("in_progress");
+    await clickPageHistoryTarget(pageHistoryButton("forward"));
+    expect(activeThreadProbe()?.dataset.threadId).toBe(threadBID);
+    expect(mainComposerTextarea().value).toBe("unsent history draft B");
+    expect(activeThreadProbe()?.dataset.latestTurnStatus).toBe("completed");
+  });
+
+  it("page history replays settings subpages and returns to the same conversation draft", async () => {
+    installWuuApi();
+    window.wuu.listEngines = vi.fn().mockResolvedValue({ engines: [] });
+    window.wuu.getBuildInfo = vi.fn().mockResolvedValue({ desktop: { version: "test" } });
+    window.wuu.listMCPServers = vi.fn().mockResolvedValue({ servers: [] });
+    await renderPageHistoryApp();
+    await act(async () => { setMainComposerPrompt("draft before settings"); });
+    await clickPageHistoryTarget(container.querySelector(".sidebar-account-trigger"));
+    await clickPageHistoryTarget(document.querySelector('[data-settings-page="providers"]'));
+    await act(async () => { await import("./SettingsView"); });
+    await flushAsync();
+    const page = () => container.querySelector('[data-wuu-component="settings-page"]')?.getAttribute("data-wuu-page");
+    expect(page()).toBe("providers");
+    await clickPageHistoryTarget(container.querySelector('.settings-nav [data-wuu-page="appearance"]'));
+    expect(page()).toBe("appearance");
+    await clickPageHistoryTarget(pageHistoryButton("back"));
+    expect(page()).toBe("providers");
+    await clickPageHistoryTarget(pageHistoryButton("back"));
+    expect(activeThreadProbe()?.dataset.threadId).toBe(threadAID);
+    expect(mainComposerTextarea().value).toBe("draft before settings");
+    expect(pageHistoryButton("back").disabled).toBe(true);
+    await clickPageHistoryTarget(pageHistoryButton("forward"));
+    expect(page()).toBe("providers");
+    await clickPageHistoryTarget(pageHistoryButton("forward"));
+    expect(page()).toBe("appearance");
+    expect(pageHistoryButton("forward").disabled).toBe(true);
+  });
+
+  it.each(["delete", "archive"] as const)("page history skips a session closed by %s instead of resuming it", async (action) => {
+    const { threadsByID, resumeThread } = installWuuApi();
+    const third = { ...threadB(), id: "history-third", preview: "history third" };
+    threadsByID.set(third.id, third);
+    window.wuu.deleteThread = vi.fn().mockImplementation(async (id: string) => { threadsByID.delete(id); });
+    window.wuu.archiveThread = vi.fn().mockImplementation(async (id: string) => {
+      const thread = { ...threadsByID.get(id)!, archived: true };
+      threadsByID.set(id, thread);
+      return { thread };
+    });
+    await renderPageHistoryApp();
+    await clickPageHistoryTarget(threadRowButton("session switch B"));
+    await clickPageHistoryTarget(threadRowButton(third.preview));
+    const row = threadRowButton("session switch B")!.closest(".thread-row")!;
+    if (action === "delete") {
+      await act(async () => {
+        row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
+      });
+      await clickPageHistoryTarget([...document.querySelectorAll<HTMLButtonElement>(".thread-row-context-menu-item")]
+        .find(button => button.textContent === translateCurrent("threadSidebar.delete")));
+      await clickPageHistoryTarget(document.querySelector('[role="dialog"] [data-confirm-action="confirm"]'));
+      expect(window.wuu.deleteThread).toHaveBeenCalledWith(threadBID);
+    } else {
+      await clickPageHistoryTarget(row.querySelector(".thread-row-action.archive"));
+      expect(window.wuu.archiveThread).toHaveBeenCalledWith(threadBID, true);
+    }
+    expect(threadRowButton("session switch B")).toBeUndefined();
+    resumeThread.mockClear();
+    await clickPageHistoryTarget(pageHistoryButton("back"));
+    expect(activeThreadProbe()?.dataset.threadId).toBe(threadAID);
+    expect(pageHistoryButton("back").disabled).toBe(true);
+    expect(resumeThread).not.toHaveBeenCalledWith(threadBID);
+    await clickPageHistoryTarget(pageHistoryButton("forward"));
+    expect(activeThreadProbe()?.dataset.threadId).toBe(third.id);
+    expect(pageHistoryButton("forward").disabled).toBe(true);
   });
 
   it.each([false, true, "error"] as const)("waits for confirmed Git status before automatically opening workspace info (repository=%s)", async (isRepository) => {
@@ -1051,7 +1484,7 @@ describe("session tab switch latency", () => {
     expect(activeSessionTabLabel()).toContain(beta.title);
   });
 
-  it.each(["thread", "new-draft", "resume-error", "source-unavailable"])("restores the source runtime when abandoning a cross-workspace resume via %s", async navigation => {
+  it.each(["thread", "new-draft", "resume-error", "source-unavailable", "page history settings"])("restores the source runtime when abandoning a cross-workspace resume via %s", async navigation => {
     installWuuApi();
     const projects = ["alpha", "beta"].map(id => ({
       id, name: id, path: "/tmp/" + id, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
@@ -1074,7 +1507,9 @@ describe("session tab switch latency", () => {
     });
     window.wuu.initialize = vi.fn(async () => ({ ...initialized(), workspace_root: context.cwd }));
     window.wuu.listThreads = vi.fn(async cwd => ({ threads: [cwd === beta.cwd ? beta : alpha] }));
-    window.wuu.resumeThread = vi.fn(async id => id === beta.id ? pending.promise : { thread: alpha });
+    window.wuu.resumeThread = vi.fn(async id => id === beta.id
+      ? navigation === "page history settings" ? { thread: beta } : pending.promise
+      : { thread: alpha });
     await act(async () => { root = createRoot(container); root.render(<App />); });
     await flushAsync();
     act(() => { setMainComposerPrompt("Retained source draft"); });
@@ -1083,6 +1518,35 @@ describe("session tab switch latency", () => {
     await act(async () => { (projectRow("beta").querySelector(".project-row-name")!.closest("button") as HTMLButtonElement).click(); });
     await flushAsync();
     await act(async () => { threadRowButton("session switch B")!.click(); });
+    if (navigation === "page history settings") {
+      await flushAsync();
+      expect(activeThreadProbe()?.dataset.threadId).toBe(beta.id);
+      await act(async () => { setMainComposerPrompt("Retained beta history draft"); });
+      window.wuu.resumeThread = vi.fn(async id => id === alpha.id ? pending.promise : { thread: beta });
+      window.wuu.listEngines = vi.fn().mockResolvedValue({ engines: [] });
+      window.wuu.getBuildInfo = vi.fn().mockResolvedValue({ desktop: { version: "test" } });
+      window.wuu.listMCPServers = vi.fn().mockResolvedValue({ servers: [] });
+      await clickPageHistoryTarget(pageHistoryButton("back"));
+      expect(context.project_id).toBe("alpha");
+      expect(activeThreadProbe()?.dataset.threadId).toBe(beta.id);
+      await clickPageHistoryTarget(container.querySelector(".sidebar-account-trigger"));
+      await clickPageHistoryTarget(document.querySelector('[data-settings-page="providers"]'));
+      await act(async () => { await import("./SettingsView"); });
+      await flushAsync();
+      expect(container.querySelector('[data-wuu-component="settings-page"]')).not.toBeNull();
+      expect(context.project_id).toBe("beta");
+      await act(async () => {
+        emitNotification("thread/resumed", { thread: alpha }, alpha.cwd);
+        pending.resolve({ thread: alpha });
+      });
+      await flushAsync();
+      expect(context.project_id).toBe("beta");
+      await clickPageHistoryTarget(container.querySelector('[data-wuu-component="conversations-section"]'));
+      expect(activeThreadProbe()?.dataset.threadId).toBe(beta.id);
+      expect(mainComposerTextarea().value).toBe("Retained beta history draft");
+      expect(mainComposerTextarea().disabled).toBe(false);
+      return;
+    }
     expect(context.project_id).toBe("beta");
     expect(activeThreadProbe()?.dataset.threadId).toBe(alpha.id);
     if (navigation === "resume-error" || navigation === "source-unavailable") {

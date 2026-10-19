@@ -10,6 +10,7 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Added
 
+- Navigate window-local app page history across conversations, settings, workspace tools, and workbench destinations without changing website Back/Forward history.
 - Reclaim eligible website tabs after 30 minutes in the background, restoring their history and scroll position on selection while protecting edited, pinned, media, and other stateful pages.
 - Review local browser extension permissions before loading, manage installed snapshots with details and reload controls, and preserve the previous working copy when an update fails.
 
@@ -82,6 +83,10 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 - Restore pointer-following eyes on the browser start page without background animation work.
 - Avoid remeasuring covered conversation inputs during website window resizing, and refit retained drafts when their workspace becomes visible again.
 - Keep full-workspace websites attached to the native window edges during live resizing, including when the shell renderer is busy.
+- Keep explicit workbench sidebar collapse separate from hover previews, and remove the redundant settings breadcrumb root.
+- Reserve app-history controls in the existing content header so narrow Mac sidebars keep notification and search hit areas clear, including zoomed layouts, hover previews, and the expanded navigation ribbon.
+- Stabilize PDF fit-width layout when a non-overlay scrollbar would otherwise alternate between appearing and disappearing.
+
 - Keep the account menu above browser pages while preserving native website visibility on dismissal.
 
 - Show local, theme-aware Notion, Feishu, and ChatGPT marks for saved website shortcuts and browser tabs without requiring their optional integrations.

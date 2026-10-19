@@ -32,11 +32,6 @@
   visibility: hidden;
 }
 
-:root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon).sidebar-collapsed .titlebar,
-:root:has(.mac-window-controls) .app-shell.sidebar-collapsed .settings-embedded .settings-titlebar {
-  padding-left: calc(var(--space-2) * 2 + var(--workbench-control-size) + var(--control-toolbar-gap));
-}
-
 :root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon) .sidebar-brand {
   padding-bottom: 0;
   -webkit-app-region: drag;
@@ -696,6 +691,64 @@ html:not([data-app-background]) .navigation-ribbon-layout:has(.sidebar-ribbon) :
   left: var(--conversation-pane-inset);
 }
 
+/* App destinations share the existing window/header row. Browser Back/Forward
+   remains in its own address toolbar and never drives this window-local stack. */
+.shell-page-history-controls {
+  position: absolute;
+  top: calc((var(--window-titlebar-height) - var(--control-size-toolbar)) / 2);
+  left: var(--window-titlebar-leading-inset);
+  z-index: 151;
+  display: flex;
+  align-items: center;
+  gap: var(--control-toolbar-gap);
+  -webkit-app-region: drag;
+}
+.shell-page-history-controls .icon-button {
+  flex: 0 0 auto;
+  width: var(--control-size-toolbar);
+  height: var(--control-size-toolbar);
+  padding: 0;
+}
+.shell-page-history-controls[hidden] { display: none; }
+.navigation-ribbon-layout:has(.sidebar-ribbon) > .section-sidebar-toggle[hidden] { display: none; }
+.shell-page-history-controls button,
+.shell-page-history-controls button * { -webkit-app-region: no-drag; }
+.navigation-ribbon-layout:has(.sidebar-ribbon) > .shell-page-history-controls {
+  --control-size-toolbar: var(--workbench-control-size);
+  --control-icon-size: calc(var(--icon-size) / var(--desktop-page-zoom, 1));
+  left: calc(var(--window-titlebar-leading-inset) + var(--control-size-toolbar) + var(--control-toolbar-gap));
+}
+:root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon) {
+  --app-history-width: calc(var(--workbench-control-size) * 2 + var(--control-toolbar-gap));
+  --app-history-origin: var(--sidebar-width);
+  --app-history-inset: var(--control-toolbar-inset);
+  --app-history-end: calc(var(--app-history-origin) + var(--app-history-inset) + var(--app-history-width) + var(--control-toolbar-gap));
+}
+/* Only the toggle occupies the secondary sidebar header. History belongs to
+   the active content header, whose leading lane reserves the same dimensions. */
+:root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon).sidebar-collapsed {
+  --app-history-inset: calc(var(--space-2) * 2 + (var(--sidebar-content-icon-size) - var(--workbench-control-size)) / 2 + var(--workbench-control-size) + var(--control-toolbar-gap));
+}
+:root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon) > .shell-page-history-controls {
+  top: calc(var(--workbench-top) + (var(--canvas-titlebar-height) - var(--control-size-toolbar)) / 2);
+  left: calc(var(--app-history-origin) + var(--app-history-inset));
+}
+:root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon) .titlebar,
+:root:has(.mac-window-controls) .app-shell.navigation-ribbon-layout:has(.sidebar-ribbon) .settings-embedded .settings-titlebar {
+  padding-left: calc(var(--app-history-end) - var(--sidebar-width));
+}
+:root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon).right-panel-globalized .workspace-panel-tabbar {
+  padding-left: calc(var(--app-history-end) - var(--workspace-sheet-left));
+}
+/* Browser navigation stays beside the address field, separated from app
+   history by an extra gap in this existing row; the sidebar toggle is hidden. */
+:root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon)[data-web-workspace-open] {
+  --app-history-origin: var(--sidebar-ribbon-width);
+  --app-history-inset: var(--control-toolbar-inset);
+}
+:root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon) .web-workspace-toolbar {
+  padding-left: calc(var(--app-history-end) - var(--sidebar-ribbon-width) + var(--control-toolbar-gap));
+}
 /* The native surface owns browser reveal geometry. Closing shell chrome follows
    the same duration while the live native rail completes its exit. */
 .sidebar-ribbon[data-native-supported="true"][data-expanded="true"] { transition: none; }
