@@ -21,7 +21,7 @@ module.exports = async function acceptChrome(h, view) {
       return { x: r.x, y: r.y, width: r.width, height: r.height };
     }, fixtureTabs.animated.id);
     const b = win.getContentBounds();
-    const focusBeforeHover = wc.isFocused();
+    const focusBeforeHover = wc.isFocused(), boundsBeforeHover = view.getBounds();
     await nativeInput(['mousemove', String(Math.round(b.x + (anchor.x + anchor.width / 2) * zoom)), String(Math.round(b.y + (anchor.y + anchor.height / 2) * zoom))]);
     // Chromium's native tooltip has its own hover delay, outside renderer rAF.
     await delay(1300);
@@ -36,17 +36,26 @@ module.exports = async function acceptChrome(h, view) {
         native: true, text: await nativeHint.webContents.executeJavaScript('document.body.innerText') };
       const textBox = await nativeHint.webContents.executeJavaScript(`(()=>{const hint=document.getElementById('hint'),r=hint.getBoundingClientRect();return{height:r.height,viewport:innerHeight}})()`);
       assert.ok(textBox.height <= textBox.viewport + 1, 'The native hint includes every wrapped line');
-      assert.equal(wc.isFocused(), focusBeforeHover, 'A native hint does not take page focus');
+      if (!await evaluate(() => document.querySelector('.sidebar-ribbon')?.dataset.expanded === 'true')) assert.equal(wc.isFocused(), focusBeforeHover, 'A native hint does not take page focus');
     }
     const label = `${width}-${zoom}-${theme}`;
     fs.writeFileSync(path.join(output, `hover-windows-${label}.txt`), spawnSync('xwininfo', ['-root', '-tree'], { encoding: 'utf8' }).stdout || '');
     await capture('hover-' + label);
     const screen = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'x11grab', '-video_size', '1920x1200', '-i', process.env.DISPLAY, '-frames:v', '1', '-y', path.join(output, 'hover-screen-' + label + '.png')]);
     assert.equal(screen.status, 0, String(screen.stderr));
-    const sample = { width, height, zoom, theme, anchor, hint, visibleDuringHover: view.getVisible(), menu: [] };
+    const railExpanded = await evaluate(() => document.querySelector('.sidebar-ribbon')?.dataset.expanded === 'true');
+    let backdrop;
+    if (railExpanded) {
+      await until(() => evaluate(() => { const image = document.querySelector('.web-workspace-stage:not([hidden]) .web-workspace-backdrop'); return image?.complete && image.naturalWidth > 100; }), 'hover overlay has a decoded page backdrop');
+      backdrop = await evaluate(() => { const image = document.querySelector('.web-workspace-stage:not([hidden]) .web-workspace-backdrop'); return { width: image.naturalWidth, height: image.naturalHeight }; });
+      assert.deepEqual(view.getBounds(), boundsBeforeHover, 'Hover expansion does not change native page bounds');
+    }
+    const sample = { width, height, zoom, theme, anchor, hint, railExpanded, backdrop, visibleDuringHover: view.getVisible(), menu: [] };
     samples.push(sample);
     await nativeInput(['mousemove', String(b.x + width - 80), String(b.y + 40)]);
     await until(() => win.getChildWindows().every(window => !window.isVisible()), 'Leaving the ribbon dismisses the hint');
+    await until(() => view.getVisible(), 'Leaving the ribbon restores the same live page');
+    assert.deepEqual(view.getBounds(), boundsBeforeHover, 'Rail collapse keeps native page bounds unchanged');
     for (let cycle = 0; cycle < 3; cycle++) {
       await wc.executeJavaScript(`scrollTo(0,${300 + cycle * 180});document.documentElement.style.background='${['#dc5572', '#45a688', '#6766c1'][cycle]}';void 0;`);
       const before = await wc.executeJavaScript('({ticks:window.ticks,scroll:scrollY})');
@@ -97,7 +106,8 @@ module.exports = async function acceptChrome(h, view) {
   for (const navigation of report.linkNavigation) assert.ok(navigation.visible && !navigation.events.some(event => !event.visible), 'Following a link must not hide the native website');
   fs.writeFileSync(path.join(output, 'browser-chrome.json'), JSON.stringify(samples, null, 2));
   for (const sample of samples) {
-    assert.ok(sample.visibleDuringHover, 'Hover must not hide the live website');
+    assert.equal(sample.visibleDuringHover, !sample.railExpanded, 'Only the intentional expanded rail occludes the native website');
+    if (sample.railExpanded) assert.ok(sample.backdrop.width > 100 && sample.backdrop.height > 100, 'Expanded rail retains native page pixels beneath it');
     assert.ok(sample.hint, 'Hover produces a visible hint');
     assert.ok(Math.abs(sample.hint.y - sample.anchor.y) < sample.anchor.height + sample.hint.height + 12, 'A ribbon hint stays beside its trigger instead of moving to the toolbar');
     for (const menu of sample.menu) {

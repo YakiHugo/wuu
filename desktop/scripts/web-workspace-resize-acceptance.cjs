@@ -70,7 +70,17 @@ module.exports = async function accept(h) {
         }, fixtureTabs[kind].id);
         const outer = win.getContentBounds();
         await nativeInput(['mousemove', String(Math.round(outer.x + point.x * zoom)), String(Math.round(outer.y + point.y * zoom)), 'click', '1']);
-        await until(async () => await evaluate(id => document.querySelector(`[data-ribbon-id="${id}"]`)?.getAttribute('aria-current') === 'page', fixtureTabs[kind].id) && target.getVisible(), 'ribbon switch selects ' + kind);
+        await until(() => evaluate(id => document.querySelector(`[data-ribbon-id="${id}"]`)?.getAttribute('aria-current') === 'page', fixtureTabs[kind].id), 'ribbon switch selects ' + kind);
+        switching.railExpanded = await evaluate(() => document.querySelector('.sidebar-ribbon')?.dataset.expanded === 'true');
+        if (switching.railExpanded) {
+          await until(() => evaluate(() => { const image = document.querySelector('.web-workspace-stage:not([hidden]) .web-workspace-backdrop'); return image?.complete && image.naturalWidth > 100; }), 'expanded rail preserves a decoded page backdrop');
+          switching.hoverBounds = target.getBounds();
+          assert.equal(target.getVisible(), false, 'Expanded rail occludes the native child beneath its page snapshot');
+        }
+        switching.leftRailAt = performance.now();
+        await nativeInput(['mousemove', String(Math.round(outer.x + width - 40)), String(Math.round(outer.y + 90 * zoom))]);
+        await until(() => target.getVisible(), 'leaving the rail restores selected ' + kind);
+        if (switching.hoverBounds) assert.deepEqual(target.getBounds(), switching.hoverBounds, 'Rail collapse does not resize the page');
         await settle();
         switching.targetVisibility = switching.events.filter(event => event.kind === kind).map(event => event.visible);
         switching.contentsID = target.webContents.id;
@@ -91,7 +101,8 @@ module.exports = async function accept(h) {
     await settle();
   }
   for (const sample of switches) {
-    assert.ok(!sample.targetVisibility.includes(false), `Selected ${sample.kind} must stay visible through chrome updates: ${JSON.stringify(sample.targetVisibility)}`);
+    const settled = sample.events.filter(event => event.kind === sample.kind && (!sample.railExpanded || event.at >= sample.leftRailAt));
+    assert.ok(!settled.some(event => !event.visible), `Selected ${sample.kind} stays visible after intentional rail occlusion ends: ${JSON.stringify(settled)}`);
   }
   checks.push({ name: 'warm-ribbon-switch-keeps-selected-page-visible', switches: switches.length });
   if (process.env.WUU_RESIZE_SWITCH_ONLY === '1') return;
