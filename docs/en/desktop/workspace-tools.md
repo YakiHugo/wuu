@@ -117,7 +117,7 @@ The shortcut starts disabled, and no background history or audio is recorded. Ad
 
 ## Browser
 
-In the experimental website tabs in the left ribbon, ordinary links navigate the current tab. A website can request a new tab or a popup itself. Command-click on macOS, Ctrl-click on other platforms, middle-click, and **Open Link in New Tab** keep the current page selected while opening a background tab. Add Shift to Command/Ctrl-click or middle-click to select the new tab; Shift-click opens a separate website window. These website gestures are separate from the message-link behavior below.
+In the experimental website tabs in the left ribbon, ordinary links navigate the current tab. A website can request a new tab or a popup itself. Command-click on macOS, Ctrl-click on other platforms, middle-click, and **Open Link in New Tab** keep the current page selected while opening a background tab. Add Shift to Command/Ctrl-click or middle-click to select the new tab; Shift-click opens a separate website window that survives navigation or closure of the source tab. Closing the main Wuu window closes its separate website windows. These website gestures are separate from the message-link behavior below.
 
 Open **Browser** or enter `/browser` to view a page in the workspace panel beside the conversation. That panel and the page the agent is using are the same tab: the address bar, back, forward, and reload all drive it. Clicking a web link in a message, a turn source capsule, or a compact browser activity row also opens or focuses that panel and navigates to the page. Hold Command (Ctrl on Windows) or middle-click to open it in the system browser instead. If you are already using another workspace tool, the page still navigates in that tab and does not steal the panel.
 
@@ -138,6 +138,14 @@ WUU_BROWSER_PROXY=http://proxy.example:7897 npm run dev --prefix desktop
 ```
 
 Use the address and port of your own proxy. This setting does not configure model API or app-server traffic. If browser requests fail after enabling it, check the proxy and restart Wuu with the corrected setting.
+
+### Local browser extensions
+
+Open **Settings → Browser → Browser extensions → Load unpacked** and choose a self-contained folder with `manifest.json`. Before any extension code runs, Wuu shows its API permissions, website and content-script matches, optional declarations, and known compatibility limits. Cancel is the default. Only approve extensions you trust: matching pages in the shared browser profile include pages opened by you and the Agent. File URL access stays disabled.
+
+Wuu keeps an installed copy and restores enabled extensions on restart. Expand a row for its version, ID, source, status and permissions. Disable or remove an extension to unload it; reload open pages to remove scripts that already ran. Removing the entry leaves its source folder and browser data intact. To apply a local update, enable the extension and choose **Reload**. New required or optional permissions need another review, and a failed load restores the previous working copy. Wuu does not download updates.
+
+These browser extensions are separate from Wuu TypeScript plugins. [Electron supports a subset of Chrome's extension API](https://www.electronjs.org/docs/latest/api/extensions), so loading successfully does not establish full compatibility. Chrome Web Store/CRX installation, toolbar actions, action popups and options-page integration are not provided. Manifest V3 background service workers may not work. Legacy direct-folder installs need review before migrating to an installed copy; keyless extensions receive a new ID, and old data is retained without automatic migration.
 
 ## Live activity preview
 

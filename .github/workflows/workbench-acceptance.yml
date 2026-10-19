@@ -9,6 +9,8 @@ on:
       - 'desktop/scripts/web-workspace-acceptance.cjs'
       - 'desktop/scripts/browser-media-acceptance.cjs'
       - 'desktop/scripts/browser-task-ownership-e2e*'
+      - 'desktop/scripts/browser-pip-e2e*'
+      - 'desktop/scripts/context-chat-capsule-e2e*'
       - 'internal/**'
       - 'scripts/plugin-credentials-e2e/**'
       - 'plugins/feishu-workspace/**'
@@ -59,6 +61,8 @@ jobs:
           node --check desktop/scripts/workbench-acceptance-e2e.cjs
           node --check desktop/scripts/web-workspace-acceptance.cjs
           node --check desktop/scripts/browser-media-acceptance.cjs
+          node --check desktop/scripts/browser-pip-e2e.cjs
+          node --check desktop/scripts/context-chat-capsule-e2e.cjs
           make test-policy-check
       - name: Build shipping app serially
         id: build
@@ -132,6 +136,26 @@ jobs:
           mkdir -p "$WUU_BROWSER_OWNERSHIP_OUTPUT"
           set -o pipefail
           timeout --signal=TERM --kill-after=10s 6m xvfb-run --auto-servernum --server-args='-screen 0 1600x1000x24 -nolisten tcp' node desktop/scripts/browser-task-ownership-e2e.cjs 2>&1 | tee "$WUU_BROWSER_OWNERSHIP_OUTPUT/run.log"
+      - name: Verify synthetic browser extension lifecycle
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 3
+        env:
+          WUU_BROWSER_EXTENSION_E2E_ONLY: '1'
+          WUU_BROWSER_PIP_E2E_ARTIFACTS: ${{ runner.temp }}/wuu-workbench-acceptance/browser-extensions
+        working-directory: desktop
+        run: |
+          mkdir -p "$WUU_BROWSER_PIP_E2E_ARTIFACTS"
+          set -o pipefail
+          timeout --signal=TERM --kill-after=10s 2m xvfb-run --auto-servernum --server-args='-screen 0 1600x1000x24 -nolisten tcp' node scripts/browser-pip-e2e.cjs 2>&1 | tee "$WUU_BROWSER_PIP_E2E_ARTIFACTS/run.log"
+      - name: Verify context capsule with authored loopback provider
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 3
+        env:
+          WUU_CAPSULE_OUTPUT: ${{ runner.temp }}/wuu-workbench-acceptance/context-capsule
+        run: |
+          mkdir -p "$WUU_CAPSULE_OUTPUT"
+          set -o pipefail
+          timeout --signal=TERM --kill-after=10s 160s xvfb-run --auto-servernum --server-args='-screen 0 1600x1000x24 -nolisten tcp' desktop/node_modules/.bin/electron --no-sandbox desktop/scripts/context-chat-capsule-e2e.mjs 2>&1 | tee "$WUU_CAPSULE_OUTPUT/run.log"
       - name: Verify synthetic credential host boundary
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         timeout-minutes: 3

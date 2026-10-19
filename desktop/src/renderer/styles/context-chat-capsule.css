@@ -1,0 +1,20 @@
+.context-chat-capsule-anchor { position: fixed; right: 16px; bottom: 16px; z-index: 120; }
+.context-chat-capsule { box-sizing: border-box; width: 100%; color: var(--ink); font-family: inherit; font-size: var(--font-ui); border-radius: 26px; background: var(--surface-1); border: 1px solid var(--hairline-strong); box-shadow: 0 3px 14px #00000015; overflow: hidden; -webkit-app-region: no-drag; }
+.context-chat-capsule-row { display: flex; align-items: center; height: 46px; gap: 6px; margin: 0; padding-right: 4px; }
+.context-chat-capsule button { cursor: pointer; font: inherit; color: inherit; }
+.context-chat-capsule-ball { flex: 0 0 46px; width: 46px; height: 46px; border: 0; border-radius: 50%; background: transparent; padding: 0; }
+.context-chat-capsule-ball span { display: inline-block; font-size: 19px; font-weight: 600; }
+.context-chat-capsule input { min-width: 0; flex: 1; padding: 6px 0; border: 0; outline: 0; background: transparent; color: inherit; font: inherit; }
+.context-chat-capsule input::placeholder { color: var(--ink-soft); }
+.context-chat-capsule-send { flex: 0 0 34px; height: 34px; border: 0; border-radius: 50%; background: var(--surface-3); font-size: 23px !important; line-height: 1; }
+.context-chat-capsule-send:disabled { cursor: default; opacity: .45; }
+.context-chat-capsule button:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+.context-chat-capsule:focus-within { border-color: var(--accent); }
+.context-chat-capsule-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; box-sizing: border-box; height: 32px; padding: 0 12px 4px 16px; font-size: .85em; }
+.context-chat-capsule-status > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-soft); }
+.context-chat-capsule-status button { border: 0; background: transparent; white-space: nowrap; padding: 3px 0; }
+.context-chat-capsule-busy { display: inline-block; width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: capsule-spin 1s linear infinite; }
+@keyframes capsule-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .context-chat-capsule-busy { animation: none; } }
+
+.context-chat-capsule:not(.expanded) .context-chat-capsule-row { padding-right: 0; gap: 0; }

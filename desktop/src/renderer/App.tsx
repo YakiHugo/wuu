@@ -268,6 +268,8 @@ import {
 import { DesktopWorkbench } from "./plugins";
 import { usePrimaryPluginViewCover } from "./PrimaryPluginViewCover";
 import { WebWorkspacePanel } from "./WebWorkspace";
+import { ContextChatCapsule } from "./ContextChatCapsule";
+import { formatPageContext, type PageContextSnapshot } from "../shared/pageContext";
 import type { RibbonWebsite } from "./NavigationRibbonPreferences";
 import { useRibbonBrowserTabs } from "./RibbonBrowserState";
 import { WEB_WORKSPACE_RIBBON_ID, WEB_WORKSPACE_TAB_LIMIT, type WebWorkspaceApi } from "../shared/webWorkspace";
@@ -4640,6 +4642,50 @@ export function App(): JSX.Element {
     return sendComposerMessage(message, thread, appStateRef.current.activePane);
   }
 
+  async function submitContextChat(text: string, page: PageContextSnapshot, context: RuntimeContext, sessionId?: string): Promise<{ sessionId: string; sent: boolean }> {
+    const current = appStateRef.current;
+    if (!current.initialized || submissionTargetPending || !sameRuntimeContext(context, current.activeContext)) {
+      throw new Error("The workspace changed. Return to the source workspace and send again.");
+    }
+    const reference = formatPageContext(page);
+    const message = createComposerMessage(text + reference, [], [], [
+      { type: "text", text }, { type: "pasted_text", text: reference, title: page.title || "Current page" },
+    ])!;
+    let thread = sessionId ? [current.thread, current.secondaryThread, ...current.threads].find(value => value?.id === sessionId) : undefined;
+    if (sessionId && (!thread || thread.read_only || thread.archived)) throw new Error("This conversation is no longer available. Open Chat to continue it.");
+    if (!thread) {
+      const selected = activeThreadForState(current);
+      const engine = selected?.engine_id || draftEngine || engineInventory?.settings?.default_engine || "wuu";
+      if (engineSelectionPending) throw new Error("The selected agent is still loading. Try again shortly.");
+      if (engine === "wuu" && !hasReadyProvider(current.initialized.providers)) {
+        showNoModelConfiguredToast();
+        throw new Error("Configure a model before sending.");
+      }
+      const runtime = selected ? { model: selected.model, effort: selected.model_effort ?? selected.model_variant ?? "", speed: selected.speed, model_options: selected.model_options } : draftEngineRuntime;
+      const permissionMode = (selected?.permission_mode || draftPermissionMode || current.initialized.permissions?.mode || "standard") as PermissionMode;
+      // A background source chat must never adopt the active draft, even when
+      // the core's thread/started notification arrives before this response.
+      const preserve = (state: AppState): AppState => ({ ...state, allowThreadAutoActivation: false });
+      appStateRef.current = preserve(appStateRef.current);
+      setState(preserve);
+      thread = requireThread(await window.wuu.startThread({ engine,
+        ...newThreadRuntimeParams(engine, current.initialized, runtime, permissionMode),
+        ...(selected && engine === "wuu" ? { provider: selected.model_provider, model: selected.model, effort: selected.model_variant || selected.model_effort,
+          speed: selected.speed, permission_mode: permissionMode, approve_for_me: selected.approve_for_me } : {}),
+      }, context), "thread/start did not return a thread");
+      const created = thread;
+      const adopt = (state: AppState): AppState => ({ ...state, threads: upsertThread(state.threads, created) });
+      appStateRef.current = adopt(appStateRef.current);
+      setState(adopt);
+    }
+    const admission = turnAdmissionsRef.current.get(thread.id);
+    const busy = isThreadRunning(thread) && !activeTurnIsAnswerReady(thread);
+    const sent = admission || busy || queueLanesRef.current.has(thread.id)
+      ? await queueComposerMessage(message, thread, admission)
+      : await sendComposerMessage(message, thread, current.activePane);
+    return { sessionId: thread.id, sent };
+  }
+
   async function submitFileSelectionEdit(part: FileSelectionPart): Promise<boolean> {
     const current = appStateRef.current;
     const splitPane = splitConversation && !workspaceToolsCoverConversation ? current.activePane : undefined;
@@ -5454,8 +5500,19 @@ export function App(): JSX.Element {
     }
   });
 
+  const contextCapsule = !poppedOutMode && onboardingComplete && state.initialized && state.activeContext
+    ? (
+    <ContextChatCapsule context={state.activeContext} visible={!environmentDialog && !pendingFork && !conversationSearch.open}
+      source={showingWebsite && activeWebsite && !settingsOpen && !accountOpen
+        ? { kind: "website", id: WEB_WORKSPACE_RIBBON_ID, tabId: activeWebsite.id, title: activeWebsite.title || activeWebsite.url }
+        : { kind: "app", id: `wuu:${accountOpen ? "account" : settingsOpen ? "settings" : showingPrimaryPluginView ? "plugin" : nativeSection}`,
+            title: `Wuu · ${accountOpen ? "Account" : settingsOpen ? "Settings" : showingPrimaryPluginView ? "Plugin" : nativeSection}` }}
+      onSubmit={submitContextChat}
+      onOpen={sessionId => { setAccountOpen(false); revealConversationFromFocusedWorkspace(); void activateThread(sessionId); }} />
+  ) : null;
+
   if (ENABLE_ACCOUNT && accountOpen && window.wuu?.remoteAccount) {
-    return <AccountScreen driver={window.wuu.remoteAccount} onBack={() => setAccountOpen(false)} />;
+    return <><AccountScreen driver={window.wuu.remoteAccount} onBack={() => setAccountOpen(false)} />{contextCapsule}</>;
   }
 
 
@@ -6287,6 +6344,7 @@ export function App(): JSX.Element {
           },
         }}
       />
+      {contextCapsule}
       {/* macOS applies app regions in DOM order, so a later drag titlebar would
         * cover this no-drag control. Keep it as the shell's last child. */}
       {!poppedOutMode ? (
