@@ -162,6 +162,7 @@ html[data-app-background] .app-shell.navigation-ribbon-layout:has(.sidebar-ribbo
 }
 
 .sidebar-ribbon {
+  --sidebar-ribbon-icon-size: var(--icon-size-xl);
   position: absolute;
   inset: 0 auto 0 0;
   z-index: 126;
@@ -212,9 +213,9 @@ html[data-app-background] .app-shell.navigation-ribbon-layout:has(.sidebar-ribbo
   color: var(--ink-tertiary);
 }
 
-.sidebar-ribbon-button > :is(svg, .plugin-icon-asset, .plugin-icon-themed) {
-  width: var(--icon-size, 18px);
-  height: var(--icon-size, 18px);
+.sidebar-ribbon .sidebar-ribbon-button > :is(svg, .plugin-icon-asset, .plugin-icon-themed) {
+  width: var(--sidebar-ribbon-icon-size);
+  height: var(--sidebar-ribbon-icon-size);
 }
 
 .sidebar-ribbon-button:hover,
@@ -256,9 +257,9 @@ html[data-app-background] .app-shell.navigation-ribbon-layout:has(.sidebar-ribbo
 }
 
 .sidebar-account-compact .sidebar-account-avatar {
-  width: var(--icon-size, 18px);
-  height: var(--icon-size, 18px);
-  flex-basis: var(--icon-size, 18px);
+  width: var(--sidebar-ribbon-icon-size);
+  height: var(--sidebar-ribbon-icon-size);
+  flex-basis: var(--sidebar-ribbon-icon-size);
 }
 
 .sidebar-account-compact .sidebar-account-menu {
