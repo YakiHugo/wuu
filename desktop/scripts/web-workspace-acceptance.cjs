@@ -6,7 +6,7 @@ const path = require('node:path');
 const http = require('node:http');
 const { spawnSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
-const { BrowserWindow, dialog, nativeImage, session, webContents } = require('electron');
+const { app, BrowserWindow, dialog, nativeImage, session, webContents } = require('electron');
 const { prepareMediaFixture, serveMediaFixture, runBrowserMediaAcceptance } = require('./browser-media-acceptance.cjs');
 
 async function createWebsiteFixture(home) {
@@ -218,6 +218,97 @@ async function runWebsiteAcceptance(h, fixture) {
     }
   });
   let alphaID, savedOrder;
+
+  await testNative('bundled Notion ribbon resolves its setting and creates the native website', async () => {
+    const diagnostic = report.notionPlugin = {
+      entry: 'notion-workspace:website', requestedURL: 'https://www.notion.so/',
+      externalAccount: false, samples: [], events: [], networkStatus: 'pending',
+    };
+    const created = [];
+    const observe = (_event, wc) => {
+      if (wc === win.webContents) return;
+      created.push(wc);
+      const record = (event, detail = {}) => {
+        diagnostic.events.push({ atMs: Date.now() - started, id: wc.id, event, ...detail }); save();
+      };
+      record('created');
+      for (const event of ['did-start-loading', 'did-stop-loading', 'dom-ready', 'did-finish-load']) {
+        wc.on(event, () => record(event, { url: wc.getURL(), loading: wc.isLoading() }));
+      }
+      wc.on('did-start-navigation', (_event, url, inPlace, mainFrame) => {
+        if (mainFrame) record('did-start-navigation', { url, inPlace });
+      });
+      wc.on('did-redirect-navigation', (_event, url, inPlace, mainFrame) => {
+        if (mainFrame) record('did-redirect-navigation', { url, inPlace });
+      });
+      wc.on('did-navigate', (_event, url, statusCode, statusText) => record('did-navigate', { url, statusCode, statusText }));
+      wc.on('did-fail-load', (_event, code, description, url, mainFrame) => {
+        if (mainFrame) record('did-fail-load', { code, description, url });
+      });
+      wc.on('console-message', event => {
+        if (event.level === 'error' && diagnostic.events.filter(item => item.event === 'console-error').length < 20) {
+          record('console-error', { message: event.message.slice(0, 1800), source: event.sourceId, line: event.lineNumber });
+        }
+      });
+      wc.on('render-process-gone', (_event, detail) => record('render-process-gone', detail));
+      wc.on('destroyed', () => record('destroyed'));
+    };
+    app.on('web-contents-created', observe);
+    const pluginRow = '.plugin-row[data-plugin="notion-workspace"]';
+    try {
+      await click(plugins, 'notion-open-extension-inventory');
+      await click(pick('.sidebar-section-item', 'Plugins'), 'notion-plugin-list');
+      await waitFor(selector => document.querySelector(selector), pluginRow);
+      await click(`${pluginRow} [role="switch"]`, 'enable-bundled-notion');
+      await waitFor(() => document.querySelector('.sidebar-ribbon-main button[aria-label="Notion"]'), undefined, 'bundled Notion ribbon activation', 20000);
+      const selectedAt = Date.now();
+      await click(ribbon('Notion'), 'actual-bundled-notion-ribbon');
+      for (const elapsed of [0, 3000, 10000, 20000]) {
+        await delay(Math.max(0, selectedAt + elapsed - Date.now()));
+        const shell = await evaluate(() => {
+          const root = document.querySelector('.plugin-workbench-view[data-plugin-id="notion-workspace"]:not([hidden])');
+          return { mounted: Boolean(root), text: root?.innerText.slice(0, 1600) || '',
+            nativeHost: root?.querySelector('[data-wuu-component="web-workspace"]')?.getAttribute('data-website-id') || null,
+            alert: root?.querySelector('[role="alert"]')?.textContent || null };
+        });
+        const native = [];
+        for (const view of win.contentView.children) {
+          const wc = view.webContents;
+          if (!wc || wc.isDestroyed() || !created.includes(wc)) continue;
+          const state = { id: wc.id, url: wc.getURL(), visible: view.getVisible(), loading: wc.isLoading(), bounds: view.getBounds() };
+          if (!wc.isLoadingMainFrame() && /^https:\/\//.test(state.url)) {
+            state.document = await Promise.race([
+              wc.executeJavaScript('({title:document.title,ready:document.readyState,userAgent:navigator.userAgent,text:document.body?.innerText.slice(0,1800)||""})').catch(error => ({ error: String(error) })),
+              delay(1500).then(() => ({ unavailable: 'document observation timed out' })),
+            ]);
+          }
+          native.push(state);
+        }
+        diagnostic.samples.push({ elapsedMs: Date.now() - selectedAt, shell, native });
+        save(); await capture(`notion-plugin-${elapsed}ms`);
+      }
+      const last = diagnostic.samples.at(-1);
+      diagnostic.networkStatus = last.native.some(page => !page.loading && page.document?.text)
+        ? 'document-rendered' : diagnostic.events.some(event => event.event === 'did-fail-load') ? 'navigation-failed' : 'unsettled-after-20s';
+      diagnostic.createdContents = created.length;
+      save();
+      assert.ok(last.shell.nativeHost, `Bundled Notion must leave its plugin loading state: ${JSON.stringify(last.shell)}`);
+      assert.ok(diagnostic.events.some(event => event.event === 'did-start-navigation' && event.url === diagnostic.requestedURL), 'The actual plugin requests its default notion.so URL');
+      assert.ok(last.native.some(page => page.visible), 'The Notion plugin presents its native page, independent of external network availability');
+      assert.ok(created.length <= 2, `Plugin renders must not recreate native pages repeatedly: ${created.length}`);
+      return { requestedURL: diagnostic.requestedURL, networkStatus: diagnostic.networkStatus, createdContents: created.length, final: last };
+    } finally {
+      app.removeListener('web-contents-created', observe);
+      // Return the isolated profile to its original optional-plugin state so
+      // external activity cannot contaminate unrelated local fixture journeys.
+      await click(plugins, 'notion-diagnostic-return-to-inventory');
+      await click(pick('.sidebar-section-item', 'Plugins'), 'notion-diagnostic-plugin-list');
+      if (await evaluate(selector => document.querySelector(`${selector} [role="switch"]`)?.getAttribute('aria-checked') === 'true', pluginRow)) {
+        await click(`${pluginRow} [role="switch"]`, 'disable-diagnostic-notion');
+      }
+      await goConversations();
+    }
+  });
 
   await testNative('optional websites add safely and stay lazy until selected', async () => {
     assert.equal(await evaluate(() => document.querySelectorAll('[data-wuu-component="website-navigation-item"]').length), 0, 'No websites are added by default');
