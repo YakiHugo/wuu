@@ -594,7 +594,11 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
   private layoutGroup(group: WorkspaceGroup): void {
     for (const tab of group.tabs) {
       if (!tab.page) continue;
-      tab.page.bounds = tab.id === group.activeTabId ? group.bounds : null;
+      const bounds = tab.id === group.activeTabId ? group.bounds : null;
+      // Inactive pages have already been hidden. Resizing their owner must not
+      // wake them or disturb a view borrowed by an observation window.
+      if (!bounds && !tab.page.bounds) continue;
+      tab.page.bounds = bounds;
       tab.page.automation?.layout();
       this.layout(tab.page);
     }
@@ -605,18 +609,25 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     if (owner.isDestroyed() || page.contents.isDestroyed() || page.automation?.external) return;
     if (!bounds || owner.isMinimized() || !owner.isVisible()) {
       if (page.contents.isFocused()) owner.webContents.focus();
-      view.setVisible(false);
+      if (view.getVisible()) view.setVisible(false);
       return;
     }
-    page.contents.setZoomFactor(page.tab.zoomFactor);
+    // Renderer bounds and native resize events can report the same geometry.
+    // Chromium converts zoom through logarithmic levels, so compare with a
+    // tolerance instead of reapplying it for floating-point round-off.
+    if (Math.abs(page.contents.getZoomFactor() - page.tab.zoomFactor) > 1e-6) page.contents.setZoomFactor(page.tab.zoomFactor);
     const zoom = owner.webContents.getZoomFactor();
     const [width, height] = owner.getContentSize();
     const x = Math.max(0, Math.min(width, Math.round(bounds.x * zoom)));
     const y = Math.max(0, Math.min(height, Math.round(bounds.y * zoom)));
     const right = Math.max(x, Math.min(width, Math.round((bounds.x + bounds.width) * zoom)));
     const bottom = Math.max(y, Math.min(height, Math.round((bounds.y + bounds.height) * zoom)));
-    view.setBounds({ x, y, width: right - x, height: bottom - y });
-    view.setVisible(right > x && bottom > y);
+    const current = view.getBounds();
+    if (current.x !== x || current.y !== y || current.width !== right - x || current.height !== bottom - y) {
+      view.setBounds({ x, y, width: right - x, height: bottom - y });
+    }
+    const visible = right > x && bottom > y;
+    if (view.getVisible() !== visible) view.setVisible(visible);
   }
 
   private observeOwner(owner: BrowserWindow): void {

@@ -46,6 +46,8 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Show local, theme-aware Notion, Feishu, and ChatGPT marks for saved website shortcuts and browser tabs without requiring their optional integrations.
+
 - Match the DeepSeek Harness icon's visible size to peer agent icons in settings, runtime menus, and onboarding.
 - Allow background task and question notifications on Linux desktops with native notification support.
 - Show the local model service directory immediately in settings and onboarding,

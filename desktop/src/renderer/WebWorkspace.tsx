@@ -7,6 +7,7 @@ import { rawErrorMessage } from "./UserFacingErrors";
 import { showActionErrorToast } from "./Toast";
 import { WebWorkspaceDownloadsMenu } from "./WebWorkspaceDownloadsMenu";
 import { BrowserLibrary } from "./BrowserLibrary";
+import { WebsiteIcon } from "./WebsiteIcon";
 import { composerMenuWidth, FloatingMenuPortal, handleFloatingMenuKeyDown, menuOpeningKey, useFloatingMenuFocus } from "./ComposerFloatingMenu";
 import "./styles/web-workspace.css";
 
@@ -58,16 +59,21 @@ export function WebWorkspacePanel({
   const snapshotKey = `${site?.id ?? ""}/${current?.activeTabId ?? ""}/${currentURL}`;
   const snapshotKeyRef = useRef(snapshotKey);
   snapshotKeyRef.current = snapshotKey;
+  const captureInFlight = useRef<string | undefined>(undefined);
   const [backdrop, setBackdrop] = useState<{ key: string; image: string }>();
   const [occluded, setOccluded] = useState(false);
   const captureBackdrop = useCallback(async (): Promise<void> => {
     const id = site?.id;
     if (!api?.capture || !id || !active || !hasCurrent || error || blank) return;
     const key = snapshotKeyRef.current;
+    // Loading and an opening overlay can request the same expensive native readback.
+    if (captureInFlight.current === key) return;
+    captureInFlight.current = key;
     try {
       const image = await api.capture(id);
       if (image && snapshotKeyRef.current === key) setBackdrop({ key, image });
     } catch { /* A preview is optional; it never blocks page interaction. */ }
+    finally { if (captureInFlight.current === key) captureInFlight.current = undefined; }
   }, [api, site?.id, active, hasCurrent, error, blank]);
 
   useEffect(() => {
@@ -205,6 +211,7 @@ export function WebWorkspacePanel({
       return;
     }
     let disposed = false;
+    let wasVisible = false;
     const report = (bounds: HostRect | null): void => {
       void api.reportBounds(id, bounds).catch((cause: unknown) => {
         if (!disposed && currentSiteID.current === id) setFailure({ id, message: rawErrorMessage(cause) });
@@ -213,10 +220,11 @@ export function WebWorkspacePanel({
     const stop = observeWebWorkspaceBounds(host, (bounds) => {
       if (disposed) return;
       setOccluded(bounds === null);
-      if (bounds) { report(bounds); return; }
+      if (bounds) { wasVisible = true; report(bounds); return; }
       // Keep a still image under renderer menus instead of replacing the whole
       // site with empty canvas. Capture once per occlusion, never per frame.
-      void captureBackdrop();
+      if (wasVisible) void captureBackdrop();
+      wasVisible = false;
       report(null);
     });
     return () => {
@@ -227,27 +235,48 @@ export function WebWorkspacePanel({
   }, [api, site?.id, active, Boolean(current), current?.activeTabId, error, blank, captureBackdrop]);
 
   useEffect(() => {
-    if (!api || !site) return;
+    if (!api || !site || !active) return;
     const id = site.id;
     let last: boolean | undefined;
+    let frame = 0;
+    let candidates: HTMLElement[] = [];
+    let candidatesDirty = true;
     const report = (): void => {
+      if (frame) cancelAnimationFrame(frame);
+      frame = 0;
+      if (candidatesDirty) {
+        candidates = [...document.querySelectorAll<HTMLElement>(SHORTCUT_TARGETS)];
+        candidatesDirty = false;
+      }
       const panel = panelRef.current;
-      const target = focusedWebWorkspacePanel();
-      const modal = [...document.querySelectorAll(MODALS)].some((layer) => !layer.contains(panel) && visibleElementRect(layer));
-      const selected = Boolean(active && panel && visibleElementRect(panel) && target === panel && !modal);
+      const selected = Boolean(panel && focusedWebWorkspacePanel(candidates) === panel);
       if (last === selected) return;
       last = selected;
       void api.setShortcutTarget(id, selected).catch(() => undefined);
     };
-    const mutation = new MutationObserver(report);
+    // Streaming text and hover styles do not change which page owns shortcuts.
+    const schedule = (): void => { if (!frame) frame = requestAnimationFrame(report); };
+    const mutation = new MutationObserver((records) => {
+      if (panelRef.current && mutationAffectsSurface(records, panelRef.current, SHORTCUT_TARGETS, candidates)) {
+        candidatesDirty ||= records.some((record) => record.type === "childList" || record.attributeName !== "style");
+        // Ownership must settle before a following native Cmd+W/Cmd+R.
+        report();
+      }
+    });
     mutation.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["hidden", "inert", "class", "style", "open", "aria-modal"] });
-    document.addEventListener("focusin", report);
-    window.addEventListener("resize", report);
+    const onFocus = (): void => {
+      // A newly mounted focus target can arrive before its mutation notification.
+      candidatesDirty = true;
+      report();
+    };
+    document.addEventListener("focusin", onFocus);
+    window.addEventListener("resize", schedule);
     report();
     return () => {
       mutation.disconnect();
-      document.removeEventListener("focusin", report);
-      window.removeEventListener("resize", report);
+      if (frame) cancelAnimationFrame(frame);
+      document.removeEventListener("focusin", onFocus);
+      window.removeEventListener("resize", schedule);
       void api.setShortcutTarget(id, false).catch(() => undefined);
     };
   }, [api, site?.id, active]);
@@ -338,7 +367,7 @@ export function WebWorkspacePanel({
                   tabListRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
                 } else if (event.key === "Delete") { event.preventDefault(); void update((browser, id) => browser.closeTab(id, tab.id)); }
               }}>
-                {tab.loading ? <RotateCw className="icon web-workspace-tab-loading" aria-hidden="true" /> : <Globe className="icon" aria-hidden="true" />}
+                {tab.loading ? <RotateCw className="icon web-workspace-tab-loading" aria-hidden="true" /> : <WebsiteIcon url={tab.url} className="icon" fallback={<Globe className="icon" aria-hidden="true" />} />}
                 <span>{title}</span>
               </button>
               <button type="button" className="icon-button web-workspace-tab-close" tabIndex={selected ? 0 : -1} aria-label={t("webWorkspace.closeTab", { title })} title={t("webWorkspace.closeTab", { title })} onClick={() => void update((browser, id) => browser.closeTab(id, tab.id))}><X className="icon" aria-hidden="true" /></button>
@@ -417,18 +446,19 @@ const MODALS = '[aria-modal="true"], dialog[open]';
 const FLOATING_LAYERS = '[role="dialog"], [role="menu"], [data-wuu-layer="popover"], .plugin-workbench-view-overlay';
 const NOTICES = '[data-wuu-layer="notice"]';
 const OCCLUDERS = `${MODALS}, ${FLOATING_LAYERS}, ${NOTICES}`;
+const SHORTCUT_TARGETS = `${MODALS}, .web-workspace-panel`;
 
-function focusedWebWorkspacePanel(): Element | undefined {
+function focusedWebWorkspacePanel(candidates = [...document.querySelectorAll<HTMLElement>(SHORTCUT_TARGETS)]): Element | undefined {
   const focused = document.activeElement;
-  const panels = [...document.querySelectorAll<HTMLElement>(".web-workspace-panel")].filter(visibleElementRect);
+  const panels = candidates.filter((element) => element.matches(".web-workspace-panel"));
   const owner = focused?.closest<HTMLElement>("[data-web-workspace-owner]")?.dataset.webWorkspaceOwner;
   const direct = focused?.closest(".web-workspace-panel");
-  const target = panels.find((panel) => panel === direct || panel.dataset.websiteId === owner)
-    ?? (focused === document.body || focused === document.documentElement || !focused ? panels[0]
-      : panels.find((panel) => panel.closest(".web-workspace-stage")));
+  const target = panels.find((panel) => (panel === direct || panel.dataset.websiteId === owner) && visibleElementRect(panel))
+    ?? (focused === document.body || focused === document.documentElement || !focused ? panels.find(visibleElementRect)
+      : panels.find((panel) => panel.closest(".web-workspace-stage") && visibleElementRect(panel)));
   // An auxiliary extension browser never owns shortcuts while the user is
   // typing in a conversation or another workbench surface.
-  if (!target || [...document.querySelectorAll(MODALS)].some((layer) => !layer.contains(target) && visibleElementRect(layer))) return;
+  if (!target || candidates.some((layer) => layer.matches(MODALS) && !layer.contains(target) && visibleElementRect(layer))) return;
   return target;
 }
 
@@ -441,11 +471,26 @@ function visibleElementRect(element: Element): DOMRect | null {
   return rect.width > 0 && rect.height > 0 ? rect : null;
 }
 
+function mutationAffectsSurface(records: MutationRecord[], host: Element | null, selector: string, tracked: Element[]): boolean {
+  return records.some((record) => {
+    if (record.type === "attributes") {
+      const target = record.target;
+      return target instanceof Element && (target.contains(host) || target.matches(selector)
+        || tracked.some((element) => target.contains(element)));
+    }
+    return tracked.some((element) => element.contains(record.target))
+      || [...record.addedNodes, ...record.removedNodes].some((node) => node instanceof Element
+      && (node.contains(host) || node.matches(selector) || Boolean(node.querySelector(selector))));
+  });
+}
+
 // Native views sit above every renderer layer. Hide the surface for modal UI
 // and overlapping menus, then restore the same page when the overlay closes.
 function observeWebWorkspaceBounds(host: HTMLElement, report: (bounds: HostRect | null) => void): () => void {
   let last = "";
   let frame = 0;
+  let overlays: Element[] = [];
+  let overlaysDirty = true;
   const movingLayers = new Set<Element>();
   const send = (): void => {
     if (frame) cancelAnimationFrame(frame);
@@ -455,7 +500,13 @@ function observeWebWorkspaceBounds(host: HTMLElement, report: (bounds: HostRect 
       x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height),
     } : null;
     if (bounds) {
-      for (const overlay of document.querySelectorAll(OCCLUDERS)) {
+      if (overlaysDirty) {
+        // Resizing changes geometry, not membership. Reuse the candidate list
+        // until an actual overlay/ancestor mutation invalidates it.
+        overlays = [...document.querySelectorAll(OCCLUDERS)];
+        overlaysDirty = false;
+      }
+      for (const overlay of overlays) {
         if (overlay.contains(host)) continue;
         const obstacle = visibleElementRect(overlay);
         if (!obstacle) continue;
@@ -491,18 +542,18 @@ function observeWebWorkspaceBounds(host: HTMLElement, report: (bounds: HostRect 
     movingLayers.delete(event.target);
     schedule();
   };
-  const resized = typeof ResizeObserver === "function" ? new ResizeObserver(send) : undefined;
+  const resized = typeof ResizeObserver === "function" ? new ResizeObserver(schedule) : undefined;
   resized?.observe(host);
   const mutation = new MutationObserver((records) => {
-    if (records.some((record) => {
-      if (record.type === "attributes") {
-        const target = record.target;
-        return target instanceof Element && (target.contains(host) || target.matches(OCCLUDERS));
-      }
-      return [...record.addedNodes, ...record.removedNodes].some((node) => node instanceof Element && (node.contains(host) || node.matches(OCCLUDERS) || node.querySelector(OCCLUDERS)));
-    })) send();
+    if (mutationAffectsSurface(records, null, OCCLUDERS, overlays)) {
+      overlaysDirty ||= records.some((record) => record.type === "childList" || record.attributeName !== "style");
+      // Hide native content before newly opened renderer overlays can paint.
+      send();
+    } else if (mutationAffectsSurface(records, host, OCCLUDERS, overlays)) {
+      schedule();
+    }
   });
-  mutation.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "style", "hidden", "inert", "open", "aria-modal", "data-settings-open", "data-web-workspace-open"] });
+  mutation.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "style", "hidden", "inert", "open", "role", "aria-modal", "data-wuu-layer", "data-settings-open", "data-web-workspace-open"] });
   window.addEventListener("resize", schedule);
   window.addEventListener("scroll", schedule, true);
   document.addEventListener("visibilitychange", send);

@@ -1,0 +1,167 @@
+name: Browser window performance (diagnostic)
+
+on:
+  push:
+    branches: [experiment/workbench]
+    paths:
+      - 'desktop/src/main/webWorkspaceHost.ts'
+      - 'desktop/src/main/browserHostWindows.ts'
+      - 'desktop/src/renderer/WebWorkspace.tsx'
+      - 'desktop/scripts/browser-window-perf-e2e.cjs'
+      - '.github/workflows/browser-window-performance.yml'
+  workflow_dispatch:
+    inputs:
+      baseline:
+        description: Exact pre-optimization source commit
+        default: 9df75fa36fa65af47c6b9a277933cda7b7a3485e
+        required: true
+
+permissions:
+  contents: read
+
+# Never cancel a functional acceptance/video job, or an A/B pair in progress.
+concurrency:
+  group: browser-window-performance-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  compare:
+    name: ${{ matrix.os }} native Electron comparison
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      BASELINE: ${{ inputs.baseline || '9df75fa36fa65af47c6b9a277933cda7b7a3485e' }}
+      GOFLAGS: '-p=2'
+      GOMAXPROCS: '2'
+      NODE_OPTIONS: --max-old-space-size=4096
+      VITE_ENABLE_ACCOUNT: 'false'
+      VITE_ENABLE_REMOTE_CONTROL: 'false'
+      WUU_RELEASE: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Prepare the exact baseline and evidence paths
+        run: |
+          [[ "$BASELINE" =~ ^[a-fA-F0-9]{40}$ ]] || { echo 'Baseline must be a full commit SHA'; exit 1; }
+          git worktree add --detach "$RUNNER_TEMP/wuu-browser-baseline" "$BASELINE"
+          output="$RUNNER_TEMP/wuu-browser-performance"
+          mkdir -p "$output"
+          echo "WUU_BROWSER_PERF_EVIDENCE=$output" >> "$GITHUB_ENV"
+          for variant in baseline candidate; do
+            tree="$GITHUB_WORKSPACE"
+            if [ "$variant" = baseline ]; then tree="$RUNNER_TEMP/wuu-browser-baseline"; fi
+            git -C "$tree" rev-parse HEAD > "$output/$variant-commit.txt"
+            git -C "$tree" rev-parse HEAD^{tree} > "$output/$variant-tree.txt"
+          done
+      - name: Install Linux window-manager input dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb openbox xdotool
+      - name: Build both shipping applications serially
+        id: build
+        timeout-minutes: 20
+        run: |
+          for tree in "$RUNNER_TEMP/wuu-browser-baseline" "$GITHUB_WORKSPACE"; do
+            npm ci --prefix "$tree/desktop"
+            node "$tree/desktop/node_modules/electron/install.js"
+            (
+              cd "$tree"
+              mkdir -p desktop/build/bin
+              go build -ldflags "-X github.com/blueberrycongee/wuu/internal/version.Version=v$(cat VERSION)" -o desktop/build/bin/wuu-core ./cmd/wuu
+              cd desktop
+              node_modules/.bin/electron-vite build
+            )
+          done
+          node --check desktop/scripts/browser-window-perf-e2e.cjs
+      - name: Measure short alternating A/B pairs without video or tracing
+        timeout-minutes: 6
+        run: |
+          cat > "$RUNNER_TEMP/run-browser-performance.sh" <<'BENCHMARK'
+          set -euo pipefail
+          if [ "$RUNNER_OS" = Linux ]; then
+            openbox --sm-disable > "$WUU_BROWSER_PERF_EVIDENCE/window-manager.log" 2>&1 &
+            wm=$!
+            trap 'kill "$wm" 2>/dev/null || true' EXIT
+            export WUU_BROWSER_PERF_POINTER=1
+            flags=(--no-sandbox --ozone-platform=x11)
+          else
+            flags=()
+          fi
+          repetition=0
+          for order in 'baseline candidate' 'candidate baseline'; do
+            repetition=$((repetition + 1))
+            for variant in $order; do
+              tree="$GITHUB_WORKSPACE"
+              if [ "$variant" = baseline ]; then tree="$RUNNER_TEMP/wuu-browser-baseline"; fi
+              output="$WUU_BROWSER_PERF_EVIDENCE/$variant-$repetition"
+              mkdir -p "$output"
+              # Both variants use the identical current harness and Electron binary.
+              WUU_BROWSER_PERF_ROOT="$tree" WUU_BROWSER_PERF_OUTPUT="$output" \
+                "$GITHUB_WORKSPACE/desktop/node_modules/.bin/electron" "${flags[@]}" \
+                "$GITHUB_WORKSPACE/desktop/scripts/browser-window-perf-e2e.cjs" 2>&1 | tee "$output/run.log"
+            done
+          done
+          BENCHMARK
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run --auto-servernum --server-args='-screen 0 1600x1000x24 -nolisten tcp' bash "$RUNNER_TEMP/run-browser-performance.sh"
+          else
+            bash "$RUNNER_TEMP/run-browser-performance.sh"
+          fi
+      - name: Summarize measurements and their limits
+        if: always()
+        run: |
+          node - <<'NODE'
+          const fs = require('node:fs'), path = require('node:path');
+          const root = process.env.WUU_BROWSER_PERF_EVIDENCE;
+          if (!root) process.exit(0);
+          const files = fs.readdirSync(root).filter(name => /^(baseline|candidate)-\d$/.test(name));
+          const reports = files.flatMap(name => {
+            const file = path.join(root, name, 'results.json');
+            return fs.existsSync(file) ? [{ name, ...JSON.parse(fs.readFileSync(file)) }] : [];
+          });
+          const fixed = value => value == null ? 'n/a' : value.toFixed(1);
+          const lines = ['## Native browser window performance', '', 'Same production main/preload/renderer, local animated + scrolling webpage, 6-second idle/move/resize phases, 1-second settling before each. Alternating A/B then B/A; no video/tracing during timing.', '', 'Diagnostic measurements, not a noisy-runner FPS pass gate. rAF intervals are renderer scheduling, not compositor presentation.', ''];
+          for (const report of reports) {
+            lines.push(`### ${report.name}: ${report.status}`, `Commit: ${report.commit}`, `Motion: ${report.environment.motion}`, '', '| Phase | Renderer | rAF p50 / p95 / max ms | >50 ms intervals | Long tasks | DOM rect reads | Query scans |', '|---|---|---|---|---|---|---|');
+            for (const phase of report.phases) {
+              for (const renderer of ['host', 'guest']) {
+                const data = phase[renderer], frame = data.frameIntervals;
+                lines.push(`| ${phase.name} | ${renderer} | ${fixed(frame.p50Ms)} / ${fixed(frame.p95Ms)} / ${fixed(frame.maxMs)} | ${frame.stallsOver50Ms} | ${data.longTasks.count} | ${data.rectReads} | ${data.queryScans} |`);
+              }
+            }
+            lines.push('', '| Phase | setBounds / setVisible / zoom / reparent | Bounds IPC | Input ack p95 / max ms | Input acknowledged / sent |', '|---|---|---|---|---|');
+            for (const phase of report.phases) lines.push(`| ${phase.name} | ${phase.nativeSetBounds} / ${phase.nativeSetVisible} / ${phase.nativeSetZoomFactor} / ${phase.nativeReparent} | ${phase.ipc['wuu:web-workspace-bounds'] || 0} | ${fixed(phase.inputDispatchToAck.p95Ms)} / ${fixed(phase.inputDispatchToAck.maxMs)} | ${phase.inputDispatchToAck.count} / ${phase.inputSent} |`);
+            lines.push('');
+          }
+          lines.push('Native Linux X11 pointer move/resize and macOS programmatic native-window motion are separate evidence. macOS physical pointer/live-resize-loop performance and user hardware GPU presentation remain unverified. Raw phase samples, bounds, IPC, input response and build hashes are attached.', '');
+          const summary = lines.join('\n');
+          fs.writeFileSync(path.join(root, 'summary.md'), summary);
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+          NODE
+      - name: Preserve raw samples and build identities
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-window-performance-${{ runner.os }}-${{ github.sha }}
+          path: ${{ runner.temp }}/wuu-browser-performance/
+          if-no-files-found: warn
+          retention-days: 14

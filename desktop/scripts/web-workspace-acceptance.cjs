@@ -131,6 +131,29 @@ async function runWebsiteAcceptance(h, fixture) {
     await until(() => views().every(view => !view.getVisible()), `${label}: all native surfaces hidden`);
     return Promise.all(views().map(async view => ({ url: view.webContents.getURL(), visible: view.getVisible(), visibility: await view.webContents.executeJavaScript('document.visibilityState') })));
   }
+  async function chromeGeometry() {
+    const geometry = await evaluate(() => {
+      const root = document.querySelector('.web-workspace-stage:not([hidden]) [data-wuu-component="web-workspace"]');
+      const rect = selector => {
+        const r = root.querySelector(selector).getBoundingClientRect();
+        return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, centerY: r.top + r.height / 2 };
+      };
+      return {
+        toolbar: rect('.web-workspace-toolbar'), navigation: rect('.workspace-browser-nav-cluster'),
+        address: rect('.web-workspace-address'), input: rect('.workspace-browser-url-input'), actions: rect('.web-workspace-actions'),
+        tab: rect('.web-workspace-tab[data-active]'), close: rect('.web-workspace-tab[data-active] .web-workspace-tab-close'), add: rect('.web-workspace-new-tab'),
+      };
+    });
+    const { toolbar, navigation, address: field, input, actions, tab, close, add } = geometry;
+    assert.ok(Math.max(navigation.centerY, field.centerY, actions.centerY) - Math.min(navigation.centerY, field.centerY, actions.centerY) <= 1,
+      `Browser navigation, address and actions stay on one centerline: ${JSON.stringify(geometry)}`);
+    assert.ok(navigation.left >= toolbar.left && navigation.right <= field.left && field.right <= actions.left && actions.right <= toolbar.right,
+      `Browser controls remain ordered and inside the toolbar: ${JSON.stringify(geometry)}`);
+    assert.ok(input.width >= 48, `The address remains editable at the supported narrow width: ${JSON.stringify(geometry)}`);
+    assert.ok(Math.abs(tab.centerY - close.centerY) <= 1 && Math.abs(close.centerY - add.centerY) <= 1,
+      `Tab close and add controls share the tab centerline: ${JSON.stringify(geometry)}`);
+    return geometry;
+  }
   async function assertMenuBackdrop(label) {
     await hidden(label);
     const selector = '.web-workspace-stage:not([hidden]) .web-workspace-backdrop';
@@ -306,7 +329,7 @@ async function runWebsiteAcceptance(h, fixture) {
   await testNative('native website bounds follow narrow large-type and zoomed workbench', async () => {
     const samples = [];
     try {
-      for (const [theme, size, width, zoom] of [['light', 20, 960, 1], ['dark', 20, 1440, 1.25]]) {
+      for (const [theme, size, width, zoom] of [['light', 15, 700, 1], ['light', 20, 440, 1], ['light', 20, 960, 1], ['dark', 20, 1440, 1.25]]) {
         await appearance(theme, size, width); win.webContents.setZoomFactor(zoom); await settle();
         await openSite('Fixture Alpha', '/alpha');
         const view = nativeView('/alpha');
@@ -317,8 +340,27 @@ async function runWebsiteAcceptance(h, fixture) {
         }, 'native view matches rendered host bounds');
         const bounds = view.getBounds(), [w, h] = win.getContentSize();
         assert.ok(bounds.x >= 0 && bounds.y >= 0 && bounds.x + bounds.width <= w && bounds.y + bounds.height <= h);
+        const chrome = await chromeGeometry();
+        if (width === 700) {
+          const before = win.getBounds(), outer = win.getContentBounds();
+          const drag = await evaluate(() => {
+            const stage = document.querySelector('.web-workspace-stage:not([hidden])');
+            const strip = stage.querySelector('.web-workspace-tabstrip').getBoundingClientRect();
+            const add = stage.querySelector('.web-workspace-new-tab').getBoundingClientRect();
+            return { x: (add.right + strip.right) / 2, y: strip.top + strip.height / 2 };
+          });
+          const x = Math.round(outer.x + drag.x * zoom), y = Math.round(outer.y + drag.y * zoom);
+          try {
+            await capture('before-tabstrip-drag');
+            xinput(['mousemove', String(x), String(y), 'mousedown', '1', 'sleep', '0.1', 'mousemove', String(x + 50), String(y + 40), 'sleep', '0.1', 'mouseup', '1']);
+            await until(() => Math.abs(win.getBounds().x - before.x) >= 20 || Math.abs(win.getBounds().y - before.y) >= 20,
+              'Dragging empty browser tab strip moves the actual native window');
+            report.actions.push({ label: 'native-browser-tabstrip-drag', input: 'native-x11', before, after: win.getBounds(), atMs: Date.now() - started });
+            await capture('after-tabstrip-drag');
+          } finally { xinput(['mouseup', '1']); win.setPosition(before.x, before.y); await settle(); }
+        }
         await capture(`bounds-${theme}-${width}-zoom-${zoom}`);
-        samples.push({ theme, size, width, zoom, bounds });
+        samples.push({ theme, size, width, zoom, bounds, chrome });
       }
     } finally { win.webContents.setZoomFactor(1); await appearance('light', 15, 1280); }
     return samples;
@@ -381,6 +423,13 @@ async function runWebsiteAcceptance(h, fixture) {
   await testNative('grouped tabs native shortcuts find and per-page zoom', async () => {
     let wc = await openSite('Fixture Alpha', '/alpha');
     const before = (await readSite()).tabs.length;
+    await click(`${liveStage} .web-workspace-new-tab`, 'click-add-tab');
+    await waitFor(({ stage, count }) => document.querySelectorAll(`${stage} [role=tab]`).length === count,
+      { stage: liveStage, count: before + 1 });
+    await click(`${liveStage} .web-workspace-tab[data-active] .web-workspace-tab-close`, 'click-close-tab');
+    await waitFor(({ stage, count }) => document.querySelectorAll(`${stage} [role=tab]`).length === count,
+      { stage: liveStage, count: before });
+    await until(() => nativeView('/alpha')?.getVisible(), 'Native tab buttons remain clickable inside the draggable strip');
     await pageClick(wc, '#draft', 'native-tab-shortcut-focus'); xinput(['key', '--clearmodifiers', 'ctrl+t']);
     await waitFor(({ stage, count }) => document.querySelectorAll(`${stage} [role=tab]`).length === count && document.activeElement?.matches('.workspace-browser-url-input'), { stage: liveStage, count: before + 1 });
     await hidden('new blank tab');
@@ -395,6 +444,7 @@ async function runWebsiteAcceptance(h, fixture) {
     const found = (await readSite()).findResult;
     await click(`${liveStage} button[aria-label="Next match"]`, 'next-native-find-match');
     await until(async () => (await readSite()).findResult?.activeMatchOrdinal !== found.activeMatchOrdinal, 'next find result selected');
+    await chromeGeometry();
     await capture('tabs-and-native-find');
     await click(`${liveStage} button[aria-label="Close find"]`, 'close-native-find');
     await click(`${liveStage} button[aria-label="Browser options"]`, 'browser-options');

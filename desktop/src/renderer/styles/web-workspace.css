@@ -39,17 +39,21 @@
   color: var(--ink);
 }
 
-.web-workspace-toolbar {
+/* The workspace-preview toolbar has two columns. Keep this three-part browser
+   row independent of stylesheet import order. */
+.workspace-browser-toolbar.web-workspace-toolbar {
   flex: none;
   grid-template-columns: auto minmax(0, 1fr) auto;
   -webkit-app-region: no-drag;
 }
 
-.web-workspace-address {
+.workspace-browser-url-form.web-workspace-address {
   justify-self: stretch;
   width: 100%;
   height: auto;
-  min-height: var(--control-size-toolbar);
+  min-height: max(var(--control-size-toolbar), calc(var(--font-ui) * 1.4 + var(--space-1) * 2));
+  padding-inline: var(--space-2);
+  background: var(--surface-2);
 }
 
 .web-workspace-address-error {
@@ -114,18 +118,28 @@
   flex: none;
   gap: var(--space-1);
   min-width: 0;
-  padding: var(--space-1) var(--control-toolbar-inset) 0;
+  padding: var(--space-1) var(--control-toolbar-inset);
   border-bottom: 1px solid var(--hairline-soft);
+  -webkit-app-region: drag;
+}
+
+.web-workspace-tabstrip :is(.web-workspace-tab, button),
+.web-workspace-toolbar :is(button, input) {
   -webkit-app-region: no-drag;
 }
 
 .web-workspace-tabs {
   display: flex;
-  align-items: stretch;
+  align-items: center;
   min-width: 0;
   overflow-x: auto;
-  scrollbar-width: thin;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
   gap: var(--space-1);
+}
+
+.web-workspace-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .web-workspace-tab {
@@ -134,7 +148,6 @@
   flex: 0 1 220px;
   min-width: 120px;
   max-width: 240px;
-  margin-bottom: var(--space-1);
   border-radius: var(--radius-sm);
   color: var(--ink-soft);
 }
@@ -179,10 +192,13 @@
   white-space: nowrap;
 }
 
-.web-workspace-tab-close {
+.web-workspace-tab .web-workspace-tab-close {
+  --control-icon-size: var(--control-icon-size-dismiss);
   flex: none;
   width: var(--control-size-toolbar);
   height: var(--control-size-toolbar);
+  margin-right: var(--space-1);
+  padding: 0;
   border-radius: var(--radius-sm);
   color: var(--ink-tertiary);
 }
@@ -194,14 +210,19 @@
 
 .web-workspace-new-tab {
   flex: none;
-  align-self: flex-start;
-  margin-bottom: var(--space-1);
+  align-self: center;
 }
 
 .web-workspace-actions {
   display: flex;
   align-items: center;
+  flex-wrap: nowrap;
   gap: 1px;
+}
+
+.web-workspace-actions > button,
+.web-workspace-toolbar .workspace-browser-nav-cluster > button {
+  flex: none;
 }
 
 .web-workspace-zoom-badge {

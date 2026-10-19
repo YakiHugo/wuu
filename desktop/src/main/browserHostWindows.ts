@@ -844,10 +844,14 @@ export class BrowserHostCoordinator {
         () => {
           const owned = this.tabs.get(key);
           if (!owned?.workspace) return;
-          if (workspace.visible()) this.restoreWorkspace(owned);
-          else if (owned.currentParent === workspace.parent.contentView) {
-            owned.inPanel = false;
-            owned.presented = false;
+          const visible = workspace.visible();
+          if (visible && owned.currentParent !== workspace.parent.contentView) this.restoreWorkspace(owned);
+          else if (owned.currentParent === workspace.parent.contentView && owned.inPanel !== visible) {
+            // Geometry belongs to the website host. Only an actual presentation
+            // transition needs activity/renderer updates; ordinary resize must
+            // not re-add the same native view and lay it out a second time.
+            owned.inPanel = visible;
+            owned.presented = visible;
             this.applyEntryActivity(owned);
             this.rendererSink?.presented();
           }
@@ -1318,13 +1322,21 @@ export class BrowserHostCoordinator {
   }
 
   private presentInPanel(entry: TabEntry, window: BrowserParentWindowHandle, rect: Rectangle): void {
-    this.reparent(entry, window);
-    entry.presented = true;
-    entry.inPanel = true;
-    this.resetPreviewScale(entry);
-    entry.view.setBounds(rect);
-    this.applyEntryActivity(entry);
-    this.rendererSink?.presented();
+    const alreadyPresented = entry.inPanel && entry.currentParent === window.contentView;
+    if (!alreadyPresented) {
+      this.reparent(entry, window);
+      entry.presented = true;
+      entry.inPanel = true;
+      this.resetPreviewScale(entry);
+    }
+    const current = entry.view.getBounds();
+    if (current.x !== rect.x || current.y !== rect.y || current.width !== rect.width || current.height !== rect.height) {
+      entry.view.setBounds(rect);
+    }
+    if (!alreadyPresented) {
+      this.applyEntryActivity(entry);
+      this.rendererSink?.presented();
+    }
   }
 
   private presentIfCached(entry: TabEntry): void {

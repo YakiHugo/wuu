@@ -19,6 +19,7 @@ import { ThreadContextMenu, type ThreadContextMenuItem } from "./ThreadContextMe
 import { showActionErrorToast, showToast } from "./Toast";
 import { Tooltip } from "./Tooltip";
 import { useI18n } from "./i18n";
+import { WebsiteIcon } from "./WebsiteIcon";
 
 export interface NavigationRibbonItem {
   id: string;
@@ -29,10 +30,6 @@ export interface NavigationRibbonItem {
   component?: string;
   pluginId?: string;
   onSelect: () => void;
-}
-
-function WebsiteIcon({ title }: { title: string }): JSX.Element {
-  return <span className="sidebar-ribbon-website-icon" aria-hidden="true">{Array.from(title)[0]?.toLocaleUpperCase() || <Globe />}</span>;
 }
 
 function RibbonDestination({ item, onMove, onMenu }: {
@@ -115,7 +112,7 @@ export function NavigationRibbon({ items, activeWebsiteId, onSelectWebsite, foot
     ...preferences.websites.map((website): NavigationRibbonItem => ({
       id: website.id,
       title: website.title,
-      icon: <WebsiteIcon title={website.title} />,
+      icon: <WebsiteIcon url={website.url} fallback={<span className="sidebar-ribbon-website-icon" aria-hidden="true">{Array.from(website.title)[0]?.toLocaleUpperCase() || <Globe />}</span>} />,
       active: activeWebsiteId === website.id,
       disabled: !onSelectWebsite,
       component: "website-navigation-item",

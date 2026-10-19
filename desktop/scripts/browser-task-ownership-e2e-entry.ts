@@ -3,7 +3,7 @@
 // case holds the result of an actual CDP geometry read to exercise its async
 // boundary without replacing the browser or fabricating a command response.
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,7 +27,11 @@ const fixture = process.env.WUU_BROWSER_OWNERSHIP_FIXTURE;
 assert(fixture, "Run the fixture through browser-task-ownership-e2e.cjs");
 const home = join(fixture, "home");
 const workdir = join(fixture, "project");
-for (const directory of [output, home, workdir]) mkdirSync(directory, { recursive: true });
+const actualWorkdir = join(fixture, "project-real");
+for (const directory of [output, home, actualWorkdir]) mkdirSync(directory, { recursive: true });
+// Exercise the real macOS /var ↔ /private/var identity failure on every OS.
+// The activity's canonical execution root must retain the desktop route key.
+symlinkSync(actualWorkdir, workdir, process.platform === "win32" ? "junction" : "dir");
 app.setPath("userData", join(fixture, "profile"));
 process.env.WUU_HOME = home;
 process.env.WUU_DESKTOP_CORE = resolve(process.env.WUU_BROWSER_OWNERSHIP_CORE ?? join(desktop, "build", "bin", "wuu-core"));

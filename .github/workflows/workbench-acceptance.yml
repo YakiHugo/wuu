@@ -68,6 +68,7 @@ jobs:
           cd desktop
           node_modules/.bin/electron-vite build
       - name: Record real-window acceptance
+        id: ui
         timeout-minutes: 10
         env:
           WUU_WORKBENCH_OUTPUT: ${{ runner.temp }}/wuu-workbench-acceptance
@@ -86,14 +87,21 @@ jobs:
           ffmpeg -hide_banner -loglevel warning -f x11grab -draw_mouse 1 -framerate 20 -video_size 1600x1000 -i "$DISPLAY" -an -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -movflags +frag_keyframe+empty_moov+default_base_moof "$WUU_WORKBENCH_OUTPUT/workbench-clickthrough.mp4" > "$WUU_WORKBENCH_OUTPUT/ffmpeg.log" 2>&1 &
           recorder=$!
           cleanup() {
-            kill -INT "$recorder" 2>/dev/null || true
+            # TERM also works if launch failed before ffmpeg installed its
+            # interrupt handler; never let recorder cleanup hold the job open.
+            kill -TERM "$recorder" 2>/dev/null || true
+            for attempt in $(seq 1 50); do
+              kill -0 "$recorder" 2>/dev/null || break
+              sleep 0.1
+            done
+            kill -KILL "$recorder" 2>/dev/null || true
             wait "$recorder" || true
             kill "$wm" 2>/dev/null || true
           }
           trap cleanup EXIT
           # A synchronous native modal can block the in-process JS watchdog.
           # Keep an independent process bound, leaving time to finalize video.
-          timeout --signal=TERM --kill-after=10s 8m30s desktop/node_modules/.bin/electron --no-sandbox desktop/scripts/workbench-acceptance-e2e.cjs
+          timeout --signal=TERM --kill-after=10s 510s desktop/node_modules/.bin/electron --no-sandbox desktop/scripts/workbench-acceptance-e2e.cjs
           result=$?
           node -e 'const r=require(process.env.WUU_WORKBENCH_OUTPUT+"/report.json"); if(r.status!=="passed")process.exit(1)' || result=1
           cleanup
@@ -101,6 +109,20 @@ jobs:
           ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_name,width,height -of json "$WUU_WORKBENCH_OUTPUT/workbench-clickthrough.mp4" > "$WUU_WORKBENCH_OUTPUT/video.json" || exit 1
           exit "$result"
           CAPTURE
+      - name: Upload immediate UI diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workbench-ui-diagnostics-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/wuu-workbench-acceptance/report.json
+            ${{ runner.temp }}/wuu-workbench-acceptance/run.log
+            ${{ runner.temp }}/wuu-workbench-acceptance/source-commit.txt
+            ${{ runner.temp }}/wuu-workbench-acceptance/video.json
+            ${{ runner.temp }}/wuu-workbench-acceptance/*failure*.png
+            ${{ runner.temp }}/wuu-workbench-acceptance/native-dialog-*.png.json
+          if-no-files-found: warn
+          retention-days: 14
       - name: Verify browser ownership and adopted plugin views
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         timeout-minutes: 7

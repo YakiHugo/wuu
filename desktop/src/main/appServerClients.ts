@@ -3,7 +3,7 @@ import {
   spawn as spawnChild,
   type ChildProcessWithoutNullStreams,
 } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveWuuCommand } from "./wuuCommand";
@@ -457,6 +457,7 @@ export class AppServerClient {
   private lastUsedAt = Date.now();
   private lastStderr = "";
   private stoppedActivityIDs = new Set<string>();
+  private readonly canonicalWorkdir: string;
 
   constructor(
     readonly workdir: string,
@@ -474,7 +475,17 @@ export class AppServerClient {
     private readonly resolveCommand: typeof resolveWuuCommand = resolveWuuCommand,
     private readonly getInitializeParams?: () => unknown,
     private readonly desktopPaths?: DesktopPaths,
-  ) {}
+  ) {
+    // Go resolves workspace symlinks for tool execution, while desktop route
+    // keys retain the user's selected path (notably /var vs /private/var).
+    try { this.canonicalWorkdir = realpathSync.native(workdir); }
+    catch { this.canonicalWorkdir = workdir; } // Missing roots still fail at spawn.
+  }
+
+  private routedActivity(value: unknown): unknown {
+    if (!isRecord(value) || value.workdir !== this.canonicalWorkdir || this.canonicalWorkdir === this.workdir) return value;
+    return { ...value, workdir: this.workdir };
+  }
 
   start(): void {
     this.touch();
@@ -882,6 +893,9 @@ export class AppServerClient {
 
     const maybeNotification = message as AppServerNotification;
     if (maybeNotification.method) {
+      if (maybeNotification.method.startsWith("activity/")) {
+        maybeNotification.params = this.routedActivity(maybeNotification.params);
+      }
       updateStoppedActivityIDs(this.stoppedActivityIDs, maybeNotification);
       this.updateRunningFromNotification(maybeNotification);
       this.emit(this, { kind: "notification", message: maybeNotification });
@@ -896,6 +910,11 @@ export class AppServerClient {
       return;
     }
     this.pending.delete(key);
+    if (pending.method.startsWith("activity/") && isRecord(response.result)) {
+      const result = response.result;
+      if (result.activity) result.activity = this.routedActivity(result.activity);
+      if (Array.isArray(result.activities)) result.activities = result.activities.map(activity => this.routedActivity(activity));
+    }
     this.updateRunningFromResponse(
       pending.method,
       pending.params,
