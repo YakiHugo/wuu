@@ -48,8 +48,6 @@ jobs:
       # Reuse local packaging without release identities or notarization.
       WUU_RELEASE: '0'
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-      WUU_PLATFORM_OUTPUT: ${{ runner.temp }}/wuu-platform-smoke
-      WUU_BROWSER_OWNERSHIP_OUTPUT: ${{ runner.temp }}/wuu-platform-smoke/browser-ownership
     steps:
       - uses: actions/checkout@v4
         timeout-minutes: 2
@@ -71,9 +69,12 @@ jobs:
       - name: Record platform and source
         timeout-minutes: 1
         run: |
-          mkdir -p "$WUU_PLATFORM_OUTPUT"
-          git rev-parse HEAD > "$WUU_PLATFORM_OUTPUT/source-commit.txt"
-          node -e 'console.log(JSON.stringify({ platform: process.platform, arch: process.arch, node: process.version }))' > "$WUU_PLATFORM_OUTPUT/platform.json"
+          output="$RUNNER_TEMP/wuu-platform-smoke"
+          echo "WUU_PLATFORM_OUTPUT=$output" >> "$GITHUB_ENV"
+          echo "WUU_BROWSER_OWNERSHIP_OUTPUT=$output/browser-ownership" >> "$GITHUB_ENV"
+          mkdir -p "$output"
+          git rev-parse HEAD > "$output/source-commit.txt"
+          node -e 'console.log(JSON.stringify({ platform: process.platform, arch: process.arch, node: process.version }))' > "$output/platform.json"
       - name: Install locked build dependencies serially
         timeout-minutes: 10
         run: |
