@@ -399,8 +399,15 @@ export function WebWorkspacePanel({
     finally { setMenuOpen(false); }
   };
 
+  useEffect(() => {
+    window.dispatchEvent(new Event("wuu:page-context-source-changed"));
+    return () => { queueMicrotask(() => window.dispatchEvent(new Event("wuu:page-context-source-changed"))); };
+  }, [active, blank, error, site?.id, current?.activeTabId, current?.title]);
+
   return (
-    <div ref={panelRef} className="web-workspace-panel" data-wuu-component="web-workspace" data-website-id={site?.id}>
+    <div ref={panelRef} className="web-workspace-panel" data-wuu-component="web-workspace" data-website-id={site?.id}
+      data-page-context-active={active && !blank && !error ? "true" : undefined}
+      data-page-context-tab-id={current?.activeTabId} data-page-context-title={current?.title}>
       <div className="workspace-browser-toolbar web-workspace-toolbar" role="toolbar" aria-label={site?.title || t("webWorkspace.address")}>
         <div className="workspace-browser-nav-cluster">
           <button type="button" className="icon-button workspace-browser-nav" aria-label={t("webWorkspace.back")} title={t("webWorkspace.back")} disabled={!api || !current?.canGoBack} onClick={() => void run("back")}><ArrowLeft className="icon" aria-hidden="true" /></button>

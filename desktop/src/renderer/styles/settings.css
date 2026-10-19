@@ -683,6 +683,36 @@
   min-width: 0;
 }
 
+.browser-extension-entry + .browser-extension-entry {
+  border-top: 1px solid var(--hairline-soft);
+}
+
+.browser-extension-entry > .settings-row {
+  border-bottom: 0;
+}
+
+.browser-extension-details {
+  padding-bottom: var(--space-4);
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+}
+
+.browser-extension-details dl {
+  display: grid;
+  grid-template-columns: minmax(7em, auto) minmax(0, 1fr);
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+}
+
+.browser-extension-details dt,
+.browser-extension-details dd {
+  margin: 0;
+}
+
+.browser-extension-details p {
+  margin: var(--space-3) 0 0;
+}
+
 @container settings-page (max-width: 32em) {
   .browser-settings-actions {
     justify-content: flex-start;

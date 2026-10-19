@@ -37,6 +37,7 @@ export default defineConfig({
         input: {
           index: resolve(__dirname, "src/main/preload.ts"),
           nativePreview: resolve(__dirname, "src/main/nativePreviewPreload.ts"),
+          chromeOverlay: resolve(__dirname, "src/main/chromeOverlayPreload.ts"),
           linuxPreview: resolve(__dirname, "src/main/linuxPreviewPreload.ts"),
 
           permissionGuide: resolve(__dirname, "src/main/permissionGuidePreload.ts"),
@@ -74,6 +75,7 @@ export default defineConfig({
         input: {
           index: resolve(__dirname, "index.html"),
           nativePreview: resolve(__dirname, "native-preview.html"),
+          chromeOverlay: resolve(__dirname, "chrome-overlay.html"),
           linuxPreview: resolve(__dirname, "linux-cua-preview.html"),
 
           permissionGuide: resolve(__dirname, "permission-guide.html"),

@@ -1160,8 +1160,22 @@ export type BrowserCookieImportResult = {
   failed: number;
 };
 
-// An extension loaded into the shared embedded-browser session. The source
-// directory is owned by the user and remains untouched on removal.
+// Browser extensions use Electron's partial Chrome extension API, separately
+// from Wuu TypeScript plugins. Sites include content-script match patterns.
+export type BrowserExtensionManifest = {
+  name: string;
+  version: string;
+  manifestVersion: 2 | 3;
+  description?: string;
+  permissions: string[];
+  sites: string[];
+  optionalPermissions: string[];
+  optionalSites: string[];
+  unsupportedPermissions: string[];
+  compatibility: ("serviceWorker" | "action" | "options" | "browserUI" | "devtools")[];
+};
+
+// The source directory is user-owned and is never changed or removed by Wuu.
 export type BrowserExtensionRecord = {
   id: string;
   name: string;
@@ -1169,6 +1183,8 @@ export type BrowserExtensionRecord = {
   path: string;
   enabled: boolean;
   loaded: boolean;
+  manifest?: BrowserExtensionManifest;
+  needsReview?: boolean;
   error?: string;
 };
 
@@ -3454,6 +3470,7 @@ export type WuuDesktopApi = {
     id: string,
     enabled: boolean,
   ) => Promise<BrowserExtensionRecord[]>;
+  reloadBrowserExtension?: (id: string) => Promise<BrowserExtensionRecord[]>;
   removeBrowserExtension?: (id: string) => Promise<BrowserExtensionRecord[]>;
   // Renderer→main: hide the agent view while a full-window overlay (settings,
   // dialogs, search) is open so it can't occlude the modal; false restores it.

@@ -1,3 +1,4 @@
+import type { ChromeOverlayApi, ChromeOverlayEvent, ChromeOverlayRequest } from "../shared/chromeOverlay";
 import { WEB_WORKSPACE_RIBBON_ID, type WebWorkspaceApi, type WebWorkspaceState } from "../shared/webWorkspace";
 import { readComposerDraftRecovery } from "./ComposerDraftRecovery";
 import { openComposerAttachmentPicker } from "./test/attachmentPicker";
@@ -488,9 +489,26 @@ describe("session tab switch latency", () => {
     }
   });
 
-  it("app history replays ribbon destinations without driving website navigation and skips a removed website", async () => {
+  it.each([false, true])("app history replays ribbon destinations without driving website navigation and skips a removed website (native presenter=%s)", async (nativePresenter) => {
     installWuuApi();
     Object.defineProperty(window.wuu, "platform", { configurable: true, value: "darwin" });
+    const overlayListeners = new Set<(event: ChromeOverlayEvent) => void>();
+    const showOverlay = vi.fn<(request: ChromeOverlayRequest) => Promise<void>>().mockResolvedValue(undefined);
+    if (nativePresenter) {
+      // jsdom lacks Chromium's iterable computed style declaration.
+      const readComputedStyle = window.getComputedStyle.bind(window);
+      vi.spyOn(window, "getComputedStyle").mockImplementation((...args) => {
+        const computed = readComputedStyle(...args);
+        Object.defineProperty(computed, Symbol.iterator, { value: function* () {
+          for (let index = 0; index < computed.length; index++) yield computed.item(index);
+        } });
+        return computed;
+      });
+      (window.wuu as typeof window.wuu & { chromeOverlay?: ChromeOverlayApi }).chromeOverlay = {
+        show: showOverlay, hide: vi.fn().mockResolvedValue(undefined),
+        onEvent: listener => { overlayListeners.add(listener); return () => { overlayListeners.delete(listener); }; },
+      };
+    }
     let nativeState: WebWorkspaceState = { id: WEB_WORKSPACE_RIBBON_ID, url: "https://example.com/", title: "History site", loading: false, canGoBack: true, canGoForward: false,
       activeTabId: "website:history", tabs: [{ id: "website:history", url: "https://example.com/", title: "History site", loading: false, canGoBack: true, canGoForward: false, zoomFactor: 1 }] };
     const listeners = new Set<(state: WebWorkspaceState) => void>();
@@ -509,13 +527,31 @@ describe("session tab switch latency", () => {
     expect(container.querySelector('[data-wuu-component="app-shell"]')?.hasAttribute("data-web-workspace-open")).toBe(true);
     const history = container.querySelector<HTMLElement>('[data-wuu-component="page-history-controls"]')!;
     const ribbon = container.querySelector<HTMLElement>(".sidebar-ribbon")!;
+    const toggle = container.querySelector<HTMLButtonElement>(".section-sidebar-toggle")!;
     expect(history.hidden).toBe(false);
+    await act(async () => pageHistoryButton("back").focus());
     await act(async () => ribbon.dispatchEvent(new MouseEvent("pointerover", { bubbles: true })));
     expect(history.hidden).toBe(true);
     expect(history.hasAttribute("inert")).toBe(true);
+    expect(toggle.hidden).toBe(true);
+    expect(toggle.hasAttribute("inert")).toBe(true);
+    expect(document.activeElement).toBe(container.querySelector(".app-shell"));
     await act(async () => ribbon.dispatchEvent(new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body })));
+    if (nativePresenter) {
+      expect(history.hidden).toBe(true);
+      expect(toggle.hidden).toBe(true);
+      const request = showOverlay.mock.calls.map(([request]) => request).findLast(request => request.model.kind === "ribbon")!;
+      expect(request).toBeDefined();
+      await act(async () => overlayListeners.forEach(listener => listener({
+        token: request.token, generation: request.generation, command: { type: "dismiss", reason: "leave" },
+      })));
+    }
+    expect(ribbon.dataset.expanded).toBeUndefined();
     expect(history.hidden).toBe(false);
     expect(history.hasAttribute("inert")).toBe(false);
+    expect(toggle.hidden).toBe(false);
+    expect(toggle.hasAttribute("inert")).toBe(false);
+    expect(document.activeElement).toBe(container.querySelector(".app-shell"));
     // Native webpage navigation changes URL/history state, not the app route.
     await act(async () => {
       nativeState = { ...nativeState, url: "https://example.com/previous", canGoBack: false,

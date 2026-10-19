@@ -4,7 +4,7 @@ import type {
   BrowserExtensionRecord,
   BrowserProfile,
 } from "../shared/protocol";
-import { Folder, Globe, Loader2, RefreshCw, Trash2 } from "./WuuIcons";
+import { ChevronDown, Folder, Globe, Loader2, RefreshCw, Trash2 } from "./WuuIcons";
 import { SettingsGroup, SettingsPageHeader, SettingsSection } from "./SettingsSection";
 import { SettingsRow } from "./SettingsRow";
 import { useI18n } from "./i18n";
@@ -31,6 +31,7 @@ export function BrowserSettingsSection(): JSX.Element | null {
   const [profileError, setProfileError] = useState("");
   const [extensionError, setExtensionError] = useState("");
   const [busy, setBusy] = useState("");
+  const [expandedExtension, setExpandedExtension] = useState("");
   const [result, setResult] = useState<BrowserCookieImportResult>();
   const mounted = useRef(true);
   const revision = useRef(0);
@@ -117,6 +118,22 @@ export function BrowserSettingsSection(): JSX.Element | null {
     }
   };
 
+  const reloadExtension = async (extension: BrowserExtensionRecord): Promise<void> => {
+    if (busy || !window.wuu.reloadBrowserExtension) return;
+    setBusy(`reload:${extension.id}`);
+    setExtensionError("");
+    try {
+      const next = await window.wuu.reloadBrowserExtension(extension.id);
+      if (mounted.current) setExtensions(next);
+    } catch (reason) {
+      if (mounted.current) setExtensionError(messageOf(reason));
+      const next = await window.wuu.listBrowserExtensions!();
+      if (mounted.current) setExtensions(next);
+    } finally {
+      if (mounted.current) setBusy("");
+    }
+  };
+
   const removeExtension = async (extension: BrowserExtensionRecord): Promise<void> => {
     if (busy) return;
     setBusy(`remove:${extension.id}`);
@@ -139,7 +156,7 @@ export function BrowserSettingsSection(): JSX.Element | null {
           <button
             className="settings-button settings-button-ghost"
             type="button"
-            disabled={loading}
+            disabled={loading || Boolean(busy)}
             onClick={() => {
               setLoading(true);
               setProfileError("");
@@ -244,46 +261,88 @@ export function BrowserSettingsSection(): JSX.Element | null {
             </div>
           ) : (
             extensions.map((extension) => (
-              <SettingsRow
-                key={extension.id}
-                title={extension.name}
-                error={extension.error}
-                hint={extension.enabled && !extension.loaded ? t("settings.browserExtensionsNotLoaded") : undefined}
-              >
-                <div className="browser-settings-actions">
-                  <button
-                    className="settings-switch"
-                    type="button"
-                    role="switch"
-                    aria-label={
-                      extension.enabled
+              <div className="browser-extension-entry" key={extension.id}>
+                <SettingsRow
+                  title={extension.name}
+                  error={extension.error}
+                  description={[
+                    extension.version,
+                    extension.needsReview ? t("settings.browserExtensionsNeedsReview")
+                      : extension.loaded ? t("settings.browserExtensionsLoaded")
+                        : extension.enabled ? t("settings.browserExtensionsNotLoaded")
+                          : t("settings.browserExtensionsDisabled"),
+                  ].filter(Boolean).join(" · ")}
+                >
+                  <div className="browser-settings-actions">
+                    <button
+                      className="settings-button settings-button-ghost settings-icon-button"
+                      type="button"
+                      aria-label={t("settings.browserExtensionsDetails", { name: extension.name })}
+                      aria-expanded={expandedExtension === extension.id}
+                      aria-controls={`browser-extension-${extension.id}`}
+                      onClick={() => setExpandedExtension(expandedExtension === extension.id ? "" : extension.id)}
+                    >
+                      <ChevronDown size={16} aria-hidden="true" />
+                    </button>
+                    {window.wuu.reloadBrowserExtension ? <button
+                      className="settings-button settings-button-ghost settings-icon-button"
+                      type="button"
+                      title={extension.enabled ? t("settings.browserExtensionsReload", { name: extension.name }) : t("settings.browserExtensionsEnableToReload")}
+                      aria-label={t("settings.browserExtensionsReload", { name: extension.name })}
+                      disabled={Boolean(busy) || !extension.enabled}
+                      onClick={() => void reloadExtension(extension)}
+                    >
+                      <RefreshCw size={16} className={busy === `reload:${extension.id}` ? "settings-spin" : undefined} aria-hidden="true" />
+                    </button> : null}
+                    <button
+                      className="settings-switch"
+                      type="button"
+                      role="switch"
+                      aria-label={extension.enabled
                         ? t("settings.browserExtensionsDisable", { name: extension.name })
-                        : t("settings.browserExtensionsEnable", { name: extension.name })
-                    }
-                    aria-checked={extension.enabled}
-                    disabled={Boolean(busy)}
-                    onClick={() => void toggleExtension(extension)}
-                  >
-                    <span className="settings-switch-thumb" aria-hidden="true" />
-                  </button>
-                  <button
-                    className="settings-button settings-button-ghost settings-icon-button"
-                    type="button"
-                    aria-label={t("settings.browserExtensionsRemove", { name: extension.name })}
-                    disabled={Boolean(busy)}
-                    onClick={() => void removeExtension(extension)}
-                  >
-                    {busy === `remove:${extension.id}` ? (
-                      <Loader2 className="icon settings-spin" aria-hidden="true" />
-                    ) : (
-                      <Trash2 size={16} aria-hidden="true" />
-                    )}
-                  </button>
-                </div>
-              </SettingsRow>
+                        : t("settings.browserExtensionsEnable", { name: extension.name })}
+                      aria-checked={extension.enabled}
+                      disabled={Boolean(busy)}
+                      onClick={() => void toggleExtension(extension)}
+                    >
+                      <span className="settings-switch-thumb" aria-hidden="true" />
+                    </button>
+                    <button
+                      className="settings-button settings-button-ghost settings-icon-button"
+                      type="button"
+                      aria-label={t("settings.browserExtensionsRemove", { name: extension.name })}
+                      disabled={Boolean(busy)}
+                      onClick={() => void removeExtension(extension)}
+                    >
+                      {busy === `remove:${extension.id}`
+                        ? <Loader2 className="icon settings-spin" aria-hidden="true" />
+                        : <Trash2 size={16} aria-hidden="true" />}
+                    </button>
+                  </div>
+                </SettingsRow>
+                {expandedExtension === extension.id ? <div className="browser-extension-details" id={`browser-extension-${extension.id}`}>
+                  {extension.manifest?.description ? <p>{extension.manifest.description}</p> : null}
+                  <dl>
+                    <dt>{t("settings.browserExtensionsSource")}</dt><dd>{extension.path}</dd>
+                    <dt>{t("settings.browserExtensionsID")}</dt><dd>{extension.id}</dd>
+                    {extension.manifest ? <>
+                      <dt>{t("settings.browserExtensionsManifest")}</dt><dd>{extension.manifest.manifestVersion}</dd>
+                      <dt>{t("settings.browserExtensionsPermissions")}</dt><dd>{extension.manifest.permissions.join(", ") || t("settings.browserExtensionsNone")}</dd>
+                      <dt>{t("settings.browserExtensionsSites")}</dt><dd>{extension.manifest.sites.join(", ") || t("settings.browserExtensionsNone")}</dd>
+                      <dt>{t("settings.browserExtensionsOptional")}</dt><dd>{[...extension.manifest.optionalPermissions, ...extension.manifest.optionalSites].join(", ") || t("settings.browserExtensionsNone")}</dd>
+                    </> : null}
+                  </dl>
+                  <p>{t("settings.browserExtensionsSharedProfile")}</p>
+                  <p>{t("settings.browserExtensionsFileAccess")}</p>
+                  {extension.manifest?.unsupportedPermissions.length ? <p>{t("settings.browserExtensionsUnsupported", { permissions: extension.manifest.unsupportedPermissions.join(", ") })}</p> : null}
+                  {extension.manifest?.compatibility.map(warning => <p key={warning}>{t(`settings.browserExtensionsWarning.${warning}`)}</p>)}
+                  <p>{t("settings.browserExtensionsReloadHint")}</p>
+                </div> : null}
+              </div>
             ))
           )}
         </SettingsGroup>
+        <p className="settings-section-note">{t("settings.browserExtensionsLocalOnly")}</p>
         {extensionError ? <p className="settings-error" role="alert">{extensionError}</p> : null}
       </SettingsSection>
     </>

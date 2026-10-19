@@ -11,6 +11,7 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 ### Added
 
 - Navigate window-local app page history across conversations, settings, workspace tools, and workbench destinations without changing website Back/Forward history.
+- Review local browser extension permissions before loading, manage installed snapshots with details and reload controls, and preserve the previous working copy when an update fails.
 
 - Add local history and bookmark suggestions to browser address fields, with keyboard selection and a mascot-centered new-tab search page.
 
@@ -37,6 +38,8 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Changed
 
+- Keep websites live beneath the hover tab ribbon and account menu with bounded, isolated native chrome surfaces.
+
 - Expand the vertical browser tab rail with readable titles and direct close controls for web tabs, while keeping built-in destinations permanent and preserving sidebar content widths.
 
 - Remove the redundant full-width browser loading line while retaining ribbon tab loading feedback and Stop/Reload controls.
@@ -57,10 +60,13 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Keep newly restored browser tabs from taking focus while hidden by the navigation rail.
+
 - Keep contextual sidebar controls beneath the expanded macOS navigation rail while preserving traffic-light access and restoring the controls after hover.
 - Dismiss native browser tooltips when the workbench renderer reloads or crashes.
 
 - Honor Shift-click's separate website window and keep context-menu links in background tabs in the experimental browser workbench.
+- Keep user-requested separate website windows open when their source tab navigates or closes, while preserving managed popup cleanup and website permission prompts.
 
 - Preserve native browser text and image sharpness behind account and browser menus on high-density displays.
 - Restore window dragging from empty browser toolbar space while keeping its address field and buttons interactive.
