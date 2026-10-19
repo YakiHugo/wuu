@@ -1,5 +1,5 @@
 // Real native website journeys, run by workbench-acceptance-e2e.cjs under Xvfb.
-// The only website and executable extension are authored disposable fixtures.
+// Local contract fixtures and anonymous public-page observations use the real app.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -119,6 +119,24 @@ async function runWebsiteAcceptance(h, fixture) {
     return layer ? evaluateContents(layer.view.webContents, fn, value) : undefined;
   }
   const waitPopover = (fn, value, label = String(fn)) => until(() => evaluatePopover(`async argument => Boolean(await (${fn})(argument))`, value), label);
+  async function selectNativeInput(wc, selector) {
+    const selected = () => evaluateContents(wc, selector => {
+      const input = document.activeElement;
+      return document.hasFocus() && input?.matches(selector)
+        && input.selectionStart === 0 && input.selectionEnd === input.value.length;
+    }, selector);
+    // Empty and already-selected fields satisfy the selection predicate before
+    // Ctrl+A arrives. Do not queue a redundant shortcut that can select newly
+    // typed characters; otherwise acknowledge its release and selection first.
+    if (await selected()) return;
+    let released = false;
+    const observe = (_event, input) => { if (input.type === 'keyUp' && input.code === 'KeyA') released = true; };
+    wc.on('before-input-event', observe);
+    try {
+      xinput(['key', '--clearmodifiers', 'ctrl+a']);
+      await until(() => released && selected(), 'Native select-all is delivered and selects the focused input');
+    } finally { wc.removeListener('before-input-event', observe); }
+  }
   async function fill(target, value) {
     const query = typeof target === 'string' ? target : target.selector;
     if (!await evaluatePopover(selector => Boolean(document.querySelector(selector)), query)) return fillShell(target, value);
@@ -127,6 +145,12 @@ async function runWebsiteAcceptance(h, fixture) {
     await until(() => wc.isFocused(), 'Native popover owns keyboard focus before typing');
     await waitPopover(selector => document.hasFocus() && document.activeElement?.matches(selector), query);
     const nativeInputEvents = [];
+    let inputPhase = 'before-select-all';
+    const originalSelectAll = wc.selectAll;
+    wc.selectAll = function (...args) {
+      nativeInputEvents.push({ at: Date.now() - started, method: 'selectAll', inputPhase });
+      return Reflect.apply(originalSelectAll, this, args);
+    };
     const observeNativeInput = (_event, input) => { if (nativeInputEvents.length < 100) nativeInputEvents.push({ at: Date.now() - started, ...input }); };
     wc.on('before-input-event', observeNativeInput);
     await evaluateContents(wc, selector => {
@@ -148,17 +172,17 @@ async function runWebsiteAcceptance(h, fixture) {
       snapshot('before-native-select-all');
     }, query);
     try {
-      xinput(['key', '--clearmodifiers', 'ctrl+a']);
-      await waitPopover(selector => { const input = document.querySelector(selector); return document.hasFocus() && document.activeElement === input
-        && input.selectionStart === 0 && input.selectionEnd === input.value.length; }, query);
+      await selectNativeInput(wc, query);
       // Let each real key reach the controlled cross-document input before
       // sending the next. No dropped character is retried or silently repaired.
       let entered = '';
       for (const character of value) {
+        inputPhase = `typing:${character}`;
         await evaluateContents(wc, character => window.__wuuAcceptancePopoverInput.snapshot(`before-native-character:${character}`), character);
         xinput(['type', '--clearmodifiers', '--delay', '8', character]);
         entered += character;
         await waitPopover(({ selector, value }) => document.querySelector(selector)?.value === value, { selector: query, value: entered });
+        inputPhase = `acknowledged:${entered}`;
         await evaluateContents(wc, () => window.__wuuAcceptancePopoverInput.snapshot('native-character-acknowledged'));
       }
       if (!value) { xinput(['key', 'BackSpace']); await waitPopover(selector => document.querySelector(selector)?.value === '', query); }
@@ -167,6 +191,7 @@ async function runWebsiteAcceptance(h, fixture) {
         input: await evaluateContents(wc, selector => { const input = document.querySelector(selector); return { focused: document.hasFocus(), active: document.activeElement?.outerHTML.slice(0, 300), value: input?.value, selection: [input?.selectionStart, input?.selectionEnd] }; }, query) };
       save(); throw error;
     } finally {
+      wc.selectAll = originalSelectAll;
       wc.removeListener('before-input-event', observeNativeInput);
       report.nativePopoverInputTraces ||= [];
       report.nativePopoverInputTraces.push({ selector: query, expected: value, contentsID: wc.id, nativeInputEvents,
@@ -278,7 +303,14 @@ async function runWebsiteAcceptance(h, fixture) {
   }
   async function focusAddress(label) {
     const p = await evaluate(selector => {
-      const node = document.querySelector(selector), r = node.getBoundingClientRect();
+      // Retained plugin pages keep hidden toolbars in the shell DOM. The real
+      // native click must target the currently presented address, not the first.
+      const node = [...document.querySelectorAll(selector)].find(node => {
+        const r = node.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && getComputedStyle(node).visibility === 'visible' && !node.closest('[hidden],[inert]');
+      });
+      if (!node) throw new Error('No visible address field is mounted');
+      const r = node.getBoundingClientRect();
       // The expanded rail can cover the center of a narrow address field.
       // Click only its genuinely exposed pixels, keeping strict hit testing.
       for (const x of [r.x + r.width / 2, r.right - 2, r.left + 2]) {
@@ -294,12 +326,82 @@ async function runWebsiteAcceptance(h, fixture) {
     report.actions.push({ label, input: 'native-x11', point: p, atMs: Date.now() - started }); save();
   }
   async function typeAddress(value, label) {
-    await focusAddress(label);
-    xinput(['key', '--clearmodifiers', 'ctrl+a']);
-    await waitFor(selector => { const input = document.querySelector(selector); return document.activeElement === input
-      && input.selectionStart === 0 && input.selectionEnd === input.value.length; }, address, 'Native select-all reaches the address input');
-    xinput(['type', '--clearmodifiers', '--delay', '8', value]);
-    await waitFor(({ selector, value }) => document.activeElement?.matches(selector) && document.activeElement.value === value, { selector: address, value });
+    // Observe only this runner's synthetic local URL entry. Keep native typing
+    // and the exact-value assertion unchanged; never repair dropped characters.
+    const diagnostic = value.startsWith(origin + '/');
+    const nativeEvents = [];
+    const observeInput = (_event, input) => {
+      if (nativeEvents.length < 160) nativeEvents.push({ type: 'before-input', at: Date.now() - started,
+        key: input.key, inputType: input.type, control: input.control, alt: input.alt, meta: input.meta, shift: input.shift });
+    };
+    const observeFocus = () => {
+      if (nativeEvents.length < 160) nativeEvents.push({ type: 'shell-focus', at: Date.now() - started,
+        focused: win.webContents.isFocused(), focusedContentsID: webContents.getFocusedWebContents()?.id });
+    };
+    try {
+      if (diagnostic) {
+        win.webContents.on('before-input-event', observeInput);
+        win.webContents.on('focus', observeFocus);
+        win.webContents.on('blur', observeFocus);
+        await evaluate(({ address, startInput }) => {
+          const events = [], cleanup = [];
+          let stopped = false;
+          const field = selector => {
+            const input = document.activeElement?.matches(selector) ? document.activeElement
+              : [...document.querySelectorAll(selector)].find(node => {
+                const r = node.getBoundingClientRect();
+                return r.width > 0 && r.height > 0 && getComputedStyle(node).visibility === 'visible'
+                  && !node.closest('[hidden],[inert]');
+              });
+            return { value: input?.value, selection: [input?.selectionStart, input?.selectionEnd], active: document.activeElement === input };
+          };
+          const snapshot = (type, event, details) => {
+            if (stopped || events.length >= 240) return;
+            events.push({ type, at: performance.now(), key: event?.key, data: event?.data, inputType: event?.inputType,
+              trusted: event?.isTrusted, focused: document.hasFocus(),
+              active: document.activeElement?.tagName + '.' + document.activeElement?.className,
+              address: field(address), search: field(startInput), details });
+          };
+          const observe = event => {
+            if (!['selectionchange', 'focusin', 'focusout'].includes(event.type)
+              && !event.target?.matches?.(address + ',' + startInput)) return;
+            snapshot(event.type, event);
+            if (event.type === 'input') queueMicrotask(() => snapshot('after-input-microtask'));
+          };
+          const types = ['keydown', 'keyup', 'beforeinput', 'input', 'selectionchange', 'focusin', 'focusout'];
+          types.forEach(type => document.addEventListener(type, observe, true));
+          cleanup.push(() => types.forEach(type => document.removeEventListener(type, observe, true)));
+          window.__wuuAcceptanceAddressInput = { snapshot, stop: () => {
+            snapshot('finished'); stopped = true; cleanup.forEach(stop => stop()); return events;
+          } };
+          const api = window.wuu.webWorkspace;
+          cleanup.push(api.onState(state => snapshot('tab-state', undefined,
+            { id: state.id, tab: state.activeTabId, loading: state.loading })));
+          cleanup.push(api.onFocusAddress((id, newTabId) => snapshot('address-focus-request', undefined, { id, newTabId })));
+          cleanup.push(api.onPopoverDismiss(token => snapshot('popover-dismiss', undefined, { token })));
+          snapshot('before-address-focus');
+        }, { address, startInput });
+      }
+      await focusAddress(label);
+      await selectNativeInput(win.webContents, address);
+      if (diagnostic) await evaluate(() => window.__wuuAcceptanceAddressInput.snapshot('native-selection-ready'));
+      xinput(['type', '--clearmodifiers', '--delay', '8', value]);
+      await waitFor(({ selector, value }) => document.activeElement?.matches(selector) && document.activeElement.value === value, { selector: address, value });
+    } finally {
+      if (diagnostic) {
+        win.webContents.removeListener('before-input-event', observeInput);
+        win.webContents.removeListener('focus', observeFocus);
+        win.webContents.removeListener('blur', observeFocus);
+        const events = await evaluate(() => {
+          const trace = window.__wuuAcceptanceAddressInput;
+          delete window.__wuuAcceptanceAddressInput;
+          return trace?.stop();
+        }).catch(error => ({ error: String(error) }));
+        report.nativeAddressInputTraces ||= [];
+        report.nativeAddressInputTraces.push({ label, expected: value, nativeEvents, events });
+        save();
+      }
+    }
   }
   async function click(target, label, evidence = true, retainHover = false) {
     if (evidence) await capture(`before-${label}`);
@@ -1421,37 +1523,121 @@ async function runWebsiteAcceptance(h, fixture) {
     assert.equal(views().filter(view => view.webContents.getURL() === origin + '/extension').length, 1, 'Exactly one replacement plugin native page');
     return { sharedCookieRetained: true, hiddenPageRetained: true, retainedDraft: true, oldGenerationDestroyed: true, singleReplacementPage: true };
   });
-  {
-    // This is the user's saved-website path, separate from the earlier bundled
-    // plugin probe. Public network availability is diagnostic, never a gate.
-    const optional = { name: 'Notion opened as a real left web tab', requestedURL: 'https://www.notion.so/', required: false, status: 'unavailable', events: [], accountUsed: false };
-    const observed = [];
-    const observe = (_event, wc) => {
-      if (wc === win.webContents) return;
-      observed.push(wc);
-      wc.on('did-navigate', (_event, url, code) => optional.events.push({ event: 'navigate', id: wc.id, url, code }));
-      wc.on('did-fail-load', (_event, code, description, url, mainFrame) => { if (mainFrame) optional.events.push({ event: 'failed', id: wc.id, code, description, url }); });
-      wc.on('did-stop-loading', () => optional.events.push({ event: 'loaded', id: wc.id, url: wc.getURL() }));
-    };
-    app.on('web-contents-created', observe);
-    try {
-      await addSite('Public Notion preview', optional.requestedURL);
-      const notion = () => observed.find(wc => !wc.isDestroyed() && /^https:\/\/(?:[a-z0-9-]+\.)*notion\.(?:com|so)\//.test(wc.getURL()));
-      await until(() => notion() && !notion().isLoadingMainFrame(), 'optional Notion left-tab document', 12000);
-      const wc = notion();
-      const login = await wc.executeJavaScript(`(() => {const links=[...document.querySelectorAll('a[href]')];const a=links.find(a=>/log\\s*in/i.test(a.textContent)&&/^https:\\/\\/(?:[a-z0-9-]+\\.)*notion\\.(?:com|so)\\//.test(a.href));return a?.getAttribute('href')||null;})()`);
-      if (login && !/\/login(?:[/?#]|$)/.test(wc.getURL())) {
-        await pageClick(wc, `a[href=${JSON.stringify(login)}]`, 'notion-public-login-link');
-      }
-      await until(async () => !wc.isDestroyed() && !wc.isLoadingMainFrame() && await wc.executeJavaScript(`Boolean([...document.querySelectorAll('input[type=email]')].find(input=>input.getBoundingClientRect().width>0))`), 'optional Notion public login form', 12000);
-      optional.status = 'public-login-visible';
-      optional.document = await wc.executeJavaScript(`({url:location.href,title:document.title,ready:document.readyState,userAgent:navigator.userAgent,text:document.body.innerText.slice(0,1200)})`);
-      optional.nativeContentsID = wc.id;
-      await capture('optional-left-tab-notion-public-login');
-    } catch (error) { optional.error = String(error); try { await capture('optional-left-tab-notion-unavailable'); } catch {} }
-    finally { app.removeListener('web-contents-created', observe); }
-    report.optionalEvidence = [optional]; save();
+  // Public availability is diagnostic; actual tab ownership, chrome and return
+  // behavior remain product gates even when a service blocks anonymous access.
+  const publicSites = [
+    ['Bilibili', 'https://www.bilibili.com/'], ['Notion', 'https://www.notion.so/'],
+    ['Feishu', 'https://www.feishu.cn/'], ['X-Twitter', 'https://x.com/'],
+  ].map(([name, requestedURL]) => ({ name, requestedURL, required: false, status: 'not-observed', accountUsed: false, events: [], visits: [] }));
+  report.optionalEvidence = publicSites;
+  const publicPages = new Map(), releasePublicObservers = [];
+  async function publicSurface(site, wc) {
+    const state = await readSite();
+    if (state.activeTabId !== site.tabID || wc.isDestroyed()) return null;
+    if (state.error) {
+      const visibleError = await evaluate(error => [...document.querySelectorAll('.web-workspace-stage:not([hidden]) [role="alert"]')]
+        .some(node => node.getBoundingClientRect().width > 0 && node.textContent.includes(error)), state.error);
+      return visibleError ? { kind: 'wuu-navigation-error', url: state.url, error: state.error } : null;
+    }
+    return win.contentView.children.some(view => view.webContents === wc && view.getVisible()) ? { kind: 'native-public-page', url: state.url } : null;
   }
+  async function observePublicDocument(site, wc) {
+    site.document = await Promise.race([
+      wc.executeJavaScript(`(() => {
+        const visible = e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(e).visibility !== 'hidden'; };
+        return { title: document.title, ready: document.readyState, text: document.body?.innerText.slice(0, 1600) || '',
+          loginFormVisible: [...document.querySelectorAll('input[type=email],input[type=password]')].some(visible) };
+      })()`).catch(error => ({ unavailable: String(error) })),
+      delay(800).then(() => ({ unavailable: 'Public document observation exceeded 800 ms' })),
+    ]);
+    site.finalURL = wc.getURL(); site.loading = wc.isLoadingMainFrame();
+    site.surface = await publicSurface(site, wc);
+    const terminal = site.events.findLast(event => event.event === 'navigate' || event.event === 'failed' && event.code !== -3);
+    site.status = site.surface?.error || terminal?.event === 'failed' ? 'network-failed'
+      : terminal?.code >= 400 || /captcha|verify (?:you are|your identity)|access denied|unusual traffic|人机验证|安全验证/i.test(site.document.text || '') ? 'blocked-or-challenge'
+      : site.document.loginFormVisible || /\/(?:login|signin|i\/flow\/login)(?:[/?#]|$)/.test(site.finalURL) ? 'public-login-visible'
+      : site.document.text ? 'public-document-visible' : site.loading ? 'loading-at-observation-limit' : 'document-unavailable';
+    save();
+  }
+  try {
+    for (const site of publicSites) await testNative(`public ${site.name} opens through the real left plus and address`, async () => {
+      const created = [];
+      const observe = (_event, wc) => {
+        if (wc === win.webContents || wc.session !== session.fromPartition('persist:wuu-browser')) return;
+        created.push(wc);
+        const add = detail => { if (site.events.length < 80) site.events.push({ ...detail, atMs: Date.now() - started }); };
+        const navigated = (_event, url, code) => add({ event: 'navigate', id: wc.id, url, code });
+        const failed = (_event, code, description, url, mainFrame) => { if (mainFrame) add({ event: 'failed', id: wc.id, code, description, url }); };
+        wc.on('did-navigate', navigated); wc.on('did-fail-load', failed);
+        releasePublicObservers.push(() => { wc.removeListener('did-navigate', navigated); wc.removeListener('did-fail-load', failed); });
+      };
+      app.on('web-contents-created', observe);
+      try {
+        site.tabID = await addSite(`Public ${site.name}`, site.requestedURL);
+        await until(() => created.some(wc => !wc.isDestroyed() && win.contentView.children.some(view => view.webContents === wc)), `${site.name}: actual native page is attached`, 4000);
+        const wc = created.find(wc => !wc.isDestroyed() && win.contentView.children.some(view => view.webContents === wc));
+        publicPages.set(site, wc); site.nativeContentsID = wc.id;
+        const preferences = wc.getLastWebPreferences();
+        assert.ok(preferences.sandbox && preferences.contextIsolation && !preferences.nodeIntegration, 'Public pages retain the shipping browser isolation');
+        const deadline = Date.now() + 6000;
+        // A new native tab exists briefly at about:blank before its requested
+        // navigation starts; that provisional idle state is not a loaded site.
+        while ((wc.getURL() === 'about:blank' || wc.isLoadingMainFrame()) && Date.now() < deadline) await delay(100);
+        await until(() => publicSurface(site, wc), `${site.name}: page or matching Wuu navigation error is presented`, 4000);
+        await observePublicDocument(site, wc);
+        await capture(`public-${site.name}-entry-${site.status}`);
+        return { tabID: site.tabID, nativeContentsID: wc.id, requestedURL: site.requestedURL, externalStatus: site.status };
+      } finally { app.removeListener('web-contents-created', observe); }
+    });
+    for (const round of [1, 2]) await testNative(`public website switch circuit ${round} preserves native pages and usable chrome`, async () => {
+      await click(conversations, `public-circuit-${round}-return-chat`, false);
+      await until(() => [...publicPages.values()].every(wc => !wc.isDestroyed() && !win.contentView.children.find(view => view.webContents === wc)?.getVisible()), 'Chat hides public native pages without destroying them');
+      const circuit = round === 1 ? publicSites : [...publicSites].reverse();
+      for (const site of circuit) {
+        const wc = publicPages.get(site);
+        if (!wc) continue; // Its independent real-entry check already records the failure.
+        const view = win.contentView.children.find(view => view.webContents === wc);
+        assert.ok(view && !wc.isDestroyed(), `${site.name}: returning retains the original native page`);
+        const visit = { round, nativeContentsID: wc.id, visibility: [], atMs: Date.now() - started };
+        site.visits.push(visit);
+        const originalVisible = view.setVisible;
+        view.setVisible = function (visible) { visit.visibility.push({ visible, atMs: Date.now() - started }); return originalVisible.call(this, visible); };
+        try {
+          await click(tabButton(site.tabID), `public-${site.name}-visit-${round}`, false);
+          await until(() => publicSurface(site, wc), `${site.name}: real tab click selects its original page or navigation error`);
+          assert.ok([...publicPages.values()].filter(other => other !== wc).every(other => !win.contentView.children.find(candidate => candidate.webContents === other)?.getVisible()), 'No previous public page remains above the selected page');
+          const bounds = view.getBounds();
+          await focusAddress(`public-${site.name}-address-focus-${round}`);
+          if (round === 1) {
+            await hoverTab(site.tabID);
+            assert.ok(await publicSurface(site, wc), 'Rail hover preserves the public page or navigation error');
+            assert.deepEqual(view.getBounds(), bounds, 'Rail hover does not resize the public page');
+            await capture(`public-${site.name}-hover-rail`);
+            await finishRailInteraction(null, `public-${site.name}-hover`);
+            const popup = Menu.prototype.popup;
+            Menu.prototype.popup = function (...args) { visit.menu = this.items.map(item => ({ label: item.label, enabled: item.enabled })); return popup.apply(this, args); };
+            try {
+              await click(toolbar('Browser options'), `public-${site.name}-options`, false);
+              await until(() => visit.menu, 'Real native browser options menu opens');
+              assert.ok(await publicSurface(site, wc), 'Browser menu preserves the public page or navigation error');
+              assert.deepEqual(view.getBounds(), bounds, 'Browser menu does not resize the public page');
+              await capture(`public-${site.name}-browser-options`);
+              xinput(['key', '--clearmodifiers', 'Escape']);
+            } finally { Menu.prototype.popup = popup; }
+            await waitFor(id => document.querySelector(`[data-website-id="${id}"] button[aria-label="Browser options"]`)?.getAttribute('aria-expanded') === 'false', ribbonGroup);
+            await focusAddress(`public-${site.name}-focus-after-dismissal`);
+          }
+          await observePublicDocument(site, wc);
+          visit.finalURL = wc.getURL(); visit.externalStatus = site.status; visit.bounds = view.getBounds();
+          await capture(`public-${site.name}-return-${round}-${site.status}`);
+          const revealed = visit.visibility.findIndex(event => event.visible);
+          if (site.surface?.kind === 'native-public-page') assert.ok(revealed >= 0 && visit.visibility.slice(revealed).every(event => event.visible), 'Returning and using chrome never hide/reveal the selected public page again');
+          else visit.flickerObservation = 'External navigation failed; native page visibility is not asserted for the Wuu error surface';
+        } finally { view.setVisible = originalVisible; save(); }
+      }
+      return { direction: round === 1 ? 'forward' : 'reverse', sites: publicSites.map(site => ({ name: site.name, status: site.status, visits: site.visits.length })), accountsUsed: false };
+    });
+  } finally { releasePublicObservers.forEach(release => release()); }
   await goConversations();
   report.websiteFixture = { origin, requestCount: fixture.requests.length, externalAccounts: false, authoredExtension: true };
 }
