@@ -143,7 +143,7 @@ const composer = '.conversation-pane .composer textarea';
 const scroller = '.conversation-pane > .scroll-region';
 const conversations = '[data-wuu-component="conversations-section"]';
 const settings = '.sidebar-ribbon button[aria-label="Settings"]';
-const plugins = '.sidebar-ribbon button[aria-label="Plugins"]';
+const plugins = '.sidebar-ribbon button[aria-label="Extensions"]';
 const leftToggle = '.section-sidebar-toggle';
 const rightToggle = '.shell-right-sidebar-toggle';
 function pick(selector, text) { return { selector, text }; }
