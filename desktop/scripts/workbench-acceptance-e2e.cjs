@@ -34,7 +34,7 @@ for (const name of Object.keys(process.env)) {
 }
 process.env.WUU_HOME = home;
 process.env.WUU_DESKTOP_CORE = path.resolve(process.env.WUU_DESKTOP_CORE || path.join(desktop, 'build/bin/wuu-core'));
-// Only the authored local fixture extension can execute in this isolated home.
+// Only bundled extensions and the authored local fixture can execute in this isolated home.
 process.env.WUU_SAFE_MODE = '0';
 process.env.WUU_ENABLE_BROWSER = '1';
 app.commandLine.appendSwitch('use-fake-device-for-media-stream');
@@ -77,7 +77,7 @@ const report = {
   status: 'running', startedAt: new Date().toISOString(),
   commit: spawnSync('git', ['rev-parse', 'HEAD'], { cwd: desktop, encoding: 'utf8' }).stdout.trim(),
   versions: { electron: process.versions.electron, chromium: process.versions.chrome, platform: process.platform },
-  fixture: { corpusSha256: createHash('sha256').update(corpusBytes).digest('hex'), noInference: true, isolatedHome: true, safeMode: false, authoredExtensionsOnly: true },
+  fixture: { corpusSha256: createHash('sha256').update(corpusBytes).digest('hex'), noInference: true, isolatedHome: true, safeMode: false, extensionSources: ['bundled', 'authored-local-fixture'] },
   checks: [], screenshots: [], actions: [], errors: [],
   exclusions: ['Native macOS traffic lights (Linux capture)', 'Live provider/account authentication',
     'Third-party plugin compatibility and dynamic plugin settings (authored fixture only)', 'Agent browser PiP pixels',

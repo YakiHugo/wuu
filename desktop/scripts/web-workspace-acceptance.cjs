@@ -91,7 +91,7 @@ async function runWebsiteAcceptance(h, fixture) {
     const p = await point(target);
     if (evidence) await capture(`before-${label}`);
     const bounds = win.getContentBounds(), zoom = win.webContents.getZoomFactor();
-    xinput(['mousemove', '--sync', String(Math.round(bounds.x + p.x * zoom)), String(Math.round(bounds.y + p.y * zoom)), 'click', '1']);
+    xinput(['mousemove', String(Math.round(bounds.x + p.x * zoom)), String(Math.round(bounds.y + p.y * zoom)), 'click', '1']);
     report.actions.push({ label: `web-${label}`, input: 'native-x11', atMs: Date.now() - started, point: p });
     await settle();
     if (evidence) await capture(`after-${label}`);
@@ -102,7 +102,7 @@ async function runWebsiteAcceptance(h, fixture) {
     const p = await wc.executeJavaScript(`(() => { const node=document.querySelector(${JSON.stringify(selector)}); const r=node.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`);
     const outer = win.getContentBounds(), inner = view.getBounds(), zoom = wc.getZoomFactor();
     await capture(`before-${label}`);
-    xinput(['mousemove', '--sync', String(Math.round(outer.x + inner.x + p.x * zoom)), String(Math.round(outer.y + inner.y + p.y * zoom)), 'click', '1']);
+    xinput(['mousemove', String(Math.round(outer.x + inner.x + p.x * zoom)), String(Math.round(outer.y + inner.y + p.y * zoom)), 'click', '1']);
     report.actions.push({ label, input: 'native-x11-website', atMs: Date.now() - started });
     await delay(80);
   }
@@ -161,12 +161,26 @@ async function runWebsiteAcceptance(h, fixture) {
   });
 
   await testNative('ribbon reorders Chat away from first with real keyboard and pointer', async () => {
-    await click(ribbon('Fixture Alpha'), 'focus-website-for-reorder', false);
-    // This is a user-visible order operation, not a localStorage write.
-    key('Up', ['alt']);
-    await waitFor(id => document.querySelectorAll('.sidebar-ribbon-main [data-ribbon-id]')[1]?.getAttribute('data-ribbon-id') === id, alphaID);
-    key('Up', ['alt']);
-    await waitFor(id => document.querySelector('.sidebar-ribbon-main [data-ribbon-id]')?.getAttribute('data-ribbon-id') === id, alphaID);
+    await openSite('Fixture Alpha', '/alpha');
+    const before = await evaluate(() => [...document.querySelectorAll('.sidebar-ribbon-main [data-ribbon-id]')].map(node => node.dataset.ribbonId));
+    // Opening native contents can focus the page. Enter the ribbon by actual
+    // keyboard traversal from its adjacent Customize control before reordering.
+    win.webContents.focus();
+    await evaluate(selector => document.querySelector(selector).focus(), manager);
+    await waitFor(selector => document.activeElement === document.querySelector(selector), manager);
+    for (let step = 0; step < before.length; step++) {
+      xinput(['key', '--clearmodifiers', 'shift+Tab']);
+      await delay(60);
+      if (await evaluate(id => document.activeElement?.dataset.ribbonId === id, alphaID)) break;
+    }
+    assert.ok(await evaluate(id => document.activeElement?.dataset.ribbonId === id, alphaID), 'Real keyboard traversal reaches the website ribbon button');
+    assert.equal(await evaluate(() => document.documentElement.dataset.focusModality), 'keyboard');
+    await capture('ribbon-keyboard-focus-before-reorder');
+    for (let index = before.indexOf(alphaID); index > 0; index--) {
+      xinput(['key', '--clearmodifiers', 'alt+Up']);
+      await waitFor(({ id, index }) => document.querySelectorAll('.sidebar-ribbon-main [data-ribbon-id]')[index - 1]?.getAttribute('data-ribbon-id') === id, { id: alphaID, index });
+      assert.ok(await evaluate(id => document.activeElement?.dataset.ribbonId === id, alphaID), 'Keyboard reorder retains ribbon focus');
+    }
     await click(manager, 'customize-order');
     await click('.ribbon-manager button[aria-label="Move Fixture Beta up"]', 'move-beta-up');
     await click(pick('.ribbon-manager button', 'Close'), 'save-order');
@@ -174,7 +188,7 @@ async function runWebsiteAcceptance(h, fixture) {
     assert.equal(savedOrder[0], alphaID);
     assert.ok(savedOrder.indexOf(await evaluate(selector => document.querySelector(selector).dataset.ribbonId, conversations)) > 0, 'Chat is not pinned first');
     assert.deepEqual((await prefs()).order.filter(id => savedOrder.includes(id)), savedOrder);
-    await capture('reordered-ribbon'); return savedOrder;
+    await capture('reordered-ribbon'); return { before, after: savedOrder };
   });
 
   await testNative('native website security cookies history reload and retained input', async () => {
