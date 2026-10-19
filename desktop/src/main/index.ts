@@ -246,9 +246,10 @@ const DEFAULT_WINDOW_BACKGROUND = "#f6f6f4";
 // what shows behind the transparent web layer before first paint, so a
 // dark-theme launch must not flash white.
 const DARK_WINDOW_BACKGROUND = "#1c1c1d";
-// Center the overlay buttons on the renderer's 56-DIP titlebar while its
-// controls fit; the renderer can grow for larger text or page zoom.
-const WINDOWS_TITLEBAR_OVERLAY_HEIGHT = 56;
+// Native chrome keeps its physical height as the renderer zooms. The compact
+// workbench strip follows that height independently of its content headers.
+const DEFAULT_TITLEBAR_HEIGHT = 56;
+const WORKBENCH_TITLEBAR_HEIGHT = 44;
 const ENABLE_EMBEDDED_BROWSER = process.env.WUU_ENABLE_BROWSER !== "0";
 let browserExtensionManager: BrowserExtensionManager | undefined;
 function embeddedBrowserSession() {
@@ -907,9 +908,18 @@ function usesWindowControlsOverlay(): boolean {
   return process.platform === "win32";
 }
 
-// 14px lights at y=21 sit on the 28px center of the 56px renderer
-// titlebar, matching the CSS-centered toolbar controls beside them.
-const MAC_TRAFFIC_LIGHT_POSITION = { x: 18, y: 21 };
+function windowTitlebarHeight(win: BrowserWindow): number {
+  return win === mainWindow && isOnboardingComplete()
+    ? WORKBENCH_TITLEBAR_HEIGHT
+    : DEFAULT_TITLEBAR_HEIGHT;
+}
+
+// Native lights stay in DIP when the renderer zooms. Pop-outs and account
+// windows keep their taller content header; the main workbench has a compact
+// icon-only strip. Center the 14-DIP lights within the appropriate row.
+function macTrafficLightPosition(height: number): { x: number; y: number } {
+  return { x: 18, y: (height - 14) / 2 };
+}
 
 function applyMacTrafficLightPosition(win: BrowserWindow): void {
   if (process.platform !== "darwin" || win.isDestroyed()) return;
@@ -917,7 +927,7 @@ function applyMacTrafficLightPosition(win: BrowserWindow): void {
   // attached the titlebar container. Packaged launches often paint before
   // that happens, so the lights stay at hiddenInset's default (12, 11)
   // until a later redraw. Re-apply after the window is actually shown.
-  win.setWindowButtonPosition(MAC_TRAFFIC_LIGHT_POSITION);
+  win.setWindowButtonPosition(macTrafficLightPosition(windowTitlebarHeight(win)));
 }
 
 function attachMacTrafficLightPosition(win: BrowserWindow): void {
@@ -934,7 +944,7 @@ function attachMacTrafficLightPosition(win: BrowserWindow): void {
   win.webContents.on("did-finish-load", apply);
 }
 
-function windowFrameOptions(): Pick<
+function windowFrameOptions(height = DEFAULT_TITLEBAR_HEIGHT): Pick<
   BrowserWindowConstructorOptions,
   | "frame"
   | "titleBarStyle"
@@ -945,13 +955,13 @@ function windowFrameOptions(): Pick<
   if (process.platform === "darwin") {
     return {
       titleBarStyle: "hiddenInset",
-      trafficLightPosition: MAC_TRAFFIC_LIGHT_POSITION,
+      trafficLightPosition: macTrafficLightPosition(height),
     };
   }
   if (usesWindowControlsOverlay()) {
     return {
       titleBarStyle: "hidden",
-      titleBarOverlay: nonMacTitleBarOverlay(),
+      titleBarOverlay: nonMacTitleBarOverlay(height),
     };
   }
   if (process.platform === "linux") {
@@ -960,7 +970,7 @@ function windowFrameOptions(): Pick<
   return {};
 }
 
-function nonMacTitleBarOverlay(): Electron.TitleBarOverlay {
+function nonMacTitleBarOverlay(height: number): Electron.TitleBarOverlay {
   const dark = resolvedThemeIsDark();
   return {
     // Track the themed window fill so the button strip reads as part of
@@ -968,7 +978,7 @@ function nonMacTitleBarOverlay(): Electron.TitleBarOverlay {
     // On Linux this is --paper white in light theme (see windowBackgroundColor).
     color: windowBackgroundColor(),
     symbolColor: dark ? "#e4e6e8" : "#1f2328",
-    height: WINDOWS_TITLEBAR_OVERLAY_HEIGHT,
+    height,
   };
 }
 
@@ -996,15 +1006,14 @@ function registerThemedChromeWindow(win: BrowserWindow): void {
 
 function syncThemedWindowChrome(): void {
   const background = windowBackgroundColor();
-  const overlay = usesWindowControlsOverlay() ? nonMacTitleBarOverlay() : undefined;
   for (const win of themedChromeWindows) {
     if (win.isDestroyed()) continue;
     // Windows redraws the controls overlay only when told to, and every
     // platform keeps the creation-time backgroundColor until re-set —
     // both must follow the theme or the window frame lags the content.
     win.setBackgroundColor(background);
-    if (overlay) {
-      win.setTitleBarOverlay(overlay);
+    if (usesWindowControlsOverlay()) {
+      win.setTitleBarOverlay(nonMacTitleBarOverlay(windowTitlebarHeight(win)));
     }
   }
 }
@@ -1209,7 +1218,7 @@ function createWindow(options: { inactive?: boolean } = {}): void {
     height,
     show: !options.inactive,
     resizable: onboardingComplete,
-    ...windowFrameOptions(),
+    ...windowFrameOptions(onboardingComplete ? WORKBENCH_TITLEBAR_HEIGHT : DEFAULT_TITLEBAR_HEIGHT),
     backgroundColor: windowBackgroundColor(),
     webPreferences: {
       preload: join(__dirname, "../preload/index.cjs"),
@@ -2399,6 +2408,10 @@ app.whenReady().then(async () => {
     completeOnboarding();
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.setResizable(true);
+      applyMacTrafficLightPosition(mainWindow);
+      if (usesWindowControlsOverlay()) {
+        mainWindow.setTitleBarOverlay(nonMacTitleBarOverlay(WORKBENCH_TITLEBAR_HEIGHT));
+      }
     }
     return { ok: true as const };
   });

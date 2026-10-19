@@ -462,6 +462,7 @@ export class WorkbenchController {
 }
 
 export interface DesktopWorkbenchProps {
+  settingsOnly?: boolean;
   host: PluginHost;
   controller?: WorkbenchController;
   inventory?: readonly ExtensionInventoryRecord[];
@@ -469,6 +470,7 @@ export interface DesktopWorkbenchProps {
 }
 
 export function DesktopWorkbench({
+  settingsOnly = false,
   host,
   controller: suppliedController,
   inventory,
@@ -489,6 +491,7 @@ export function DesktopWorkbench({
   }, [controller, inventory]);
 
   const portals = viewRegions.flatMap((region) => {
+    if (settingsOnly && region !== "settings") return [];
     const visible = visibleWorkbenchView(snapshot, region);
     if (!visible) return [];
     const views = snapshot.views.filter((view) => view.region === region);
@@ -508,7 +511,7 @@ export function DesktopWorkbench({
     ];
   });
 
-  portals.push(createPortal(
+  if (!settingsOnly) portals.push(createPortal(
     <StatusPresentation host={host} controller={controller} />,
     document.body,
     "plugin-workbench-status",

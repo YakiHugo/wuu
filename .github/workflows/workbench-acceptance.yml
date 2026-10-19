@@ -1,0 +1,105 @@
+name: Workbench visual acceptance
+
+on:
+  push:
+    branches: [design/conversation-layout]
+    paths:
+      - 'desktop/src/**'
+      - 'desktop/scripts/workbench-acceptance-e2e.cjs'
+      - 'desktop/scripts/fixtures/conversation-corpus/**'
+      - 'desktop/electron.vite.config.ts'
+      - 'desktop/package*.json'
+      - '.github/workflows/workbench-acceptance.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workbench-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  accept:
+    name: Real Electron clickthrough and video
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Install isolated capture dependencies
+        run: |
+          npm ci --prefix desktop
+          node desktop/node_modules/electron/install.js
+          sudo apt-get update
+          sudo apt-get install -y xvfb ffmpeg openbox xdotool fonts-noto-cjk fonts-noto-color-emoji
+      - name: Check acceptance syntax and test policy
+        run: |
+          node --check desktop/scripts/workbench-acceptance-e2e.cjs
+          make test-policy-check
+      - name: Build shipping app serially
+        run: |
+          mkdir -p desktop/build/bin
+          go build -p 2 -ldflags "-X github.com/blueberrycongee/wuu/internal/version.Version=v$(cat VERSION)" -o desktop/build/bin/wuu-core ./cmd/wuu
+          cd desktop
+          node_modules/.bin/electron-vite build
+      - name: Record real-window acceptance
+        timeout-minutes: 10
+        env:
+          WUU_WORKBENCH_OUTPUT: ${{ runner.temp }}/wuu-workbench-acceptance
+        shell: bash
+        run: |
+          mkdir -p "$WUU_WORKBENCH_OUTPUT"
+          git rev-parse HEAD > "$WUU_WORKBENCH_OUTPUT/source-commit.txt"
+          git ls-files desktop/src desktop/electron.vite.config.ts desktop/scripts/workbench-acceptance-e2e.cjs | sort | xargs sha256sum > "$WUU_WORKBENCH_OUTPUT/source-sha256.txt"
+          find desktop/out -type f -print0 | sort -z | xargs -0 sha256sum > "$WUU_WORKBENCH_OUTPUT/build-sha256.txt"
+          set -o pipefail
+          xvfb-run --auto-servernum --server-args='-screen 0 1600x1000x24 -nolisten tcp' bash <<'CAPTURE' 2>&1 | tee "$WUU_WORKBENCH_OUTPUT/run.log"
+          set -uo pipefail
+          openbox --sm-disable > "$WUU_WORKBENCH_OUTPUT/window-manager.log" 2>&1 &
+          wm=$!
+          ffmpeg -hide_banner -loglevel warning -f x11grab -draw_mouse 1 -framerate 20 -video_size 1600x1000 -i "$DISPLAY" -an -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -movflags +faststart "$WUU_WORKBENCH_OUTPUT/workbench-clickthrough.mp4" > "$WUU_WORKBENCH_OUTPUT/ffmpeg.log" 2>&1 &
+          recorder=$!
+          cleanup() {
+            kill -INT "$recorder" 2>/dev/null || true
+            wait "$recorder" || true
+            kill "$wm" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          desktop/node_modules/.bin/electron --no-sandbox desktop/scripts/workbench-acceptance-e2e.cjs
+          result=$?
+          node -e 'const r=require(process.env.WUU_WORKBENCH_OUTPUT+"/report.json"); if(r.status!=="passed")process.exit(1)' || result=1
+          cleanup
+          trap - EXIT
+          ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_name,width,height -of json "$WUU_WORKBENCH_OUTPUT/workbench-clickthrough.mp4" > "$WUU_WORKBENCH_OUTPUT/video.json" || exit 1
+          exit "$result"
+          CAPTURE
+      - name: Summarize checked journeys
+        if: always()
+        env:
+          WUU_WORKBENCH_OUTPUT: ${{ runner.temp }}/wuu-workbench-acceptance
+        run: |
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const path = `${process.env.WUU_WORKBENCH_OUTPUT}/report.json`;
+          if (!fs.existsSync(path)) process.exit(0);
+          const r = JSON.parse(fs.readFileSync(path));
+          const rows = r.checks.map(c => `- ${c.status === 'passed' ? 'PASS' : 'FAIL'} ${c.name}`);
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, [`## Workbench: ${r.status}`, `Commit: ${r.commit}`, `${r.screenshots.length} full-window PNGs plus real-time MP4 in the evidence artifact.`, ...rows, '', 'Not covered:', ...r.exclusions.map(s => `- ${s}`), ''].join('\n'));
+          NODE
+      - name: Upload full-window evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workbench-acceptance-evidence-${{ github.sha }}
+          path: ${{ runner.temp }}/wuu-workbench-acceptance/
+          if-no-files-found: warn
+          retention-days: 14

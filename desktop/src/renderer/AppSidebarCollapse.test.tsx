@@ -247,7 +247,7 @@ describe("sidebar collapse-state independence", () => {
       await click(container.querySelector(".sidebar-account-trigger"));
       await click(container.querySelector('[data-settings-page="providers"]'));
       await act(async () => { await import("./SettingsView"); });
-      expect(container.querySelector(".settings-back-button")).not.toBeNull();
+      expect(container.querySelector(".settings-embedded")).not.toBeNull();
       if (theme) {
         await click([...container.querySelectorAll<HTMLButtonElement>(".settings-nav button")]
           .find((button) => button.textContent === translateCurrent("settings.appearance")));
@@ -255,7 +255,7 @@ describe("sidebar collapse-state independence", () => {
         expect(document.documentElement.dataset.theme).toBe(theme);
         expect(window.wuu.setThemePreference).toHaveBeenLastCalledWith(theme);
       }
-      await click(container.querySelector(".settings-back-button"));
+      await click(container.querySelector('[data-wuu-component="conversations-section"]'));
       expect(header()?.getAttribute("aria-expanded")).toBe("false");
     }
     await click(header());

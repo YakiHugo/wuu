@@ -113,10 +113,13 @@ export function BrowserPiPHostReporter(): null {
     };
     const mutationObserver = new MutationObserver(onMutation);
     // Ignore streaming text and class updates. Size changes come from
-    // ResizeObserver; dialog state can also change without mounting a node.
+    // ResizeObserver; dialogs and retained native sections can change visibility
+    // without mounting a node or changing the conversation's dimensions.
     mutationObserver.observe(document.body, {
       childList: true, subtree: true, attributes: true,
-      attributeFilter: ["aria-modal", "open", "hidden"],
+      attributeFilter: [
+        "aria-modal", "open", "hidden", "data-settings-open", "data-native-section", "data-primary-plugin-view",
+      ],
     });
     window.addEventListener("resize", schedule);
     window.addEventListener("focus", onFocus);

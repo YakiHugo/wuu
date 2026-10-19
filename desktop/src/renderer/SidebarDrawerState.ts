@@ -38,6 +38,7 @@ const SIDEBAR_DRAWER_HOVER_TRIGGER_SELECTOR =
 
 export function useSidebarDrawerState({
   appShellRef,
+  sidebarSelector = SIDEBAR_RAIL_SELECTOR,
   sidebarCollapsed,
   resizingSidebar,
   motionMs,
@@ -46,6 +47,7 @@ export function useSidebarDrawerState({
   closeOnWindowResize = false,
 }: {
   appShellRef: RefObject<HTMLDivElement | null>;
+  sidebarSelector?: string;
   sidebarCollapsed: boolean;
   resizingSidebar: boolean;
   /** Read when the close starts, so it follows the current tokens. */
@@ -120,7 +122,7 @@ export function useSidebarDrawerState({
     if (!point) {
       return undefined;
     }
-    const sidebar = appShellRef.current?.querySelector(SIDEBAR_RAIL_SELECTOR);
+    const sidebar = appShellRef.current?.querySelector(sidebarSelector);
     const hoverTriggers = appShellRef.current?.querySelectorAll(
       SIDEBAR_DRAWER_HOVER_TRIGGER_SELECTOR,
     );
@@ -149,15 +151,15 @@ export function useSidebarDrawerState({
       (sidebar && sidebar.contains(target)) ||
         [...(hoverTriggers ?? [])].some((trigger) => trigger.contains(target)),
     );
-  }, [appShellRef, hoverLayerCount]);
+  }, [appShellRef, hoverLayerCount, sidebarSelector]);
 
   const blurSidebarFocus = useCallback((): void => {
-    const sidebar = appShellRef.current?.querySelector(SIDEBAR_RAIL_SELECTOR);
+    const sidebar = appShellRef.current?.querySelector(sidebarSelector);
     const active = document.activeElement;
     if (sidebar && active instanceof HTMLElement && sidebar.contains(active)) {
       active.blur();
     }
-  }, [appShellRef]);
+  }, [appShellRef, sidebarSelector]);
 
   const openSidebarDrawer = useCallback((): void => {
     // Entering the newly pinned rail must not cancel its docking timer.
@@ -278,7 +280,7 @@ export function useSidebarDrawerState({
 
       const relatedTarget = event instanceof MouseEvent ? event.relatedTarget : null;
       if (relatedTarget && relatedTarget instanceof Element) {
-        const sidebar = appShellRef.current?.querySelector(SIDEBAR_RAIL_SELECTOR);
+        const sidebar = appShellRef.current?.querySelector(sidebarSelector);
         const hoverTriggers = appShellRef.current?.querySelectorAll(
           SIDEBAR_DRAWER_HOVER_TRIGGER_SELECTOR,
         );
@@ -302,6 +304,7 @@ export function useSidebarDrawerState({
     }, 0);
   }, [
     appShellRef,
+    sidebarSelector,
     clearSidebarDrawerPointerLeaveTimer,
     closeSidebarDrawer,
     rememberSidebarPointerPosition,
@@ -493,12 +496,12 @@ export function useSidebarDrawerState({
     if (!resizingSidebar || !sidebarCollapsed) {
       return;
     }
-    const sidebar = appShellRef.current?.querySelector(SIDEBAR_RAIL_SELECTOR);
+    const sidebar = appShellRef.current?.querySelector(sidebarSelector);
     const active = document.activeElement;
     if (sidebar && active instanceof HTMLElement && sidebar.contains(active)) {
       active.blur();
     }
-  }, [appShellRef, resizingSidebar, sidebarCollapsed]);
+  }, [appShellRef, resizingSidebar, sidebarCollapsed, sidebarSelector]);
 
   useEffect(
     () => () => {

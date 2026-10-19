@@ -50,7 +50,7 @@ import {
   useSyncExternalStore
 } from "react";
 import { SidePanelToggleIcon } from "./SidePanelToggleIcon";
-import { useSidebarDrawerState } from "./SidebarDrawerState";
+import { useSidebarDrawerState, type SidebarDrawerPhase } from "./SidebarDrawerState";
 import { sidebarDrawerExitMs, sidebarMotionMs } from "./AppLayoutState";
 import { SelectMenu, type SelectMenuOption } from "./SelectMenu";
 import type {
@@ -194,14 +194,14 @@ type NativeSettingsGroup = {
   pages: NativeSettingsPage[];
 };
 
-function nativeSettingsGroups(): NativeSettingsGroup[] {
+function nativeSettingsGroups(browserSettingsAllowed: boolean): NativeSettingsGroup[] {
   return [
     {
       id: "app",
       pages: [
         "general",
         "appearance",
-        ...(browserSettingsAvailable() ? ["browser" as const] : []),
+        ...(browserSettingsAllowed && browserSettingsAvailable() ? ["browser" as const] : []),
         ...(remoteControlAvailable() ? ["remote" as const] : []),
       ],
     },
@@ -231,7 +231,7 @@ type CopyState = "idle" | "copying" | "copied";
 
 const COPY_RESET_MS = 1500;
 
-function availableSettingsPage(page: SettingsPage | undefined): SettingsPage {
+function availableSettingsPage(page: SettingsPage | undefined, browserSettingsAllowed: boolean): SettingsPage {
   const next = page ?? "providers";
   if (next === "subscriptions" && !ENABLE_SUBSCRIPTIONS) {
     return "providers";
@@ -239,13 +239,18 @@ function availableSettingsPage(page: SettingsPage | undefined): SettingsPage {
   if (next === "remote" && !remoteControlAvailable()) {
     return "providers";
   }
-  if (next === "browser" && !browserSettingsAvailable()) {
+  if (next === "browser" && (!browserSettingsAllowed || !browserSettingsAvailable())) {
     return "providers";
   }
   return next;
 }
 
 export function SettingsView({
+  browserSettingsAllowed = true,
+  embedded = false,
+  embeddedDrawerPhase,
+  onSidebarPointerEnter,
+  onSidebarPointerLeave,
   initialized,
   initialPage,
   running,
@@ -290,6 +295,11 @@ export function SettingsView({
   pluginHost = desktopPluginHost,
   workbenchController = desktopWorkbenchController,
 }: {
+  browserSettingsAllowed?: boolean;
+  embedded?: boolean;
+  embeddedDrawerPhase?: SidebarDrawerPhase;
+  onSidebarPointerEnter?: () => void;
+  onSidebarPointerLeave?: (event: ReactPointerEvent<HTMLElement>) => void;
   initialized?: InitializeResult;
   initialPage?: SettingsPage;
   running: boolean;
@@ -340,7 +350,7 @@ export function SettingsView({
   );
   const [desktopBuild, setDesktopBuild] = useState<DesktopBuildInfo | undefined>();
   const [activePage, setActivePage] = useState<SettingsPage>(() =>
-    availableSettingsPage(initialPage),
+    availableSettingsPage(initialPage, browserSettingsAllowed),
   );
   const [navQuery, setNavQuery] = useState("");
   const customPluginSettingsPages = useSyncExternalStore(
@@ -404,8 +414,8 @@ export function SettingsView({
   const advancedCommittedRef = useRef<Record<string, string>>({});
 
   useEffect(() => {
-    setActivePage(availableSettingsPage(initialPage));
-  }, [initialPage]);
+    setActivePage(availableSettingsPage(initialPage, browserSettingsAllowed));
+  }, [initialPage, browserSettingsAllowed]);
 
   useLayoutEffect(() => {
     const missingGeneratedPage = activePage.startsWith("plugin-settings:")
@@ -660,7 +670,7 @@ export function SettingsView({
   const fallbackShellRef = useRef<HTMLDivElement>(null);
   const effectiveShellRef = shellRef ?? fallbackShellRef;
   const {
-    sidebarDrawerPhase,
+    sidebarDrawerPhase: standaloneDrawerPhase,
     sidebarHoverZoneRef,
     scheduleSidebarDrawerOpen,
     cancelSidebarDrawerOpen,
@@ -668,13 +678,14 @@ export function SettingsView({
     scheduleSidebarDrawerCloseFromPointerLeave
   } = useSidebarDrawerState({
     appShellRef: effectiveShellRef,
-    sidebarCollapsed,
+    sidebarCollapsed: !embedded && sidebarCollapsed,
     resizingSidebar,
     motionMs: sidebarDrawerExitMs,
     dockingMotionMs: sidebarMotionMs,
     closeOnWindowResize: true
   });
-  const shellClassName = `settings-shell${resizingSidebar ? " resizing-sidebar" : ""}${
+  const sidebarDrawerPhase = embedded ? embeddedDrawerPhase : standaloneDrawerPhase;
+  const shellClassName = `settings-shell${embedded ? " settings-embedded" : ""}${resizingSidebar ? " resizing-sidebar" : ""}${
     sidebarCollapsed ? " sidebar-collapsed" : ""
   }${
     sidebarCollapsed && sidebarDrawerPhase === "open" ? " sidebar-drawer-open" : ""
@@ -689,7 +700,7 @@ export function SettingsView({
   }${sidebarAnimating ? " sidebar-animating" : ""}`;
 
   const pluginPageTitle = activePluginSettingsRecord?.name ?? activeCustomPluginPage?.title;
-  const nativeGroups = nativeSettingsGroups();
+  const nativeGroups = nativeSettingsGroups(browserSettingsAllowed);
   const nativePages = nativeGroups.flatMap((group) => group.pages);
   const normalizedNavQuery = navQuery.trim().toLocaleLowerCase();
   const pluginSearchTerms = `${t("settings.navPlugins")} plugin 插件`.toLocaleLowerCase();
@@ -730,10 +741,10 @@ export function SettingsView({
       id: pluginViewSettingsPageId(entry.pluginId, entry.id),
       label: entry.title,
     })),
-    // nativePages is derived from build flags and host capabilities,
-    // which do not change while the page is mounted.
+    // Apart from the window's browser-settings scope, nativePages is derived
+    // from build flags and host capabilities that stay fixed while mounted.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  ]), [customPluginSettingsPages, pluginSettingsRecords, t]);
+  ]), [browserSettingsAllowed, customPluginSettingsPages, pluginSettingsRecords, t]);
 
   const sidebarToggle = (
     <button
@@ -754,18 +765,19 @@ export function SettingsView({
 
   const nativeSettings = (
     <div ref={effectiveShellRef} className={shellClassName} style={shellStyle} data-wuu-component="settings-shell">
-      <div
+      {!embedded ? <div
         ref={sidebarHoverZoneRef}
         className="sidebar-hover-zone"
         aria-hidden="true"
         onPointerEnter={scheduleSidebarDrawerOpen}
         onPointerLeave={cancelSidebarDrawerOpen}
-      />
+      /> : null}
       <aside
         className="settings-sidebar"
         data-wuu-component="settings-sidebar"
-        onPointerEnter={openSidebarDrawer}
-        onPointerLeave={(event) =>
+        inert={embedded && sidebarCollapsed && sidebarDrawerPhase !== "open"}
+        onPointerEnter={embedded ? onSidebarPointerEnter : openSidebarDrawer}
+        onPointerLeave={embedded ? onSidebarPointerLeave : (event) =>
           scheduleSidebarDrawerCloseFromPointerLeave(event.nativeEvent)
         }
       >
@@ -775,11 +787,12 @@ export function SettingsView({
           * 淡出/位移也复用 sidebar.css 里同一组规则。
           */}
         <div className="sidebar-content">
-          <div className="traffic-spacer">{!sidebarCollapsed ? sidebarToggle : null}</div>
-          <button className="settings-back-button" type="button" onClick={onBack}>
+          {!embedded ? <div className="traffic-spacer">{!sidebarCollapsed ? sidebarToggle : null}</div> : null}
+          {embedded ? <h2 className="sidebar-section-title settings-navigation-title">{t("settings.navigation")}</h2> : null}
+          {!embedded ? <button className="settings-back-button" type="button" onClick={onBack}>
             <ArrowLeft className="icon" />
             <span>{t("settings.backToApp")}</span>
-          </button>
+          </button> : null}
           <div className="settings-search" role="search">
             <Search className="icon" aria-hidden="true" />
             <input
@@ -860,7 +873,7 @@ export function SettingsView({
           </nav>
         </div>
       </aside>
-      {sidebarCollapsed ? null : (
+      {sidebarCollapsed || embedded ? null : (
         <div
           className="sidebar-resizer"
           role="separator"
@@ -883,7 +896,7 @@ export function SettingsView({
             {isTouchWebShell() && <button type="button" className="settings-phone-back" aria-label={t("common.back")} onClick={onBack}><ArrowLeft size={22} /></button>}
             {/* Match the main shell's docked/collapsed slots. Keep the collapsed
              * toggle inside the drag strip so native hit testing honors no-drag. */}
-            {sidebarCollapsed ? sidebarToggle : null}
+            {sidebarCollapsed && !embedded ? sidebarToggle : null}
             <span className="settings-crumb-root">{t("settings.navigation")}</span>
             <span className="settings-crumb-separator" aria-hidden="true">/</span>
             <div ref={setTitlebarSlot} className="settings-titlebar-slot" />

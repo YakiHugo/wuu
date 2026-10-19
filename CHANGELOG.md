@@ -29,6 +29,7 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
   beside contextual conversation, catalog, and plugin navigation, within the
   existing sidebar width. Share one rounded workbench between the secondary
   sidebar and content, retaining conversation drafts and position across sections.
+  Use the same ribbon and frame for settings, with a shorter centered window toolbar.
   Keep search beside the Wuu wordmark. Show folder groups when used, unify the
   window header, and clarify process summaries above answers. Keep activity controls readable and adapt conversation
   gutters to the reading pane.

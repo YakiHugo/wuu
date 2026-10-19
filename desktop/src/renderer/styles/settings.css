@@ -2684,3 +2684,128 @@ button.settings-engine-expand:hover {
     animation: none;
   }
 }
+
+/* Settings shares the native workbench frame and drawer controller. The
+   existing settings presentation still owns its navigation and form pages. */
+.app-shell.navigation-ribbon-layout[data-settings-open] .sidebar {
+  pointer-events: none;
+}
+
+.app-shell.navigation-ribbon-layout[data-settings-open] .sidebar > .sidebar-content,
+.app-shell.navigation-ribbon-layout[data-settings-open] > :is(
+  .conversation-pane,
+  .workspace-right-panel,
+  .workspace-right-panel-resizer,
+  .shell-right-sidebar-toggle
+) {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.settings-standalone-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 119;
+  min-width: 0;
+  min-height: 0;
+}
+
+.app-shell:has(> .settings-standalone-layer) > .sidebar {
+  visibility: hidden;
+}
+
+.app-shell:has(> .settings-standalone-layer) > :is(
+  .sidebar-resizer,
+  .sidebar-hover-zone,
+  .globalized-sidebar-toggle-region,
+  .section-sidebar-toggle
+) {
+  display: none;
+}
+
+.settings-workbench-layer {
+  position: absolute;
+  inset: var(--workbench-top, var(--window-titlebar-height)) var(--conversation-pane-inset) var(--conversation-pane-inset) var(--sidebar-ribbon-width);
+  z-index: 119;
+  min-width: 0;
+  min-height: 0;
+  border-radius: var(--conversation-canvas-radius);
+  background: var(--wuu-color-canvas, var(--paper));
+}
+
+.app-shell .settings-shell.settings-embedded {
+  --canvas-titlebar-height: max(44px, calc(var(--control-size-toolbar) + var(--space-2) * 2));
+  grid-template-columns: max(0px, calc(var(--sidebar-width) - var(--sidebar-ribbon-width))) minmax(0, 1fr);
+  height: 100%;
+  padding: 0;
+  border-radius: inherit;
+  background: transparent;
+}
+
+.app-shell.navigation-ribbon-layout .settings-embedded .settings-sidebar {
+  grid-column: 1;
+  min-width: 0;
+  border: 0;
+  border-right: 1px solid var(--hairline-soft);
+  border-radius: 0;
+  background: var(--wuu-color-canvas, var(--paper));
+  box-shadow: none;
+}
+
+.app-shell.navigation-ribbon-layout .settings-embedded .settings-sidebar .sidebar-content {
+  width: calc(var(--sidebar-open-width) - var(--sidebar-ribbon-width));
+  min-width: calc(var(--sidebar-open-width) - var(--sidebar-ribbon-width));
+  height: 100%;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.app-shell.navigation-ribbon-layout .settings-embedded .settings-main {
+  margin: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.app-shell .settings-embedded .settings-main::before {
+  content: none;
+}
+
+.app-shell .settings-embedded .settings-titlebar {
+  padding: 0 var(--window-titlebar-padding-inline);
+}
+
+.app-shell .settings-embedded .settings-navigation-title {
+  margin: 0;
+  padding-block: 0;
+}
+
+.app-shell.navigation-ribbon-layout .settings-embedded.sidebar-collapsed .settings-sidebar,
+.app-shell.navigation-ribbon-layout .settings-embedded.sidebar-drawer-docking .settings-sidebar {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: calc(var(--sidebar-open-width) - var(--sidebar-ribbon-width));
+  min-width: calc(var(--sidebar-open-width) - var(--sidebar-ribbon-width));
+  transform: none;
+}
+
+.app-shell.navigation-ribbon-layout .settings-embedded.sidebar-collapsed:not(.sidebar-drawer-open):not(.sidebar-drawer-closing) .settings-sidebar {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.app-shell.navigation-ribbon-layout .settings-embedded.sidebar-collapsed:is(.sidebar-drawer-open, .sidebar-drawer-closing) .settings-sidebar {
+  box-shadow: var(--shadow-drawer-right);
+}
+
+.app-shell.navigation-ribbon-layout .settings-embedded.sidebar-drawer-closing .settings-sidebar .sidebar-content {
+  opacity: 0;
+  transform: translate3d(-18px, 0, 0);
+  pointer-events: none;
+}
+
+.app-shell.navigation-ribbon-layout[data-settings-open] > .sidebar-resizer,
+.app-shell.navigation-ribbon-layout[data-settings-open] > .sidebar-hover-zone {
+  z-index: 121;
+}

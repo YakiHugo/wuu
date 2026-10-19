@@ -538,9 +538,7 @@ export function App(): JSX.Element {
     window.addEventListener("wuu:add-response-selection", addSelection);
     return () => window.removeEventListener("wuu:add-response-selection", addSelection);
   }, [setComposerSelections, setSplitComposerDrafts]);
-  // Conversation notices link to a settings page, such as Model services
-  // after a rejected credential. The handler only calls state setters, so
-  // the first render's copy stays valid.
+  // Conversation notices share the latest settings navigation callback.
   useEffect(() => {
     const open = (event: Event): void => openSettingsPage((event as CustomEvent<OpenSettingsDetail>).detail.page);
     window.addEventListener(OPEN_SETTINGS_EVENT, open);
@@ -556,6 +554,9 @@ export function App(): JSX.Element {
   const closeWorkspaceMenu = useCallback(() => setWorkspaceMenuOpen(false), []);
   const appShellRef = useRef<HTMLDivElement>(null);
   const settingsShellRef = useRef<HTMLDivElement>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [nativeRibbonPresent, setNativeRibbonPresent] = useState(false);
+  const embeddedSettings = !poppedOutMode && nativeRibbonPresent;
   const [mainComposerFocusRequest, setMainComposerFocusRequest] =
     useState<MainComposerFocusRequest | null>(null);
   const userInteractionVersionRef = useRef(0);
@@ -644,8 +645,7 @@ export function App(): JSX.Element {
     return () => cancelAnimationFrame(raf);
   }, [workspaceSheetPhase]);
   // The bell view is a sidebar-level navigation mode rather than sidebar-local
-  // state: settings and account replace the whole workbench tree, so the flag
-  // has to live above it for the user to come back to the view they left.
+  // state so section changes and the account page retain the view the user left.
   const [unreadViewOpen, setUnreadViewOpen] = useState(false);
   const [attentionStickyIDs, setAttentionStickyIDs] = useState<Set<string>>(() => new Set());
   // A manually expanded workspace owns the main stage, not the navigation
@@ -664,7 +664,8 @@ export function App(): JSX.Element {
     scheduleSidebarDrawerCloseFromPointerLeave,
   } = useSidebarDrawerState({
     appShellRef,
-    sidebarCollapsed: sidebarDrawerMode,
+    sidebarSelector: settingsOpen ? ".settings-sidebar" : ".sidebar",
+    sidebarCollapsed: sidebarDrawerMode && !poppedOutMode && (!settingsOpen || embeddedSettings),
     resizingSidebar,
     motionMs: sidebarDrawerExitMs,
     dockingMotionMs: sidebarMotionMs,
@@ -716,7 +717,6 @@ export function App(): JSX.Element {
   const [catalogSection, setCatalogSection] = useState<SkillsCatalogSection>("plugins");
   const [catalogVisited, setCatalogVisited] = useState(false);
   const showingPrimaryPluginView = usePrimaryPluginViewCover();
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
   const [onboardingComplete, setOnboardingComplete] = useState(
     () => window.wuu?.initialOnboardingComplete ?? true,
@@ -827,6 +827,7 @@ export function App(): JSX.Element {
   ]);
   const revealConversationFromFocusedWorkspace = useCallback((): void => {
     desktopWorkbenchController.deactivateRegion("primary");
+    setSettingsOpen(false);
     setNativeSection("conversations");
     if (!rightPanelGlobalized) {
       return;
@@ -2491,6 +2492,7 @@ export function App(): JSX.Element {
     !splitConversation &&
     !showingManagementCatalog &&
     !workspaceToolsCoverConversation &&
+    !settingsOpen &&
     !showingPrimaryPluginView;
 
   useEffect(() => {
@@ -3498,11 +3500,7 @@ export function App(): JSX.Element {
           }
           void selectPermissionMode(mode, approveForMe);
         }}
-        onOpenSettings={() => {
-          closeWorkspaceMenus();
-          setSettingsInitialPage("providers");
-          setSettingsOpen(true);
-        }}
+        onOpenSettings={() => openSettingsPage("providers")}
         onOpenSkillsCatalog={openSkillsTab}
         onSelectWorkspace={(id) => void selectWorkspaceForNewThread(id)}
         onSelectNoProject={() => void useNoProject(false)}
@@ -3555,11 +3553,15 @@ export function App(): JSX.Element {
     );
   }
 
-  function openSettingsPage(page: SettingsPage): void {
+  const openSettingsPage = useStableCallback((page: SettingsPage): void => {
+    desktopWorkbenchController.deactivateRegion("primary");
     closeWorkspaceMenus();
+    closeConversationSearch({ immediate: true });
+    setEnvironmentDialog(null);
+    setPendingFork(undefined);
     setSettingsInitialPage(page);
     setSettingsOpen(true);
-  }
+  });
 
   function showNoModelConfiguredToast(): void {
     showToast({
@@ -3574,14 +3576,7 @@ export function App(): JSX.Element {
   }
 
   function openArchiveSettings(): void {
-    // Used by both the sidebar entry (when one is added later) and the
-    // archive-tip toast: always jump the Settings shell to the Archive page,
-    // even if Settings was already open on a different tab.
-    setWorkspaceMenuOpen(false);
-    setRuntimeMenuOpen(false);
-    setCodexRuntimeMenu(null);
-    setSettingsInitialPage("archive");
-    setSettingsOpen(true);
+    openSettingsPage("archive");
   }
 
   async function refreshModelCatalog(): Promise<void> {
@@ -3932,6 +3927,7 @@ export function App(): JSX.Element {
 
   function closePrimaryPluginView(): void {
     desktopWorkbenchController.deactivateRegion("primary");
+    setSettingsOpen(false);
     setNativeSection("conversations");
   }
 
@@ -3947,6 +3943,7 @@ export function App(): JSX.Element {
   function openSkillsTab(): void {
     if (!appStateRef.current.activeContext) return;
     desktopWorkbenchController.deactivateRegion("primary");
+    setSettingsOpen(false);
     setCatalogVisited(true);
     setNativeSection("catalog");
     if (rightPanelGlobalized) setRightPanelOpenWithMotion(false);
@@ -5390,72 +5387,6 @@ export function App(): JSX.Element {
     return <AccountScreen driver={window.wuu.remoteAccount} onBack={() => setAccountOpen(false)} />;
   }
 
-  if (settingsOpen) {
-    return (
-      <>
-        {archiveTipNode}
-        {modelCatalogTipNode}
-        {!archiveTip && !modelCatalogTip && failedDraftNotice}
-        <SettingsShellRenderer
-          initialized={state.initialized}
-          initialPage={settingsInitialPage}
-          running={viewContextSwitchPending}
-          runningProviderNames={runningProviderNames}
-          usage={settingsUsage}
-          usageLoading={settingsUsageLoading}
-          usageError={settingsUsageError}
-          engineInventory={engineInventory}
-          engineInventoryError={engineInventoryError}
-          codexPets={codexPets}
-          codexPetsLoading={codexPetsLoading}
-          codexPetsError={codexPetsError}
-          sidebarWidth={sidebarWidth}
-          resizingSidebar={resizingSidebar}
-          shellRef={settingsShellRef}
-          // The settings rail reuses the main sidebar's state and handlers
-          // wholesale — same persisted width, same collapse flag, same
-          // drag-to-collapse resize session, same toggle motion — so both
-          // shells behave identically. The drawer controller runs
-          // independently inside the settings shell (its own ref + phase)
-          // so settings navigation can stay visible until pointer exit.
-          sidebarCollapsed={sidebarCollapsed}
-          sidebarAnimating={sidebarAnimating}
-          onToggleSidebar={toggleSidebar}
-          onBack={() => {
-            setSettingsOpen(false);
-          }}
-          onSave={updateProviderSettings}
-          onRemoveProvider={removeProvider}
-          onRefreshModelCatalog={refreshModelCatalog}
-          onRefreshEngineInventory={() => refreshEngineInventory(true)}
-          onUpdateEngineInventory={updateEngineInventory}
-          onAdvancedSave={updateAdvancedSettings}
-          onGeneralSave={updateGeneralSettings}
-          onCodexPetsRefresh={refreshCodexPets}
-          onCodexPetsUpdate={updateCodexPets}
-          onSidebarResizeStart={startSidebarResize}
-          onSidebarResizerPointer={trackSidebarResizerPointer}
-          onSidebarSeparatorKey={handleSidebarSeparatorKey}
-          archivedThreads={state.threads
-            .filter((thread) => thread.archived)
-            .map((thread) => {
-              const project = state.projects.find((candidate) =>
-                threadBelongsToWorkspace(thread, candidate),
-              );
-              return {
-                ...thread,
-                archive_project_id: project?.id ?? "",
-                archive_project_name: project?.name ?? t("appState.noWorkspace"),
-              };
-            })}
-          onUnarchiveThread={(thread) => void unarchiveThread(thread)}
-          archiveDeletion={archiveDeletion}
-          onDeleteAllArchivedThreads={() => void archiveDeletion.removeAll()}
-          onRetryArchiveDeletion={() => void archiveDeletion.retry()}
-        />
-      </>
-    );
-  }
 
   if (!onboardingComplete) {
     return (
@@ -5541,6 +5472,7 @@ export function App(): JSX.Element {
           className={shellClassName}
           style={shellStyle}
           data-wuu-component="app-shell"
+          data-settings-open={settingsOpen ? "" : undefined}
           data-wuu-sidebar-mode={sidebarDrawerVisible ? "drawer" : sidebarDrawerMode ? "collapsed" : "docked"}
         >
           <BrowserPiPHostReporter />
@@ -5580,6 +5512,9 @@ export function App(): JSX.Element {
             <AppSidebar
               onShowConversations={showConversations}
               catalogActive={showingSkillsCatalog}
+              settingsActive={settingsOpen}
+              onLeaveSettings={() => setSettingsOpen(false)}
+              onRibbonPresenceChange={setNativeRibbonPresent}
               catalogSection={catalogSection}
               onSelectCatalogSection={setCatalogSection}
               sidebarCollapsed={sidebarCollapsed}
@@ -5697,13 +5632,7 @@ export function App(): JSX.Element {
                   if (window.wuu.openAccountWindow) void window.wuu.openAccountWindow().catch(error => showErrorToast(error));
                   else setAccountOpen(true);
                 } : undefined}
-              onOpenSettings={(page = "providers") => {
-                setWorkspaceMenuOpen(false);
-                setRuntimeMenuOpen(false);
-                setCodexRuntimeMenu(null);
-                setSettingsInitialPage(page);
-                setSettingsOpen(true);
-              }}
+              onOpenSettings={(page = "providers") => openSettingsPage(page)}
             />
           </HoverRevealScopeContext.Provider>
 
@@ -5713,7 +5642,7 @@ export function App(): JSX.Element {
           <div
             className="sidebar-resizer"
             hidden={sidebarDrawerMode}
-            inert={rightPanelOpen && rightPanelGlobalized}
+            inert={rightPanelOpen && rightPanelGlobalized && !settingsOpen}
             role="separator"
             aria-label={t("app.resizeSidebar")}
             aria-orientation="vertical"
@@ -5747,7 +5676,7 @@ export function App(): JSX.Element {
           ) : null}
 
       <main
-        inert={workspaceToolsCoverConversation}
+        inert={workspaceToolsCoverConversation || settingsOpen}
         data-wuu-component="conversation-pane"
         data-primary-plugin-view={showingPrimaryPluginView ? "" : undefined}
         data-native-section={showingManagementCatalog ? "catalog" : "conversations"}
@@ -5840,6 +5769,7 @@ export function App(): JSX.Element {
             inert={!showingManagementCatalog || showingPrimaryPluginView}
           >
             <SkillsCatalog
+              active={!settingsOpen && showingManagementCatalog && !showingPrimaryPluginView}
               section={catalogSection}
               onSectionChange={setCatalogSection}
               activeContext={state.activeContext}
@@ -6023,7 +5953,7 @@ export function App(): JSX.Element {
       {!poppedOutMode && (rightPanelOpen || rightPanelAnimating) ? (
         <div
           className="workspace-right-panel-resizer"
-          inert={rightPanelGlobalized}
+          inert={rightPanelGlobalized || settingsOpen}
           role="separator"
           aria-label={t("app.resizeRightSidebar")}
           aria-orientation="vertical"
@@ -6038,6 +5968,7 @@ export function App(): JSX.Element {
       ) : null}
       {poppedOutMode ? null : (
         <WorkspaceRightPanel
+          covered={settingsOpen}
           open={rightPanelOpen}
           present={rightPanelOpen || rightPanelAnimating}
           prewarm={Boolean(state.initialized)}
@@ -6150,7 +6081,7 @@ export function App(): JSX.Element {
       </>
 
 
-      {environmentDialog === "commit" ? (
+      {!settingsOpen && environmentDialog === "commit" ? (
         <CommitChangesDialog
           gitStatus={state.gitStatus}
           branch={state.gitStatus?.branch}
@@ -6159,7 +6090,7 @@ export function App(): JSX.Element {
           onGenerateMessage={generateEnvironmentCommitMessage}
         />
       ) : null}
-      {environmentDialog === "pull-request" ? (
+      {!settingsOpen && environmentDialog === "pull-request" ? (
         <PullRequestDialog
           gitStatus={state.gitStatus}
           disabledReason={pullRequestDisabledReason}
@@ -6167,14 +6098,75 @@ export function App(): JSX.Element {
           onCreate={createEnvironmentPullRequest}
         />
       ) : null}
-      {pendingFork ? (
+      {!settingsOpen && pendingFork ? (
         <ConversationForkDialog
           worktreeDisabledReason={forkWorktreeDisabledReason}
           onCancel={() => setPendingFork(undefined)}
           onChoose={choosePendingFork}
         />
       ) : null}
+      {settingsOpen ? (
+        <div className={embeddedSettings ? "settings-workbench-layer" : "settings-standalone-layer"}>
+        <SettingsShellRenderer
+          browserSettingsAllowed={!poppedOutMode}
+          embedded={embeddedSettings}
+          embeddedDrawerPhase={sidebarDrawerPhase}
+          onSidebarPointerEnter={openSidebarDrawer}
+          onSidebarPointerLeave={(event) => scheduleSidebarDrawerCloseFromPointerLeave(event.nativeEvent)}
+          initialized={state.initialized}
+          initialPage={settingsInitialPage}
+          running={viewContextSwitchPending}
+          runningProviderNames={runningProviderNames}
+          usage={settingsUsage}
+          usageLoading={settingsUsageLoading}
+          usageError={settingsUsageError}
+          engineInventory={engineInventory}
+          engineInventoryError={engineInventoryError}
+          codexPets={codexPets}
+          codexPetsLoading={codexPetsLoading}
+          codexPetsError={codexPetsError}
+          sidebarWidth={sidebarWidth}
+          resizingSidebar={resizingSidebar}
+          shellRef={settingsShellRef}
+          sidebarCollapsed={sidebarCollapsed}
+          sidebarAnimating={sidebarAnimating}
+          onToggleSidebar={toggleSidebar}
+          onBack={() => {
+            setSettingsOpen(false);
+          }}
+          onSave={updateProviderSettings}
+          onRemoveProvider={removeProvider}
+          onRefreshModelCatalog={refreshModelCatalog}
+          onRefreshEngineInventory={() => refreshEngineInventory(true)}
+          onUpdateEngineInventory={updateEngineInventory}
+          onAdvancedSave={updateAdvancedSettings}
+          onGeneralSave={updateGeneralSettings}
+          onCodexPetsRefresh={refreshCodexPets}
+          onCodexPetsUpdate={updateCodexPets}
+          onSidebarResizeStart={startSidebarResize}
+          onSidebarResizerPointer={trackSidebarResizerPointer}
+          onSidebarSeparatorKey={handleSidebarSeparatorKey}
+          archivedThreads={state.threads
+            .filter((thread) => thread.archived)
+            .map((thread) => {
+              const project = state.projects.find((candidate) =>
+                threadBelongsToWorkspace(thread, candidate),
+              );
+              return {
+                ...thread,
+                archive_project_id: project?.id ?? "",
+                archive_project_name: project?.name ?? t("appState.noWorkspace"),
+              };
+            })}
+          onUnarchiveThread={(thread) => void unarchiveThread(thread)}
+          archiveDeletion={archiveDeletion}
+          onDeleteAllArchivedThreads={() => void archiveDeletion.removeAll()}
+          onRetryArchiveDeletion={() => void archiveDeletion.retry()}
+        />
+        </div>
+      ) : null}
       <DesktopWorkbench
+        settingsOnly={settingsOpen}
         host={desktopPluginHost}
         controller={desktopWorkbenchController}
         inventory={state.initialized?.extension_inventory}
@@ -6191,10 +6183,7 @@ export function App(): JSX.Element {
             if (!window.wuu?.setPluginStorage) throw new Error("Plugin storage service is unavailable");
             await window.wuu.setPluginStorage({ id: pluginId, fingerprint: generation, key, value, scope });
           },
-          openSettings: () => {
-            setSettingsInitialPage("providers");
-            setSettingsOpen(true);
-          },
+          openSettings: () => openSettingsPage("providers"),
           disablePlugin: async (pluginId) => {
             await updateExtensionPackage({ id: pluginId, action: "disable" });
           },
@@ -6202,6 +6191,8 @@ export function App(): JSX.Element {
             console.error(`Plugin view ${pluginId}@${generation} failed to render`, error);
           },
           requestRegionVisible: (region) => {
+            if (region === "settings") openSettingsPage("providers");
+            else setSettingsOpen(false);
             if (region === "primary" && rightPanelGlobalized) setRightPanelOpenWithMotion(false);
             if (region === "auxiliary") setRightPanelOpenWithMotion(true);
           },

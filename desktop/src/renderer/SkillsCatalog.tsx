@@ -77,6 +77,7 @@ function showExtensionMutationError(error: unknown, fallback: string): void {
 export type SkillsCatalogSection = "plugins" | "skills";
 
 export function SkillsCatalog({
+  active = true,
   section,
   onSectionChange,
   activeContext,
@@ -87,6 +88,7 @@ export function SkillsCatalog({
   onInstallPluginPackage,
   onRemovePluginPackage,
 }: {
+  active?: boolean;
   section?: SkillsCatalogSection;
   onSectionChange?: (section: SkillsCatalogSection) => void;
   activeContext?: RuntimeContext;
@@ -119,6 +121,11 @@ export function SkillsCatalog({
     x: number;
     y: number;
   } | null>(null);
+  useEffect(() => {
+    if (active) return;
+    setPreviewSkill(null);
+    setPackageActionMenu(null);
+  }, [active]);
   const contextKey = activeContext ? runtimeContextKey(activeContext) : "";
   const contextKeyRef = useRef(contextKey);
   contextKeyRef.current = contextKey;

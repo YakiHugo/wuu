@@ -193,6 +193,7 @@ function initialWorkspaceFileTreeVisible(): boolean {
 
 export function WorkspaceRightPanel({
   open,
+  covered = false,
   present,
   prewarm = false,
   tabs,
@@ -228,6 +229,7 @@ export function WorkspaceRightPanel({
   workbenchController,
 }: {
   open: boolean;
+  covered?: boolean;
   present: boolean;
   prewarm?: boolean;
   tabs: WorkspaceViewTab[];
@@ -709,8 +711,8 @@ export function WorkspaceRightPanel({
             ? undefined
             : sheetPhase
       }
-      aria-hidden={!open}
-      inert={!open}
+      aria-hidden={!open || covered}
+      inert={!open || covered}
     >
       <div className="workspace-panel-tabbar" data-wuu-component="workspace-panel-header">
         <PluginSlot

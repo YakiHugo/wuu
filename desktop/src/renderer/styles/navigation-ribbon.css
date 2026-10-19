@@ -1,9 +1,23 @@
 /* The native ribbon and window chrome frame one shared workbench. Keep this
    surface on the shell so menus can leave either pane without being clipped
    by an extra wrapper, and replacement presenters retain their own layout. */
+:root:has(.app-shell.navigation-ribbon-layout:not(.popped-out-shell)) {
+  /* This icon-only strip shares the native controls' fixed 22-DIP axis.
+     Keep page zoom out of its geometry, including Linux caption buttons. */
+  --window-titlebar-height: calc(44px / var(--desktop-page-zoom, 1));
+}
+
 .app-shell.navigation-ribbon-layout:has(.sidebar-ribbon) {
   --canvas-titlebar-height: max(44px, calc(var(--control-size-toolbar) + var(--space-2) * 2));
   --workbench-top: var(--window-titlebar-height);
+  --workbench-control-size: calc(var(--control-size-toolbar) / var(--desktop-page-zoom, 1));
+}
+
+.navigation-ribbon-layout:has(.sidebar-ribbon) > :is(.section-sidebar-toggle, .shell-right-sidebar-toggle) {
+  /* Preserve their physical hitboxes and glyphs beside native chrome while
+     content text and its own toolbars continue to follow the saved zoom. */
+  --control-size-toolbar: var(--workbench-control-size);
+  --control-icon-size: calc(var(--icon-size) / var(--desktop-page-zoom, 1));
 }
 
 .app-shell.navigation-ribbon-layout:has(.sidebar-ribbon)::before {

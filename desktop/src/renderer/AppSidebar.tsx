@@ -455,6 +455,9 @@ export function AppSidebar({
   sidebarCollapsed = false,
   onShowConversations,
   catalogActive,
+  settingsActive = false,
+  onLeaveSettings,
+  onRibbonPresenceChange,
   catalogSection = "plugins",
   onSelectCatalogSection,
 }: {
@@ -532,10 +535,16 @@ export function AppSidebar({
   sidebarCollapsed?: boolean;
   onShowConversations?: () => void;
   catalogActive?: boolean;
+  settingsActive?: boolean;
+  onLeaveSettings?: () => void;
+  onRibbonPresenceChange?: (present: boolean) => void;
   catalogSection?: SkillsCatalogSection;
   onSelectCatalogSection?: (section: SkillsCatalogSection) => void;
 }): JSX.Element {
   const { t } = useI18n();
+  const ribbonRef = useCallback((element: HTMLElement | null) => {
+    onRibbonPresenceChange?.(element !== null);
+  }, [onRibbonPresenceChange]);
   const [attentionStickyIDsState, setAttentionStickyIDsState] = useState<Set<string>>(() => new Set());
   const attentionStickyIDs = attentionStickyIDsProp ?? attentionStickyIDsState;
   const attentionStickyIDsRef = useRef(attentionStickyIDs);
@@ -609,10 +618,10 @@ export function AppSidebar({
   );
   const activePluginMain = visibleWorkbenchView(workbenchSnapshot, "primary");
   const activePluginMainView = activePluginMain?.view;
-  const pluginCatalogActive = !activePluginMainView && (catalogActive ?? state.sessionTabs.some(
+  const pluginCatalogActive = !settingsActive && !activePluginMainView && (catalogActive ?? state.sessionTabs.some(
     (tab) => tab.id === state.activeSessionTabID && tab.kind === "skills",
   ));
-  const conversationsActive = !activePluginMainView && !pluginCatalogActive;
+  const conversationsActive = !settingsActive && !activePluginMainView && !pluginCatalogActive;
   const activeThreadID = conversationsActive ? nativeActiveThreadID : undefined;
   const pluginNavigationEntries = useMemo(
     () => primaryViewNavigation(declaredPluginNavigationEntries, workbenchSnapshot),
@@ -629,6 +638,7 @@ export function AppSidebar({
     activateNative(() => selectNativeWorkspaceThread(workspaceID, threadID));
   }, [activateNative, selectNativeWorkspaceThread]);
   const openPluginNavigation = useCallback((pluginId: string, viewTypeId: string, instanceId?: string): void => {
+    onLeaveSettings?.();
     if (instanceId) {
       workbenchController.activateView(instanceId);
       return;
@@ -638,7 +648,7 @@ export function AppSidebar({
       persistence: "durable",
       reveal: true,
     }).catch(() => workbenchController.deactivateRegion("primary"));
-  }, [workbenchController]);
+  }, [workbenchController, onLeaveSettings]);
 
   // Drag-and-drop reorder wiring for the reorderable sections. The 6px
   // activation distance lets plain clicks on the header (collapse toggle)
@@ -1768,7 +1778,7 @@ export function AppSidebar({
   const nativeSidebar = (
     <>
       <HoverRevealScopeContext.Provider value={null}>
-      <nav className="sidebar-ribbon" aria-label={t("sidebar.mainNavigation")}>
+      <nav ref={ribbonRef} className="sidebar-ribbon" aria-label={t("sidebar.mainNavigation")}>
         <div className="sidebar-ribbon-main scrollbar-hidden">
           <Tooltip content={t("sidebar.conversations")}>
             <button
@@ -1820,6 +1830,7 @@ export function AppSidebar({
               className="sidebar-ribbon-button"
               type="button"
               aria-label={t("sidebar.settings")}
+              aria-current={settingsActive ? "page" : undefined}
               disabled={!state.initialized}
               onClick={() => activateNative(onOpenSettings)}
             >
@@ -1836,7 +1847,7 @@ export function AppSidebar({
         </div>
       </nav>
       </HoverRevealScopeContext.Provider>
-      <div className="sidebar-content" inert={!sidebarVisible}>
+      <div className="sidebar-content" inert={!sidebarVisible || settingsActive} aria-hidden={settingsActive || undefined}>
         <div className="traffic-spacer" />
         {pluginCatalogActive ? (
           <nav className="sidebar-section-navigation" aria-label={t("skills.catalogLabel")}>
@@ -1854,7 +1865,7 @@ export function AppSidebar({
               </button>
             ))}
           </nav>
-        ) : activePluginMain ? (
+        ) : activePluginMain && !settingsActive ? (
           <nav className="sidebar-section-navigation" aria-label={activePluginMain.definition.title}>
             <h2 className="sidebar-section-title">{state.initialized?.extension_inventory?.find((record) =>
               record.provenance.plugin_id === activePluginMain.view.pluginId)?.name ?? activePluginMain.definition.title}</h2>
