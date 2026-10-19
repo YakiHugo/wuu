@@ -987,7 +987,9 @@ app.whenReady().then(async () => {
     browserSession.prependOnceListener("will-download", (event, item) => {
       // A policy regression must produce evidence, not hang a native save dialog.
       item.setSavePath(join(fixture!, `workspace-download-${++downloadSerial}.txt`));
-      item.once("done", (_event, state) => resolve(state));
+      // preventDefault can synchronously emit done(cancelled) before the
+      // session's remaining download handlers have returned.
+      item.once("done", (_event, state) => setImmediate(() => resolve(event.defaultPrevented ? "blocked" : state)));
       setImmediate(() => { if (event.defaultPrevented) resolve("blocked"); });
     });
   }));
@@ -1064,13 +1066,14 @@ app.whenReady().then(async () => {
   const independentChildDownload = nextWorkspaceDownload();
   workspaceChild.downloadURL(`${baseURL}/workspace-download`);
   const independentState = await independentChildDownload;
-  check("releasing opener never releases a child's independent lease", independentState === "blocked" && host.ownsWebContents(workspaceChild.id) && websiteDownloads.list(main).length === 0, independentState);
+  check("releasing opener never releases a child's independent lease", independentState === "blocked" && host.ownsWebContents(workspaceChild.id) && websiteDownloads.list(main).length === 0, JSON.stringify({ download: independentState, agentOwned: host.ownsWebContents(workspaceChild.id), downloads: websiteDownloads.list(main).length }));
   await finishControlled("OWNERSHIP_WORKSPACE_CHILD", childTask);
   const userChildDownload = nextWorkspaceDownload();
   workspaceChild.downloadURL(`${baseURL}/workspace-download`);
   const userDownloadState = await userChildDownload;
   check("released popup returns to ordinary user download policy", userDownloadState === "completed" && websiteDownloads.list(main).length === 1 && !workspaceChild.debugger.isAttached(), userDownloadState);
-  check("detach keeps native page and zoom while removing debugger and listeners", !ribbonContents.isDestroyed() && !ribbonContents.debugger.isAttached() && ribbonContents.listenerCount("before-input-event") === initialListeners && ribbonContents.getZoomFactor() === 1.25 && !host.ownsWebContents(nativeRibbonID));
+  const detachedRibbon = { destroyed: ribbonContents.isDestroyed(), debuggerAttached: ribbonContents.debugger.isAttached(), inputListeners: ribbonContents.listenerCount("before-input-event"), initialListeners, zoomFactor: ribbonContents.getZoomFactor(), agentOwned: host.ownsWebContents(nativeRibbonID) };
+  check("detach keeps native page and zoom while removing debugger and listeners", !detachedRibbon.destroyed && !detachedRibbon.debuggerAttached && detachedRibbon.inputListeners === initialListeners && detachedRibbon.zoomFactor === 1.25 && !detachedRibbon.agentOwned, JSON.stringify(detachedRibbon));
   const viewsBeforeDetachedRead = webContents.getAllWebContents().length;
   await controlledTool("OWNERSHIP_WORKSPACE", { action: "observe", tab_id: ribbonTab.tab_id });
   check("detached workspace read fails without recreating or adopting a page", webContents.getAllWebContents().length === viewsBeforeDetachedRead && !ribbonContents.debugger.isAttached());

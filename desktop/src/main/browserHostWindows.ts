@@ -1608,7 +1608,9 @@ export class BrowserHostCoordinator {
       entry.view.setBounds(entry.preview.restoreBounds);
       entry.preview = undefined;
     }
-    entry.contents.setZoomFactor(1);
+    // Borrowed pages keep the website host's zoom. Resetting a hidden sibling
+    // also changes its visible opener because Chromium shares origin zoom.
+    if (!entry.workspace) entry.contents.setZoomFactor(1);
   }
 
   private applySpectatorScrollbars(entry: TabEntry): void {

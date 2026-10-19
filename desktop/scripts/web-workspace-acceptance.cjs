@@ -228,11 +228,29 @@ async function runWebsiteAcceptance(h, fixture) {
     assert.equal((await prefs()).websites.length, 0);
     await click(pick('.ribbon-manager button', 'Cancel'), 'cancel-invalid');
     await click(pick('.ribbon-manager button', 'Close'), 'close-invalid');
+    // Resolve the actual shipped SVGs without visiting an external website.
+    // Both theme assets must decode, even when their optional plugin is off.
+    const brandedSites = [
+      ['Notion mark fixture', 'https://www.notion.so/', 'notion'],
+      ['Feishu mark fixture', 'https://www.feishu.cn/', 'feishu'],
+      ['ChatGPT mark fixture', 'https://chatgpt.com/', 'chatgpt'],
+    ];
+    for (const [title, url] of brandedSites) await addSite(title, url);
+    await waitFor(brands => brands.every(brand => {
+      const images = [...document.querySelectorAll(`.sidebar-ribbon-main [data-website-brand="${brand}"] img`)];
+      return images.length === 2 && images.every(image => image.complete && image.naturalWidth > 0);
+    }), brandedSites.map(site => site[2]), 'Shipped light and dark website SVGs decode');
+    const decodedMarks = await evaluate(() => [...document.querySelectorAll('.sidebar-ribbon-main [data-website-brand] img')]
+      .map(image => ({ brand: image.parentElement.dataset.websiteBrand, width: image.naturalWidth, height: image.naturalHeight, source: image.currentSrc })));
+    await capture('decoded-local-website-marks');
+    await click(manager, 'remove-unvisited-brand-fixtures');
+    for (const [title] of brandedSites) await click(`.ribbon-manager button[aria-label="Remove ${title} shortcut"]`, `remove-${title}`);
+    await click(pick('.ribbon-manager button', 'Close'), 'close-brand-fixtures');
     await addSite('Fixture Alpha', '/alpha'); await addSite('Fixture Beta', '/beta');
     const p = await prefs();
     alphaID = p.websites.find(site => site.title === 'Fixture Alpha').id;
     assert.equal(views().length, 0, 'Saved unvisited destinations create no native contents');
-    return { sites: p.websites, nativeViews: 0 };
+    return { sites: p.websites, nativeViews: 0, decodedMarks };
   });
 
   await testNative('ribbon reorders Chat away from first with real keyboard and pointer', async () => {

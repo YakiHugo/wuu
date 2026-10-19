@@ -115,14 +115,28 @@ finally:
     await pageClick(wc, '#seek', 'seek-local-video');
     await until(async () => Math.abs((await state()).time - 3) < 0.15, 'video seeks to requested time');
     const permission = observeNativeDecision('showMessageBox', 'Website permission', 'fullscreen', 1, 'allow-fixture-fullscreen');
+    const wasWindowFullscreen = win.isFullScreen();
     let fullscreen;
     try {
       await pageClick(wc, '#fullscreen', 'enter-video-fullscreen');
       await until(async () => (await state()).fullscreen, 'native video fullscreen entered');
-      fullscreen = { ...await state(), windowFullscreen: win.isFullScreen() };
+      await until(() => {
+        const bounds = nativeView('/media').getBounds(), [width, height] = win.getContentSize();
+        return bounds.x === 0 && bounds.y === 0 && bounds.width === width && bounds.height === height && wc.isFocused();
+      }, 'Fullscreen native video covers the whole window and keeps keyboard focus');
+      fullscreen = { ...await state(), windowFullscreen: win.isFullScreen(), nativeBounds: nativeView('/media').getBounds(), focused: wc.isFocused() };
       await capture('native-video-fullscreen');
       await permission.evidence(); xinput(['key', '--clearmodifiers', 'Escape']);
-      await until(async () => !(await state()).fullscreen, 'video fullscreen exited');
+      await until(async () => !(await state()).fullscreen && win.isFullScreen() === wasWindowFullscreen, 'video fullscreen exited');
+      await until(async () => {
+        const host = await evaluate(() => {
+          const rect = document.querySelector('.web-workspace-stage:not([hidden]) .web-workspace-host').getBoundingClientRect();
+          return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+        });
+        const bounds = nativeView('/media').getBounds(), zoom = win.webContents.getZoomFactor();
+        return wc.isFocused() && ['x', 'y', 'width', 'height'].every(key => Math.abs(bounds[key] - Math.round(host[key] * zoom)) <= 2);
+      }, 'Escape restores the normal native host bounds and keyboard focus');
+      await capture('native-video-fullscreen-exited');
     } finally { permission.restore(); xinput(['key', 'Escape']); }
     return { source: { sha256: fixture.media.sha256, codecs: ['H.264', 'AAC'] }, playing, paused, fullscreen, audioOutput: 'unverified; muted synthetic playback' };
   });

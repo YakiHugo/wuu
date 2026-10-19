@@ -29,6 +29,7 @@ type WorkspacePage = {
   view: WebContentsView;
   contents: WebContents;
   bounds: WebWorkspaceBounds | null;
+  htmlFullscreen?: boolean;
   requestedURL: string;
   navigationGeneration: number;
   error?: string;
@@ -115,7 +116,8 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
             page.automation = undefined;
             if (!page.contents.isDestroyed()) {
               page.contents.setBackgroundThrottling(true);
-              page.contents.setZoomFactor(page.tab.zoomFactor);
+              // Only visible layout reapplies tab zoom; releasing a hidden
+              // same-origin sibling must not change the user's active page.
               this.layout(page);
             }
             this.emit(page.group);
@@ -474,6 +476,20 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     group.owner.contentView.addChildView(view);
     this.secureContents(page, page.contents);
     page.contents.on("before-input-event", (event, input) => this.handleInput(page, event, input));
+    page.contents.on("enter-html-full-screen", () => {
+      page.htmlFullscreen = true;
+      // HTML fullscreen belongs to this native page, not the shell's ribbon
+      // viewport. Restore its focus after the permission dialog so Chromium
+      // receives the user's Escape key and handles fullscreen exit itself.
+      group.owner.contentView.addChildView(view);
+      this.layout(page);
+      if (view.getVisible()) page.contents.focus();
+    });
+    page.contents.on("leave-html-full-screen", () => {
+      page.htmlFullscreen = false;
+      this.layout(page);
+      if (!page.contents.isDestroyed() && page.bounds && view.getVisible()) page.contents.focus();
+    });
     page.contents.on("did-start-loading", () => { page.error = undefined; this.emit(group); });
     page.contents.on("did-stop-loading", () => this.emit(group));
     page.contents.on("did-start-navigation", details => {
@@ -613,9 +629,9 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
   }
 
   private layout(page: WorkspacePage): void {
-    const { owner, view, bounds } = page;
+    const { owner, view } = page;
     if (owner.isDestroyed() || page.contents.isDestroyed() || page.automation?.external) return;
-    if (!bounds || owner.isMinimized() || !owner.isVisible()) {
+    if (!page.bounds || owner.isMinimized() || !owner.isVisible()) {
       if (page.contents.isFocused()) owner.webContents.focus();
       if (view.getVisible()) view.setVisible(false);
       return;
@@ -624,8 +640,10 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     // Chromium converts zoom through logarithmic levels, so compare with a
     // tolerance instead of reapplying it for floating-point round-off.
     if (Math.abs(page.contents.getZoomFactor() - page.tab.zoomFactor) > 1e-6) page.contents.setZoomFactor(page.tab.zoomFactor);
-    const zoom = owner.webContents.getZoomFactor();
     const [width, height] = owner.getContentSize();
+    const htmlFullscreen = page.htmlFullscreen && page.group.activeTabId === page.tab.id;
+    const bounds = htmlFullscreen ? { x: 0, y: 0, width, height } : page.bounds;
+    const zoom = htmlFullscreen ? 1 : owner.webContents.getZoomFactor();
     const x = Math.max(0, Math.min(width, Math.round(bounds.x * zoom)));
     const y = Math.max(0, Math.min(height, Math.round(bounds.y * zoom)));
     const right = Math.max(x, Math.min(width, Math.round((bounds.x + bounds.width) * zoom)));
@@ -635,7 +653,10 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
       view.setBounds({ x, y, width: right - x, height: bottom - y });
     }
     const visible = right > x && bottom > y;
-    if (view.getVisible() !== visible) view.setVisible(visible);
+    if (view.getVisible() !== visible) {
+      view.setVisible(visible);
+      if (visible && htmlFullscreen) page.contents.focus();
+    }
   }
 
   private observeOwner(owner: BrowserWindow): void {
@@ -654,6 +675,15 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     owner.on("hide", layout);
     owner.on("minimize", layout);
     owner.on("restore", layout);
+    owner.on("enter-full-screen", () => {
+      layout();
+      // macOS completes its native transition asynchronously, after the HTML
+      // event. Reassert the requesting page's focus once that transition ends.
+      for (const page of this.pages.values()) {
+        if (page.owner === owner && page.htmlFullscreen && !page.contents.isDestroyed() && page.view.getVisible()) page.contents.focus();
+      }
+    });
+    owner.on("leave-full-screen", layout);
     owner.webContents.on("did-start-navigation", details => { if (details.isMainFrame && !details.isSameDocument) closePages(); });
     owner.webContents.on("render-process-gone", closePages);
     owner.once("closed", () => { closePages(); this.observedOwners.delete(id); });
