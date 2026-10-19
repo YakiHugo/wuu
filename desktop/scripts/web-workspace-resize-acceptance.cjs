@@ -110,7 +110,13 @@ module.exports = async function accept(h) {
       const bounds = [];
       const resized = () => bounds.push(win.getBounds());
       win.on('resize', resized);
-      const start = { x: horizontal < 0 ? 34 : horizontal > 0 ? 1466 : 750, y: vertical < 0 ? 34 : vertical > 0 ? 926 : 480 };
+      // Start Openbox's Alt-resize inside the live guest, away from Electron's
+      // draggable title strip, which can consume the top-edge pointer grab.
+      const outer = win.getContentBounds(), guest = view.getBounds();
+      const start = {
+        x: Math.round(outer.x + (horizontal < 0 ? guest.x + 20 : horizontal > 0 ? guest.x + guest.width - 20 : outer.width / 2)),
+        y: Math.round(outer.y + (vertical < 0 ? guest.y + 20 : vertical > 0 ? guest.y + guest.height - 20 : outer.height / 2)),
+      };
       const args = ['mousemove', '--sync', String(start.x), String(start.y), 'keydown', 'Alt_L', 'mousedown', '3'];
       for (let i = 1; i <= 96; i++) {
         const fraction = i <= 48 ? i / 48 : (96 - i) / 48;
@@ -130,6 +136,8 @@ module.exports = async function accept(h) {
       }
       await settle();
       const after = await wc.executeJavaScript('({ticks:window.ticks,inputs:window.resizeInputs,draft:document.querySelector("#draft").value,scroll:scrollY})');
+      const check = { name, input: 'X11/Openbox native pointer Alt+button3, not macOS', start, bounds, before, after, hiddenSamples };
+      checks.push(check);
       const range = key => Math.max(...bounds.map(b => b[key])) - Math.min(...bounds.map(b => b[key]));
       assert.ok(bounds.length > 10, name + ': native WM delivered resize events');
       if (horizontal) assert.ok(range('width') > 850, name + ': full horizontal range');
@@ -139,7 +147,7 @@ module.exports = async function accept(h) {
       assert.ok(after.inputs > before.inputs, name + ': input handled during drag');
       assert.ok(after.ticks > before.ticks + 10, name + ': animation continued');
       assert.ok(after.scroll > 0, name + ': reading position retained');
-      checks.push({ name, input: 'X11/Openbox native pointer Alt+button3, not macOS', bounds, before, after, hiddenSamples, geometry: await geometry(view) });
+      check.geometry = await geometry(view);
       await capture('native-' + name);
     }
   } finally { video.kill('SIGINT'); await videoDone; }
