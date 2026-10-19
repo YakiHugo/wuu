@@ -18,6 +18,46 @@
   --workbench-control-size: calc(var(--control-size-toolbar) / var(--desktop-page-zoom, 1));
 }
 
+/* Renderer-owned macOS lights fit in the ribbon. The workbench can therefore
+   use one symmetric inset instead of reserving a separate window-chrome row. */
+:root:has(.mac-window-controls) .app-shell.navigation-ribbon-layout:has(.sidebar-ribbon) {
+  --workbench-top: var(--conversation-pane-inset);
+}
+
+:root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon) > .section-sidebar-toggle {
+  top: calc(var(--workbench-top) + (var(--canvas-titlebar-height) - var(--control-size-toolbar)) / 2);
+}
+
+:root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon) .sidebar-brand-wordmark {
+  visibility: hidden;
+}
+
+:root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon).sidebar-collapsed .titlebar,
+:root:has(.mac-window-controls) .app-shell.sidebar-collapsed .settings-embedded .settings-titlebar {
+  padding-left: calc(var(--space-2) * 2 + var(--workbench-control-size) + var(--control-toolbar-gap));
+}
+
+:root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon) .sidebar-brand {
+  padding-bottom: 0;
+  -webkit-app-region: drag;
+}
+
+:root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon) .sidebar-ribbon {
+  padding-top: var(--window-titlebar-height);
+}
+
+:root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon) > .shell-right-sidebar-toggle {
+  top: calc(var(--workbench-top) + (var(--canvas-titlebar-height) - var(--control-size-toolbar)) / 2);
+}
+
+:root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon) :is(.titlebar, .workspace-panel-tabbar) {
+  padding-right: calc(var(--control-toolbar-inset) + var(--control-size-toolbar) + var(--control-toolbar-gap));
+}
+
+:root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon) .sidebar-section-title {
+  padding-left: calc(var(--control-size-toolbar) + var(--space-2));
+}
+
 .navigation-ribbon-layout:has(.sidebar-ribbon) > :is(.section-sidebar-toggle, .shell-right-sidebar-toggle) {
   /* Preserve their physical hitboxes and glyphs beside native chrome while
      content text and its own toolbars continue to follow the saved zoom. */

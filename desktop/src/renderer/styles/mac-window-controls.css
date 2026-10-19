@@ -1,0 +1,59 @@
+.mac-window-controls {
+  position: fixed;
+  top: calc((var(--window-titlebar-height) - 20px) / 2);
+  left: calc(14px / var(--desktop-page-zoom, 1));
+  z-index: 152;
+  display: flex;
+  -webkit-app-region: no-drag;
+}
+
+.mac-window-control {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  -webkit-app-region: no-drag;
+}
+
+.mac-window-control svg {
+  width: 10px;
+  height: 10px;
+  border: 1px solid color-mix(in srgb, var(--traffic-light-color) 80%, black);
+  border-radius: 50%;
+  background: var(--traffic-light-color);
+  fill: none;
+  stroke: #352a20;
+  stroke-width: 1.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  -webkit-app-region: no-drag;
+}
+
+.mac-window-close { --traffic-light-color: #ff5f57; }
+.mac-window-minimize { --traffic-light-color: #febc2e; }
+.mac-window-fullscreen { --traffic-light-color: #28c840; }
+
+.mac-window-control path { opacity: 0; }
+.mac-window-controls:hover path,
+.mac-window-control:focus-visible path { opacity: 1; }
+.mac-window-control:active svg { filter: brightness(0.85); }
+.mac-window-control:focus-visible {
+  border-radius: var(--radius-xs);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -1px;
+}
+
+/* Keep all three controls inside the existing ribbon, without widening it. */
+:root:has(.app-shell .sidebar-ribbon) .mac-window-controls {
+  top: var(--space-2);
+  left: 0;
+  width: var(--mac-ribbon-width);
+}
+
+:root:has(.app-shell .sidebar-ribbon) .mac-window-control {
+  width: calc(var(--mac-ribbon-width) / 3);
+  height: 24px;
+}

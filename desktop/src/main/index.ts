@@ -898,7 +898,7 @@ function windowBackgroundColor(): string {
 }
 
 // The window-chrome contract per platform: macOS hides the titlebar and
-// leaves the traffic lights over the renderer's drag strip (top-left);
+// uses renderer-drawn traffic lights over the drag strip (top-left);
 // Windows hides it and lets Chromium draw min/max/close as a controls
 // overlay (top-right — the renderer reserves that corner through the
 // --window-controls-inset-* variables). Linux is frameless: the renderer
@@ -914,32 +914,21 @@ function windowTitlebarHeight(win: BrowserWindow): number {
     : DEFAULT_TITLEBAR_HEIGHT;
 }
 
-// Native lights stay in DIP when the renderer zooms. Pop-outs and account
-// windows keep their taller content header; the main workbench has a compact
-// icon-only strip. Center the 14-DIP lights within the appropriate row.
-function macTrafficLightPosition(height: number): { x: number; y: number } {
-  return { x: 18, y: (height - 14) / 2 };
-}
-
-function applyMacTrafficLightPosition(win: BrowserWindow): void {
+// AppKit can restore native buttons after a fullscreen transition. Keep the
+// renderer-owned controls as the only visible set throughout the lifecycle.
+function applyMacWindowControls(win: BrowserWindow): void {
   if (process.platform !== "darwin" || win.isDestroyed()) return;
-  // Construction-time trafficLightPosition is a no-op until AppKit has
-  // attached the titlebar container. Packaged launches often paint before
-  // that happens, so the lights stay at hiddenInset's default (12, 11)
-  // until a later redraw. Re-apply after the window is actually shown.
-  win.setWindowButtonPosition(macTrafficLightPosition(windowTitlebarHeight(win)));
+  win.setWindowButtonVisibility(false);
 }
 
-function attachMacTrafficLightPosition(win: BrowserWindow): void {
+function attachMacWindowControls(win: BrowserWindow): void {
   if (process.platform !== "darwin") return;
-  const apply = (): void => applyMacTrafficLightPosition(win);
+  const apply = (): void => applyMacWindowControls(win);
   apply();
-  setImmediate(apply);
   win.on("ready-to-show", apply);
   win.on("show", apply);
   win.on("restore", apply);
-  win.on("maximize", apply);
-  win.on("unmaximize", apply);
+  win.on("enter-full-screen", apply);
   win.on("leave-full-screen", apply);
   win.webContents.on("did-finish-load", apply);
 }
@@ -948,14 +937,12 @@ function windowFrameOptions(height = DEFAULT_TITLEBAR_HEIGHT): Pick<
   BrowserWindowConstructorOptions,
   | "frame"
   | "titleBarStyle"
-  | "trafficLightPosition"
   | "titleBarOverlay"
   | "autoHideMenuBar"
 > {
   if (process.platform === "darwin") {
     return {
-      titleBarStyle: "hiddenInset",
-      trafficLightPosition: macTrafficLightPosition(height),
+      titleBarStyle: "hidden",
     };
   }
   if (usesWindowControlsOverlay()) {
@@ -992,7 +979,7 @@ const themedChromeWindows = new Set<BrowserWindow>();
 
 function registerThemedChromeWindow(win: BrowserWindow): void {
   themedChromeWindows.add(win);
-  attachMacTrafficLightPosition(win);
+  attachMacWindowControls(win);
   const sendMaximized = (): void => {
     if (win.isDestroyed()) return;
     sendToWindow(win, "wuu:window-maximized-changed", win.isMaximized());
@@ -2356,6 +2343,11 @@ app.whenReady().then(async () => {
     else win.maximize();
     return win.isMaximized();
   });
+  ipcMain.handle("wuu:window-toggle-full-screen", (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win || win.isDestroyed()) return;
+    win.setFullScreen(!win.isFullScreen());
+  });
   ipcMain.handle("wuu:window-close", (event) => {
     BrowserWindow.fromWebContents(event.sender)?.close();
   });
@@ -2408,7 +2400,7 @@ app.whenReady().then(async () => {
     completeOnboarding();
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.setResizable(true);
-      applyMacTrafficLightPosition(mainWindow);
+      applyMacWindowControls(mainWindow);
       if (usesWindowControlsOverlay()) {
         mainWindow.setTitleBarOverlay(nonMacTitleBarOverlay(WORKBENCH_TITLEBAR_HEIGHT));
       }
