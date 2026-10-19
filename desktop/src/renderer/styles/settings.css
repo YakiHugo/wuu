@@ -312,13 +312,7 @@
  * edge. Keep the toggle clear of the macOS traffic lights, matching the
  * main conversation titlebar reservation. */
 .settings-shell.sidebar-collapsed .settings-titlebar {
-  padding-left: calc(var(--window-titlebar-leading-inset) - var(--conversation-pane-inset));
-}
-
-/* Both toggle slots belong to a drag strip. A shell-level overlay would
- * receive DOM hits but lose native clicks to window dragging. */
-.settings-sidebar-toggle {
-  -webkit-app-region: no-drag;
+  padding-left: calc(var(--window-titlebar-leading-inset) - var(--conversation-pane-inset) + var(--control-size-toolbar) + var(--control-toolbar-gap));
 }
 
 /* Column direction is load-bearing, not cosmetic: .settings-page carries
@@ -369,22 +363,9 @@
   animation: content-swap-enter var(--content-swap-duration) var(--content-swap-easing) both;
 }
 
-/* --- Titlebar crumb ------------------------------------------------------
- * "Settings / Page" sits in the window strip, set like the conversation
- * title, with page actions at its trailing edge. The page opens on its
- * scope line or first group instead of repeating its name in large type.
- * ------------------------------------------------------------------------- */
-
+/* The current page title and actions share the window strip. */
 .settings-titlebar {
   gap: var(--space-2);
-}
-
-.settings-crumb-root,
-.settings-crumb-separator {
-  flex: 0 0 auto;
-  color: var(--ink-tertiary);
-  font-size: var(--font-body);
-  white-space: nowrap;
 }
 
 .settings-titlebar-slot {

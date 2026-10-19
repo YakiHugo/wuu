@@ -312,11 +312,14 @@
   padding-right: calc(max(var(--control-toolbar-inset), var(--window-controls-inset-right)) + var(--control-size-toolbar) + var(--control-toolbar-gap));
 }
 
-.app-shell.sidebar-collapsed .titlebar,
 .app-shell.popped-out-shell .titlebar {
-  /* The native-controls exclusion and the lifted drawer toggle are measured
-     from the window edge, while this titlebar starts inside the canvas inset. */
+  /* Native-controls clearance is measured from the window edge; the
+   * titlebar starts inside the canvas inset. */
   padding-left: calc(var(--window-titlebar-leading-inset) - var(--conversation-pane-inset));
+}
+
+.app-shell.sidebar-collapsed:not(.popped-out-shell) .titlebar {
+  padding-left: calc(var(--window-titlebar-leading-inset) - var(--conversation-pane-inset) + var(--control-size-toolbar) + var(--control-toolbar-gap));
 }
 
 .title-block,
@@ -336,14 +339,6 @@
   min-width: 0;
   gap: max(0px, calc(var(--title-visible-gap) - 2 * var(--title-icon-ink-inset)));
   overflow: hidden;
-}
-
-/* With the macOS sidebar collapsed, the green light's trailing edge is
- * 78 native DIP (see MAC_TRAFFIC_LIGHT_POSITION). Use its visible distance
- * to the sidebar glyph as the reference for both following gaps. */
-:root:not([data-platform="win32"]):not([data-platform="linux"]):not([data-host-kind="web"])
-  .app-shell.sidebar-collapsed .title-block {
-  --title-visible-gap: calc(var(--window-titlebar-leading-inset) - 78px / var(--desktop-page-zoom, 1) + var(--title-icon-ink-inset));
 }
 
 .conversation-title-heading {

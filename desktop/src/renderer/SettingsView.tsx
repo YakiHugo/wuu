@@ -741,7 +741,7 @@ export function SettingsView({
   const sidebarToggle = (
     <button
       type="button"
-      className="icon-button side-panel-toggle-button sidebar-toggle-button sidebar-collapse-toggle settings-sidebar-toggle"
+      className="icon-button side-panel-toggle-button sidebar-toggle-button shell-left-sidebar-toggle settings-sidebar-toggle"
       data-wuu-component="sidebar-toggle"
       aria-label={sidebarCollapsed ? t("settings.expandSidebar") : t("settings.collapseSidebar")}
       aria-pressed={!sidebarCollapsed}
@@ -778,7 +778,7 @@ export function SettingsView({
           * 淡出/位移也复用 sidebar.css 里同一组规则。
           */}
         <div className="sidebar-content">
-          <div className="traffic-spacer">{!sidebarCollapsed ? sidebarToggle : null}</div>
+          <div className="traffic-spacer" />
           <button className="settings-back-button" type="button" onClick={onBack}>
             <ArrowLeft className="icon" />
             <span>{t("settings.backToApp")}</span>
@@ -886,11 +886,6 @@ export function SettingsView({
         <SettingsTitlebarSlot.Provider value={titlebarSlot}>
           <div className="settings-titlebar">
             {isTouchWebShell() && <button type="button" className="settings-phone-back" aria-label={t("common.back")} onClick={onBack}><ArrowLeft size={22} /></button>}
-            {/* Match the main shell's docked/collapsed slots. Keep the collapsed
-             * toggle inside the drag strip so native hit testing honors no-drag. */}
-            {sidebarCollapsed ? sidebarToggle : null}
-            <span className="settings-crumb-root">{t("settings.navigation")}</span>
-            <span className="settings-crumb-separator" aria-hidden="true">/</span>
             <div ref={setTitlebarSlot} className="settings-titlebar-slot" />
           </div>
           <div ref={settingsScrollRef} className="settings-scroll">
@@ -1019,6 +1014,8 @@ export function SettingsView({
           </div>
         </SettingsTitlebarSlot.Provider>
       </main>
+      {/* Keep native no-drag hit testing after every window drag strip. */}
+      {sidebarToggle}
     </div>
   );
   return (

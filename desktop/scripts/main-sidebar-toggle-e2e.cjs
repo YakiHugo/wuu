@@ -37,7 +37,12 @@ app.whenReady().then(async () => {
       savedCollapsed: localStorage.getItem('wuu.desktop.sidebarCollapsed'),
       savedWidth: localStorage.getItem('wuu.desktop.sidebarWidth'),
       button: rect?.toJSON(), hitsButton: !!button && (hit === button || button.contains(hit)),
-      focusVisible: button?.matches(':focus-visible'),
+      focusVisible: button?.matches(':focus-visible'), focused: document.activeElement === button,
+      sameButton: button === window.sidebarToggleUnderTest,
+      buttonCount: document.querySelectorAll('${toggle}').length,
+      shellOwned: button?.parentElement === shell,
+      outsideHiddenContent: !button?.closest('aside, [inert], .conversation-pane'),
+      sidebarVisible: document.querySelector('.sidebar').checkVisibility({ checkVisibilityCSS: true, checkOpacity: true }),
       titlebar: !!document.querySelector('[data-wuu-component="conversation-titlebar"]') };
   })()`);
   async function settled() {
@@ -69,11 +74,15 @@ app.whenReady().then(async () => {
     await js(`document.documentElement.dataset.theme='${theme}';document.documentElement.style.setProperty('--font-ui','${font}px')`);
     await resize(1200);
     if (await js(collapsed)) { await clickToggle(); await wait(`!(${collapsed})`); await settled(); }
+    await js(`window.sidebarToggleUnderTest = document.querySelector('${toggle}')`);
     const original = await measure();
+    assert.equal(original.buttonCount, 1);
+    assert(original.shellOwned && original.outsideHiddenContent, JSON.stringify(original));
     for (const width of [820, 760, 759, 600, 440, 1200]) {
       await resize(width);
       const current = await measure();
       assert.equal(current.mode, "docked", JSON.stringify(current));
+      assert(current.sameButton && current.shellOwned && current.outsideHiddenContent, JSON.stringify(current));
       assert.equal(current.reserved, original.reserved);
       assert.equal(current.savedWidth, original.savedWidth);
       assert.equal(current.savedCollapsed, "false");
@@ -92,6 +101,10 @@ app.whenReady().then(async () => {
       assert(await js(collapsed));
       const current = await measure();
       assert.equal(current.reserved, 0);
+      assert.equal(current.buttonCount, 1);
+      assert(current.sameButton && current.hitsButton && current.outsideHiddenContent, JSON.stringify(current));
+      assert(current.sidebar.right <= 0 || !current.sidebarVisible,
+        `Collapsed sidebar must be fully hidden: ${JSON.stringify(current)}`);
       assert.equal(current.savedCollapsed, "true");
       report.push({ theme, font, ...current });
     }
@@ -103,8 +116,21 @@ app.whenReady().then(async () => {
     await clickToggle(); await wait(`!(${collapsed})`); await settled();
     away(); await js(`document.querySelector('${toggle}').focus()`);
     key("Enter"); await wait(collapsed); await settled();
-    await js(`document.querySelector('${toggle}').focus()`);
+    const keyboardCollapsed = await measure();
+    assert(keyboardCollapsed.sameButton && keyboardCollapsed.focused, "Collapse must preserve the focused DOM button");
+    assert(keyboardCollapsed.sidebar.right <= 0 || !keyboardCollapsed.sidebarVisible,
+      `A focused collapse toggle must not keep the sidebar exposed: ${JSON.stringify(keyboardCollapsed)}`);
+    assert(keyboardCollapsed.hitsButton && keyboardCollapsed.outsideHiddenContent, JSON.stringify(keyboardCollapsed));
+    for (const axis of ["x", "y"]) assert(Math.abs(keyboardCollapsed.button[axis] - original.button[axis]) < 0.1,
+      `Collapse must not move toggle ${axis}`);
+    // A second keypress must work without focusing a replacement control.
     key("Enter"); await wait(`!(${collapsed})`); await settled();
+    const keyboardDocked = await measure();
+    assert(keyboardDocked.sameButton && keyboardDocked.focused && keyboardDocked.hitsButton,
+      "Docking must retain the same focused, hittable button");
+    for (const axis of ["x", "y"]) assert(Math.abs(keyboardDocked.button[axis] - keyboardCollapsed.button[axis]) < 0.1,
+      `Docking must not move toggle ${axis}`);
+    report.push({ theme, font, keyboardCollapsed, keyboardDocked });
     report.push({ theme, font, hover, keyboard: await measure() });
   }
   assert.equal(errors.length, 0, errors.join("\n"));

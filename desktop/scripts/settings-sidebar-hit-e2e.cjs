@@ -77,6 +77,48 @@ async function run() {
   });
   await waitFor(win, () => Boolean(document.querySelector(".settings-shell")), 3000);
 
+  for (const page of ["appearance", "providers"]) {
+    await win.webContents.executeJavaScript(`document.querySelector('.settings-nav-item[data-wuu-page="${page}"]').click()`);
+    await waitFor(win, page === "appearance"
+      ? () => document.querySelector('.settings-page')?.dataset.wuuPage === 'appearance'
+      : () => document.querySelector('.settings-page')?.dataset.wuuPage === 'providers', 3000);
+    await settleChrome(win);
+    const heading = await evaluate(win, () => ({
+      title: document.querySelector('.settings-titlebar h1')?.textContent.trim(),
+      activeLabel: document.querySelector('.settings-nav-item[aria-current="page"] .settings-nav-label')?.textContent.trim(),
+      breadcrumbs: document.querySelectorAll('.settings-crumb-root, .settings-crumb-separator').length,
+    }));
+    assert(heading.title, "Settings navigation must retain the active page heading");
+    assert.equal(heading.title, heading.activeLabel, "Heading must follow settings navigation");
+    assert.equal(heading.breadcrumbs, 0);
+    results.push({ scenario: "settings-page-navigation", page, heading });
+  }
+
+  await settleChrome(win);
+  await evaluate(win, () => {
+    window.settingsToggleUnderTest = document.querySelector('.settings-sidebar-toggle');
+    window.settingsToggleUnderTest.focus();
+  });
+  const keyboardDocked = await toggleHitState(win);
+  for (const collapsed of [true, false]) {
+    win.webContents.sendInputEvent({ type: "keyDown", keyCode: "Enter" });
+    win.webContents.sendInputEvent({ type: "char", keyCode: "\r" });
+    win.webContents.sendInputEvent({ type: "keyUp", keyCode: "Enter" });
+    await waitFor(win, collapsed
+      ? () => document.querySelector('.settings-shell').classList.contains('sidebar-collapsed')
+      : () => !document.querySelector('.settings-shell').classList.contains('sidebar-collapsed'), 3000);
+    await settleChrome(win);
+    const state = await toggleHitState(win);
+    assert.equal(state.buttonCount, 1);
+    assert(state.sameButton && state.focused && state.shellOwned && state.outsideHiddenContent, JSON.stringify(state));
+    assert.equal(state.centerX, keyboardDocked.centerX, "Settings collapse must not move toggle horizontally");
+    assert.equal(state.centerY, keyboardDocked.centerY, "Settings collapse must not move toggle vertically");
+    assert(state.hitOwnedByToggle, JSON.stringify(state));
+    if (collapsed) assert(state.sidebarRight <= 0 || !state.sidebarVisible,
+      `Focused settings toggle must not keep navigation exposed: ${JSON.stringify(state)}`);
+    results.push({ scenario: "settings-keyboard-toggle", collapsed, state });
+  }
+
   await evaluate(win, () => {
     const button = document.querySelector(".settings-sidebar-toggle");
     if (!(button instanceof HTMLButtonElement)) {
@@ -208,6 +250,19 @@ async function verifyTitlebarContinuity(win) {
           results.push({ scenario, page: "settings", geometry: settings });
           saveResults();
           assertTopRow(settings, { theme, font, zoom, layout, page: "settings" });
+          const settingsHeader = await evaluate(win, () => ({
+            breadcrumbs: document.querySelectorAll('.settings-crumb-root, .settings-crumb-separator').length,
+            headings: [...document.querySelectorAll('.settings-titlebar h1')].map(element => ({
+              text: element.textContent.trim(), visible: element.checkVisibility({ checkVisibilityCSS: true, checkOpacity: true }),
+            })),
+            actions: document.querySelectorAll('.settings-titlebar .settings-page-actions button').length,
+            page: document.querySelector('.settings-page')?.dataset.wuuPage,
+          }));
+          assert.equal(settingsHeader.breadcrumbs, 0, "Redundant settings breadcrumbs must be absent");
+          assert.equal(settingsHeader.headings.length, 1, "The active settings page must keep its h1");
+          assert(settingsHeader.headings[0].text && settingsHeader.headings[0].visible, JSON.stringify(settingsHeader));
+          assert.equal(settingsHeader.page, "providers");
+          assert(settingsHeader.actions > 0, "Provider page actions must remain in the titlebar");
           if (zoom === 1 && font !== 13) await capture(win, `${scenario}-settings.png`);
           const context = JSON.stringify({ theme, font, zoom, layout, main, settings });
           assert.deepEqual(settings.clippedChrome, [], `Settings chrome must fit: ${context}`);
@@ -273,7 +328,7 @@ async function chromeToggleGeometry(win) {
     const peers = [...document.querySelectorAll([
       '[data-wuu-component="sidebar-toggle"]', '.conversation-title-heading h1',
       '.conversation-title-heading .icon-button', '[data-wuu-component="right-sidebar-toggle"]',
-      '.title-actions .icon-button', '.settings-crumb-root', '.settings-crumb-separator',
+      '.title-actions .icon-button',
       '.settings-titlebar-slot > .settings-page-title', '.settings-titlebar-slot .settings-page-actions button',
     ].join(','))].filter(element => element.checkVisibility({ checkVisibilityCSS: true, checkOpacity: true }))
       .map(element => {
@@ -299,7 +354,7 @@ async function chromeToggleGeometry(win) {
 
 async function toggleHitState(win) {
   return evaluate(win, () => {
-    const toggle = document.querySelector(".settings-titlebar .settings-sidebar-toggle");
+    const toggle = document.querySelector(".settings-shell > .settings-sidebar-toggle");
     if (!(toggle instanceof HTMLButtonElement)) {
       throw new Error("Settings sidebar toggle not found.");
     }
@@ -311,6 +366,13 @@ async function toggleHitState(win) {
     return {
       centerX,
       centerY,
+      buttonCount: document.querySelectorAll('[data-wuu-component="sidebar-toggle"]').length,
+      sameButton: toggle === window.settingsToggleUnderTest,
+      focused: document.activeElement === toggle,
+      shellOwned: toggle.parentElement === document.querySelector('.settings-shell'),
+      outsideHiddenContent: !toggle.closest('aside, [inert], .settings-main'),
+      sidebarRight: document.querySelector('.settings-sidebar').getBoundingClientRect().right,
+      sidebarVisible: document.querySelector('.settings-sidebar').checkVisibility({ checkVisibilityCSS: true, checkOpacity: true }),
       hitOwnedByToggle: hit === toggle || toggle.contains(hit),
       hitTag: hit?.tagName ?? null,
       hovered: toggle.matches(":hover"),

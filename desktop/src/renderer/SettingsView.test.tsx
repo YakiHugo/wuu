@@ -284,7 +284,7 @@ describe("SettingsView shell", () => {
     const shell = container.querySelector<HTMLElement>(".settings-shell");
     const sidebar = container.querySelector<HTMLElement>(".settings-sidebar");
     const toggle = container.querySelector<HTMLElement>(
-      ".settings-titlebar .settings-sidebar-toggle",
+      ".settings-shell > .settings-sidebar-toggle",
     );
     expect(sidebar).not.toBeNull();
     expect(toggle).not.toBeNull();
@@ -325,7 +325,7 @@ describe("SettingsView shell", () => {
 
     const shell = container.querySelector<HTMLElement>(".settings-shell");
     const toggle = container.querySelector<HTMLElement>(
-      ".settings-titlebar .settings-sidebar-toggle",
+      ".settings-shell > .settings-sidebar-toggle",
     );
     expect(toggle).not.toBeNull();
 
