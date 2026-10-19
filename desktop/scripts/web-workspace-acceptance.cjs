@@ -126,6 +126,27 @@ async function runWebsiteAcceptance(h, fixture) {
     await click(target, 'focus-native-popover-input', false);
     await until(() => wc.isFocused(), 'Native popover owns keyboard focus before typing');
     await waitPopover(selector => document.hasFocus() && document.activeElement?.matches(selector), query);
+    const nativeInputEvents = [];
+    const observeNativeInput = (_event, input) => { if (nativeInputEvents.length < 100) nativeInputEvents.push({ at: Date.now() - started, ...input }); };
+    wc.on('before-input-event', observeNativeInput);
+    await evaluateContents(wc, selector => {
+      const events = [], input = document.querySelector(selector);
+      const snapshot = (type, event) => {
+        if (events.length >= 160) return;
+        events.push({ type, at: performance.now(), trusted: event?.isTrusted, key: event?.key, data: event?.data,
+          inputType: event?.inputType, ctrl: event?.ctrlKey, alt: event?.altKey, meta: event?.metaKey, shift: event?.shiftKey, defaultPrevented: event?.defaultPrevented,
+          focused: document.hasFocus(), active: document.activeElement === input,
+          connected: input?.isConnected, value: input?.value, selection: [input?.selectionStart, input?.selectionEnd] });
+      };
+      const types = ['keydown', 'keyup', 'beforeinput', 'input', 'change', 'selectionchange', 'focusin', 'focusout'];
+      const observe = event => {
+        snapshot(event.type, event);
+        if (event.type === 'input') requestAnimationFrame(() => snapshot('input-next-frame'));
+      };
+      types.forEach(type => document.addEventListener(type, observe, true));
+      window.__wuuAcceptancePopoverInput = { events, snapshot, stop: () => types.forEach(type => document.removeEventListener(type, observe, true)) };
+      snapshot('before-native-select-all');
+    }, query);
     try {
       xinput(['key', '--clearmodifiers', 'ctrl+a']);
       await waitPopover(selector => { const input = document.querySelector(selector); return document.hasFocus() && document.activeElement === input
@@ -134,15 +155,27 @@ async function runWebsiteAcceptance(h, fixture) {
       // sending the next. No dropped character is retried or silently repaired.
       let entered = '';
       for (const character of value) {
+        await evaluateContents(wc, character => window.__wuuAcceptancePopoverInput.snapshot(`before-native-character:${character}`), character);
         xinput(['type', '--clearmodifiers', '--delay', '8', character]);
         entered += character;
         await waitPopover(({ selector, value }) => document.querySelector(selector)?.value === value, { selector: query, value: entered });
+        await evaluateContents(wc, () => window.__wuuAcceptancePopoverInput.snapshot('native-character-acknowledged'));
       }
       if (!value) { xinput(['key', 'BackSpace']); await waitPopover(selector => document.querySelector(selector)?.value === '', query); }
     } catch (error) {
       report.nativePopoverInputFailure = { selector: query, expected: value, focusedContentsID: webContents.getFocusedWebContents()?.id,
         input: await evaluateContents(wc, selector => { const input = document.querySelector(selector); return { focused: document.hasFocus(), active: document.activeElement?.outerHTML.slice(0, 300), value: input?.value, selection: [input?.selectionStart, input?.selectionEnd] }; }, query) };
       save(); throw error;
+    } finally {
+      wc.removeListener('before-input-event', observeNativeInput);
+      report.nativePopoverInputTraces ||= [];
+      report.nativePopoverInputTraces.push({ selector: query, expected: value, contentsID: wc.id, nativeInputEvents,
+        events: await evaluateContents(wc, () => {
+          const trace = window.__wuuAcceptancePopoverInput;
+          trace?.snapshot('finished'); trace?.stop(); delete window.__wuuAcceptancePopoverInput;
+          return trace?.events;
+        }).catch(error => ({ error: String(error) })) });
+      save();
     }
   }
   async function chromePoint(target) {
