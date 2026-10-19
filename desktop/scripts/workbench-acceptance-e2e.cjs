@@ -237,6 +237,25 @@ async function test(name, fn) {
     // Preserve the original failure and its pixels before using real dismissal
     // controls, so one failed modal does not contaminate independent journeys.
     try {
+      // A failed native drag can leave the window manager's move grab active.
+      // Renderer key events cannot cancel that grab. Release the real pointer
+      // and send native Escape with event-loop gaps before resetting geometry.
+      const before = win.getBounds();
+      for (const args of [['mouseup', '1'], ['key', '--clearmodifiers', 'Escape'], ['mouseup', '1']]) {
+        const result = spawnSync('xdotool', args, { encoding: 'utf8', timeout: 3000 });
+        assert.equal(result.status, 0, result.stderr || String(result.error));
+        await delay(120);
+      }
+      if (win.isFullScreen()) win.setFullScreen(false);
+      if (win.isMaximized()) win.unmaximize();
+      win.show(); win.focus();
+      await delay(120);
+      win.setBounds({ x: 30, y: 30, width: 1280, height: 900 });
+      await delay(200);
+      const after = win.getBounds();
+      assert.ok(after.x >= 0 && after.y >= 0 && after.x + after.width <= 1600
+        && after.y + after.height <= 1000, 'Failed-journey window returns inside the recorded display');
+      failure.recoveryGeometry = { before, after };
       for (let attempt = 0; attempt < 3; attempt++) {
         key('Escape');
         await settle();
@@ -248,7 +267,7 @@ async function test(name, fn) {
         .some(node => node.getBoundingClientRect().width > 0), undefined, 'failed-journey modal dismissed', 3000);
       await goConversations();
       await dockSidebar();
-      failure.recovery = 'Returned to Conversations through Escape and ribbon controls';
+      failure.recovery = 'Released native input, restored visible bounds and returned to Conversations';
     } catch (recoveryError) {
       failure.recovery = String(recoveryError.stack || recoveryError);
     }

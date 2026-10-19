@@ -352,12 +352,29 @@ async function runWebsiteAcceptance(h, fixture) {
           const x = Math.round(outer.x + drag.x * zoom), y = Math.round(outer.y + drag.y * zoom);
           try {
             await capture('before-tabstrip-drag');
-            xinput(['mousemove', String(x), String(y), 'mousedown', '1', 'sleep', '0.1', 'mousemove', String(x + 50), String(y + 40), 'sleep', '0.1', 'mouseup', '1']);
+            report.actions.push({ label: 'native-browser-tabstrip-drag-start', input: 'native-x11', point: { x, y }, before, atMs: Date.now() - started });
+            save();
+            xinput(['mousemove', '--sync', String(x), String(y), 'mousedown', '1']);
+            // Yield between native events: Electron must process the press to
+            // enter its window-manager move loop before motion and release.
+            await delay(100);
+            for (let step = 1; step <= 5; step++) {
+              xinput(['mousemove', String(x + step * 10), String(y + step * 8)]);
+              await delay(40);
+            }
             await until(() => Math.abs(win.getBounds().x - before.x) >= 20 || Math.abs(win.getBounds().y - before.y) >= 20,
               'Dragging empty browser tab strip moves the actual native window');
+            xinput(['mouseup', '1']);
+            await settle();
             report.actions.push({ label: 'native-browser-tabstrip-drag', input: 'native-x11', before, after: win.getBounds(), atMs: Date.now() - started });
             await capture('after-tabstrip-drag');
-          } finally { xinput(['mouseup', '1']); win.setPosition(before.x, before.y); await settle(); }
+          } finally {
+            xinput(['mouseup', '1']); await delay(40);
+            xinput(['key', '--clearmodifiers', 'Escape']); await settle();
+            win.setBounds(before);
+            await until(() => ['x', 'y', 'width', 'height'].every(key => Math.abs(win.getBounds()[key] - before[key]) <= 1),
+              'Native drag cleanup restores the original window bounds');
+          }
         }
         await capture(`bounds-${theme}-${width}-zoom-${zoom}`);
         samples.push({ theme, size, width, zoom, bounds, chrome });
