@@ -303,7 +303,13 @@ async function runWebsiteAcceptance(h, fixture) {
   }
   async function focusAddress(label) {
     const p = await evaluate(selector => {
-      const node = document.querySelector(selector), r = node.getBoundingClientRect();
+      // Retained plugin pages keep hidden toolbars in the shell DOM. The real
+      // native click must target the currently presented address, not the first.
+      const node = [...document.querySelectorAll(selector)].find(node => {
+        const r = node.getBoundingClientRect(); return r.width > 0 && r.height > 0;
+      });
+      if (!node) throw new Error('No visible address field is mounted');
+      const r = node.getBoundingClientRect();
       // The expanded rail can cover the center of a narrow address field.
       // Click only its genuinely exposed pixels, keeping strict hit testing.
       for (const x of [r.x + r.width / 2, r.right - 2, r.left + 2]) {
@@ -1463,8 +1469,6 @@ async function runWebsiteAcceptance(h, fixture) {
     return win.contentView.children.some(view => view.webContents === wc && view.getVisible()) ? { kind: 'native-public-page', url: state.url } : null;
   }
   async function observePublicDocument(site, wc) {
-    site.finalURL = wc.getURL(); site.loading = wc.isLoadingMainFrame();
-    site.surface = await publicSurface(site, wc);
     site.document = await Promise.race([
       wc.executeJavaScript(`(() => {
         const visible = e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(e).visibility !== 'hidden'; };
@@ -1473,6 +1477,8 @@ async function runWebsiteAcceptance(h, fixture) {
       })()`).catch(error => ({ unavailable: String(error) })),
       delay(800).then(() => ({ unavailable: 'Public document observation exceeded 800 ms' })),
     ]);
+    site.finalURL = wc.getURL(); site.loading = wc.isLoadingMainFrame();
+    site.surface = await publicSurface(site, wc);
     const terminal = site.events.findLast(event => event.event === 'navigate' || event.event === 'failed' && event.code !== -3);
     site.status = site.surface?.error || terminal?.event === 'failed' ? 'network-failed'
       : terminal?.code >= 400 || /captcha|verify (?:you are|your identity)|access denied|unusual traffic|人机验证|安全验证/i.test(site.document.text || '') ? 'blocked-or-challenge'
@@ -1501,7 +1507,9 @@ async function runWebsiteAcceptance(h, fixture) {
         const preferences = wc.getLastWebPreferences();
         assert.ok(preferences.sandbox && preferences.contextIsolation && !preferences.nodeIntegration, 'Public pages retain the shipping browser isolation');
         const deadline = Date.now() + 6000;
-        while (wc.isLoadingMainFrame() && Date.now() < deadline) await delay(100);
+        // A new native tab exists briefly at about:blank before its requested
+        // navigation starts; that provisional idle state is not a loaded site.
+        while ((wc.getURL() === 'about:blank' || wc.isLoadingMainFrame()) && Date.now() < deadline) await delay(100);
         await until(() => publicSurface(site, wc), `${site.name}: page or matching Wuu navigation error is presented`, 4000);
         await observePublicDocument(site, wc);
         await capture(`public-${site.name}-entry-${site.status}`);
@@ -1543,7 +1551,7 @@ async function runWebsiteAcceptance(h, fixture) {
               await capture(`public-${site.name}-browser-options`);
               xinput(['key', '--clearmodifiers', 'Escape']);
             } finally { Menu.prototype.popup = popup; }
-            await waitFor(() => document.querySelector('button[aria-label="Browser options"]')?.getAttribute('aria-expanded') === 'false');
+            await waitFor(id => document.querySelector(`[data-website-id="${id}"] button[aria-label="Browser options"]`)?.getAttribute('aria-expanded') === 'false', ribbonGroup);
             await focusAddress(`public-${site.name}-focus-after-dismissal`);
           }
           await observePublicDocument(site, wc);
