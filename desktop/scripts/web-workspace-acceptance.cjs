@@ -306,7 +306,8 @@ async function runWebsiteAcceptance(h, fixture) {
       // Retained plugin pages keep hidden toolbars in the shell DOM. The real
       // native click must target the currently presented address, not the first.
       const node = [...document.querySelectorAll(selector)].find(node => {
-        const r = node.getBoundingClientRect(); return r.width > 0 && r.height > 0;
+        const r = node.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && getComputedStyle(node).visibility === 'visible' && !node.closest('[hidden],[inert]');
       });
       if (!node) throw new Error('No visible address field is mounted');
       const r = node.getBoundingClientRect();
