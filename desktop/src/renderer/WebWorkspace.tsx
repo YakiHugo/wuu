@@ -262,7 +262,9 @@ export function WebWorkspacePanel({
       stop();
       report(null);
     };
-  }, [api, site?.id, active, resizeWithWindow, Boolean(current), current?.activeTabId, error, blank, captureBackdrop]);
+  // Tabs share this viewport; replacing its observer would briefly hide the
+  // newly selected native view after the main process has already shown it.
+  }, [api, site?.id, active, resizeWithWindow, Boolean(current), error, blank, captureBackdrop]);
 
   useEffect(() => {
     if (!api || !site || !active) return;

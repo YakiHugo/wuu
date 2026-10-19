@@ -23,6 +23,77 @@ module.exports = async function accept(h) {
     return view && !view.webContents.isLoading();
   }, 'animated native page');
   const wc = view.webContents;
+  // Switching already loaded ribbon tabs must not hide the newly selected
+  // page again while React updates the shared browser chrome.
+  const switchPages = new Map();
+  for (const kind of ['static', 'animated']) {
+    await click(`.sidebar-ribbon-main button[data-ribbon-id="${fixtureTabs[kind].id}"]`);
+    await until(() => {
+      const page = win.contentView.children.find(v => v.webContents?.getURL() === origin + '/' + kind && v.getVisible());
+      if (!page || page.webContents.isLoading()) return false;
+      switchPages.set(kind, page); return true;
+    }, 'warm switch page ' + kind);
+  }
+  const switches = report.tabSwitches = [];
+  let switching;
+  const restores = [];
+  for (const [kind, page] of switchPages) {
+    await page.webContents.executeJavaScript(`document.querySelector('#draft').value='retained-${kind}';void 0;`);
+    const setVisible = page.setVisible;
+    page.setVisible = function (visible) {
+      const result = setVisible.call(this, visible);
+      switching?.events.push({ kind, visible, at: performance.now(), ...(visible ? {} : { stack: new Error().stack }) });
+      return result;
+    };
+    restores.push(() => { page.setVisible = setVisible; });
+  }
+  const recording = spawn('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'x11grab', '-framerate', '60', '-video_size', '1920x1200', '-i', process.env.DISPLAY, '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '18', '-progress', 'pipe:1', '-y', path.join(output, 'ribbon-tab-switch.mp4')], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let recordingError = '';
+  recording.stderr.on('data', bytes => { recordingError += bytes; });
+  const recordingDone = new Promise((resolve, reject) => {
+    recording.once('error', reject);
+    recording.once('close', code => code === 0 || code === 255 ? resolve() : reject(new Error(recordingError)));
+  });
+  try {
+    await new Promise((resolve, reject) => { recording.stdout.once('data', resolve); recording.once('error', reject); });
+    for (const [width, height, zoom, theme] of [[1440, 900, 1, 'light'], [600, 700, 1, 'light'], [1280, 800, 1.25, 'dark']]) {
+      win.setBounds({ x: 30, y: 30, width, height }); win.webContents.setZoomFactor(zoom);
+      await evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+      await settle();
+      for (let cycle = 0; cycle < 8; cycle++) {
+        const kind = cycle % 2 ? 'animated' : 'static', target = switchPages.get(kind);
+        switching = { kind, cycle, width, height, zoom, theme, events: [] };
+        const point = await evaluate(id => {
+          const r = document.querySelector(`[data-ribbon-id="${id}"]`).getBoundingClientRect();
+          return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+        }, fixtureTabs[kind].id);
+        const outer = win.getContentBounds();
+        await nativeInput(['mousemove', String(Math.round(outer.x + point.x * zoom)), String(Math.round(outer.y + point.y * zoom)), 'click', '1']);
+        await until(async () => await evaluate(id => document.querySelector(`[data-ribbon-id="${id}"]`)?.getAttribute('aria-current') === 'page', fixtureTabs[kind].id) && target.getVisible(), 'ribbon switch selects ' + kind);
+        await settle();
+        switching.targetVisibility = switching.events.filter(event => event.kind === kind).map(event => event.visible);
+        switching.contentsID = target.webContents.id;
+        switching.draft = await target.webContents.executeJavaScript('document.querySelector("#draft").value');
+        assert.equal(switching.draft, 'retained-' + kind);
+        switches.push(switching); switching = undefined;
+      }
+    }
+
+  } finally {
+    switching = undefined;
+    for (const restore of restores) restore();
+    recording.kill('SIGINT'); await recordingDone;
+    report.artifacts.push('ribbon-tab-switch.mp4');
+    fs.writeFileSync(path.join(output, 'tab-switches.json'), JSON.stringify(switches, null, 2));
+    win.webContents.setZoomFactor(1);
+    await evaluate(() => { document.documentElement.dataset.theme = 'light'; });
+    await settle();
+  }
+  for (const sample of switches) {
+    assert.ok(!sample.targetVisibility.includes(false), `Selected ${sample.kind} must stay visible through chrome updates: ${JSON.stringify(sample.targetVisibility)}`);
+  }
+  checks.push({ name: 'warm-ribbon-switch-keeps-selected-page-visible', switches: switches.length });
+  if (process.env.WUU_RESIZE_SWITCH_ONLY === '1') return;
   // A busy shell must not leave the live guest at the previous window size.
   // Pause only the shell's JavaScript to make the missing IPC round trip
   // deterministic; the independent webpage must keep painting and resizing.
