@@ -236,7 +236,9 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     if (typeof text !== "string" || text.length > 10_000) throw new Error("The search text is too long.");
     if (!text) return this.stopFind(owner, id);
     const page = this.ensurePage(group, this.activeTab(group));
-    const requestId = page.contents.findInPage(text, { forward: options.forward !== false, findNext: options.findNext === true });
+    // Electron calls Chromium new_session "findNext": true starts a search,
+    // while our public flag means advance an existing search result.
+    const requestId = page.contents.findInPage(text, { forward: options.forward !== false, findNext: options.findNext !== true });
     page.findRequestId = requestId;
     page.findResult = { requestId, activeMatchOrdinal: 0, matches: 0, finalUpdate: false };
     this.emit(group);

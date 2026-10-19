@@ -7,10 +7,12 @@ const http = require('node:http');
 const { spawnSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
 const { BrowserWindow, dialog, nativeImage, session, webContents } = require('electron');
+const { prepareMediaFixture, serveMediaFixture, runBrowserMediaAcceptance } = require('./browser-media-acceptance.cjs');
 
 async function createWebsiteFixture(home) {
   const requests = [];
   const controls = { offline: true };
+  const media = prepareMediaFixture(home);
   const downloadBytes = Buffer.from('Synthetic Wuu browser download.\n'.repeat(128));
   const server = http.createServer((request, response) => {
     let body = '';
@@ -18,6 +20,7 @@ async function createWebsiteFixture(home) {
     request.on('end', () => {
       const url = new URL(request.url, 'http://fixture.test');
       requests.push({ method: request.method, path: url.pathname, body, cookie: request.headers.cookie || '' });
+      if (serveMediaFixture(request, response, url, media)) return;
       if (url.pathname === '/offline' && controls.offline) { response.destroy(); return; }
       if (url.pathname === '/download') {
         response.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Disposition': 'attachment; filename="fixture.txt"', 'Content-Length': downloadBytes.length });
@@ -36,7 +39,7 @@ async function createWebsiteFixture(home) {
       response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
       response.end(`<!doctype html><meta charset="utf-8"><title>Local fixture ${url.pathname}</title>
 <style>body{font:18px system-ui;margin:0;background:#edf4fa;color:#17354a}main{padding:42px;max-width:850px}h1{font-weight:500}input,button,a{font:inherit;margin:8px 12px 8px 0;padding:10px}a{display:inline-block}input{width:330px}pre{white-space:pre-wrap;padding:18px;background:white;border-radius:12px}button{cursor:pointer}</style>
-<main><p>Wuu · isolated local website fixture</p><h1>${url.pathname}</h1><p>No external service, account, or model is contacted.</p>
+<main><p>Wuu · isolated local website fixture</p><h1>${url.pathname}</h1><p>No external service, account, or model is contacted.</p><p>Find marker: fixture one, fixture two, fixture three.</p>
 <label>Retained page draft <input id="draft" placeholder="Type a retained website draft"></label>
 <p><a id="next" href="/next">Next page</a><a id="cookie" href="/cookie">Set synthetic session cookie</a></p>
 <button id="blank">Open blank popup + postMessage</button>
@@ -61,7 +64,7 @@ document.querySelector('#camera').onclick=async()=>{document.querySelector('#per
     description: 'Authored local HTTP fixture, no external service or permission.', desktop: { entry: 'desktop.js' },
     contributes: { navigation: [{ id: 'website-entry', view: 'website', title: 'Fixture Website' }] } }));
   fs.writeFileSync(path.join(plugin, 'desktop.js'), `export function activate(api) { api.registerViewType({ id: 'website', title: 'Fixture Website', defaultRegion: 'primary', persistence: 'durable', render: () => api.react.createElement(api.ui.WebPage, { url: ${JSON.stringify(origin + '/extension')}, title: 'Fixture Website' }) }); }\n`);
-  return { origin, requests, controls, downloadBytes, close: () => server.close() };
+  return { origin, requests, controls, downloadBytes, media, close: () => server.close() };
 }
 
 async function runWebsiteAcceptance(h, fixture) {
@@ -94,7 +97,9 @@ async function runWebsiteAcceptance(h, fixture) {
     assert.ok(!image.isEmpty(), 'Actual native-window PNG is readable');
     const name = `${String(report.screenshots.length + 1).padStart(3, '0')}-web-${label.replace(/[^a-zA-Z0-9_-]+/g, '-').slice(0, 85)}.png`;
     fs.writeFileSync(path.join(output, name), taken.stdout);
-    report.screenshots.push({ file: name, source: 'x11-whole-native-window', sha256: createHash('sha256').update(taken.stdout).digest('hex'), atMs: Date.now() - started, image: image.getSize(), window: bounds });
+    report.screenshots.push({ file: name, source: 'x11-whole-native-window', sha256: createHash('sha256').update(taken.stdout).digest('hex'), atMs: Date.now() - started, image: image.getSize(), window: bounds,
+      nativeViews: win.contentView.children.filter(view => view.webContents && !view.webContents.isDestroyed()).map(view => ({ id: view.webContents.id, url: view.webContents.getURL(), visible: view.getVisible(), focused: view.webContents.isFocused(), bounds: view.getBounds(), zoom: view.webContents.getZoomFactor() })),
+      activeElement: await evaluate(() => document.activeElement?.outerHTML.slice(0, 240)) });
     save(); await delay(160);
   }
   function xinput(args) {
@@ -102,8 +107,10 @@ async function runWebsiteAcceptance(h, fixture) {
     assert.equal(result.status, 0, result.stderr || String(result.error));
   }
   async function click(target, label, evidence = true) {
-    const p = await point(target);
     if (evidence) await capture(`before-${label}`);
+    // Bundled navigation can finish mounting after a renderer reload. Measure
+    // immediately before the real click, not before the slower X11 capture.
+    const p = await point(target);
     const bounds = win.getContentBounds(), zoom = win.webContents.getZoomFactor();
     xinput(['mousemove', String(Math.round(bounds.x + p.x * zoom)), String(Math.round(bounds.y + p.y * zoom)), 'click', '1']);
     report.actions.push({ label: `web-${label}`, input: 'native-x11', atMs: Date.now() - started, point: p });
@@ -363,6 +370,8 @@ async function runWebsiteAcceptance(h, fixture) {
     await waitFor(({ stage, count }) => document.querySelectorAll(`${stage} [role=tab]`).length === count && document.activeElement?.matches('.workspace-browser-url-input'), { stage: liveStage, count: before + 1 });
     await hidden('new blank tab');
     await navigateAddress('/tab-two', 'new-tab'); wc = nativeView('/tab-two').webContents;
+    report.nativeFindEvents ||= [];
+    wc.on('found-in-page', (_event, result) => { report.nativeFindEvents.push({ contentsID: wc.id, result, atMs: Date.now() - started }); save(); });
     await pageClick(wc, '#draft', 'native-find-shortcut-focus'); xinput(['key', '--clearmodifiers', 'ctrl+f']);
     const findInput = `${liveStage} .web-workspace-findbar input`;
     await waitFor(selector => document.activeElement?.matches(selector), findInput);
@@ -462,6 +471,8 @@ async function runWebsiteAcceptance(h, fixture) {
     await until(() => nativeView('/offline')?.getVisible() && !nativeView('/offline').webContents.isLoading(), 'retry loads requested URL, not previous page');
     await capture('retried-requested-destination'); return { url: nativeView('/offline').webContents.getURL() };
   });
+
+  await runBrowserMediaAcceptance({ win, report, output, started, save, testNative, openSite, pageClick, navigateAddress, readSite, nativeView, until, evaluate, fill, address, capture, xinput, delay }, fixture);
 
   await testNative('website edit removal recreation and renderer restart preserve saved state', async () => {
     await openSite('Fixture Alpha', '/alpha');
