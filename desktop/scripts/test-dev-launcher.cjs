@@ -55,6 +55,8 @@ assert.equal(devHome({ WUU_HOME: sharedHome }, "/repo"), sharedHome);
 assert.ok(launchEnvironment({ WUU_HOME: sharedHome }, "shared", "/repo")
   .includes(`WUU_HOME=${sharedHome}`));
 assert.equal(devHome({ WUU_HOME: " " }, "/repo"), devHome({}, "/repo"));
+assert.ok(launchEnvironment({ WUU_DESKTOP_DISABLE_DEV_CACHE_CLEANUP: "1" }, "cache-preservation")
+  .includes("WUU_DESKTOP_DISABLE_DEV_CACHE_CLEANUP=1"));
 
 assert.ok(environment.includes("WUU_ENABLE_CUA_MAC=1"));
 assert.ok(environment.includes("WUU_CUA_MAC_HELPER=/repo/desktop/build/bin/wuu-cua-mac"));
