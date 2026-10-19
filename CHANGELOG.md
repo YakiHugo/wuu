@@ -55,6 +55,8 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Keep website contents live under browser toolbar panels and retain the selected native page when hiding or restoring the window.
+
 - Keep contextual sidebar controls beneath the expanded macOS navigation rail while preserving traffic-light access and restoring the controls after hover.
 - Dismiss native browser tooltips when the workbench renderer reloads or crashes.
 

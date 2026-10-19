@@ -780,7 +780,9 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     const { owner, view } = page;
     if (owner.isDestroyed() || page.contents.isDestroyed() || page.automation?.external) return;
     const reportedBounds = page.bounds ?? captureBounds;
-    if (!reportedBounds || owner.isMinimized() || !owner.isVisible()) {
+    // The native parent already hides its children. Keep the selected view's
+    // presentation intact so showing/restoring the window needs no extra frame.
+    if (!reportedBounds) {
       if (page.contents.isFocused()) owner.webContents.focus();
       if (view.getVisible()) view.setVisible(false);
       return;

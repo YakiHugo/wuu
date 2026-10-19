@@ -4,6 +4,7 @@ import type { WebWorkspaceLibraryState } from "../shared/webWorkspaceLibrary";
 import { Bookmark, Clock3 } from "./WuuIcons";
 import { composerMenuWidth, FloatingMenuPortal } from "./ComposerFloatingMenu";
 import { useI18n } from "./i18n";
+import { NativeBrowserPopover } from "./NativeBrowserPopover";
 
 /** The toolbar and start page share local address completion and keyboard behavior. */
 export function WebWorkspaceAddress({
@@ -101,6 +102,9 @@ export function WebWorkspaceAddress({
     setSelectedSuggestionURL(undefined);
     inputRef.current?.blur();
   };
+  const blurAddress = (): void => {
+    setAddressFocused(false); setSuggestionsOpen(false); setSelectedSuggestionURL(undefined); setLibraryState(undefined); composingAddress.current = false;
+  };
 
   return <>
     <form ref={formRef} className={`workspace-browser-url-form web-workspace-address ${className}`} onSubmit={event => {
@@ -112,9 +116,15 @@ export function WebWorkspaceAddress({
         placeholder={t("webWorkspace.addressSearch")} aria-label={t("webWorkspace.address")} disabled={disabled} aria-invalid={invalid} aria-describedby={invalid ? errorID : undefined}
         role="combobox" aria-autocomplete="list" aria-expanded={showSuggestions} aria-controls={showSuggestions ? suggestionsID : undefined}
         aria-activedescendant={selectedSuggestion >= 0 ? `${suggestionsID}-${selectedSuggestion}` : undefined}
-        onChange={event => { onChange(event.target.value); setSuggestionsOpen(true); setSelectedSuggestionURL(undefined); }}
+        onChange={event => { onChange(event.target.value); setAddressFocused(true); setSuggestionsOpen(true); setSelectedSuggestionURL(undefined); }}
         onFocus={event => { setAddressFocused(true); event.currentTarget.select(); }}
-        onBlur={() => { setAddressFocused(false); setSuggestionsOpen(false); setSelectedSuggestionURL(undefined); setLibraryState(undefined); composingAddress.current = false; }}
+        onBlur={event => {
+          // Moving into another native contents has no DOM relatedTarget.
+          // Let the overlay deliver its click; native outside/blur dismissal
+          // still closes it when focus instead leaves the address interaction.
+          if (!event.relatedTarget && suggestionsRef.current && suggestionsRef.current.ownerDocument !== document) return;
+          blurAddress();
+        }}
         onCompositionStart={() => { composingAddress.current = true; }} onCompositionEnd={() => { composingAddress.current = false; }}
         onKeyDown={event => {
           if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229 || composingAddress.current) return;
@@ -134,7 +144,7 @@ export function WebWorkspaceAddress({
         }} />
       {children}
     </form>
-    {showSuggestions ? <FloatingMenuPortal anchorRef={formRef} owner="web-workspace-address" placement="below" align="left" width={composerMenuWidth(480)} matchAnchorWidth offset={4}>
+    {showSuggestions ? <NativeBrowserPopover focus={false} onDismiss={blurAddress}><FloatingMenuPortal anchorRef={formRef} owner="web-workspace-address" placement="below" align="left" width={composerMenuWidth(480)} matchAnchorWidth offset={4}>
       <ul ref={suggestionsRef} id={suggestionsID} className="web-workspace-address-suggestions" role="listbox" aria-label={t("webWorkspace.addressSearch")}
         data-web-workspace-address-suggestions="" data-wuu-layer="popover" data-web-workspace-owner={destinationId}>
         {suggestions.map((entry, index) => <li key={entry.url} id={`${suggestionsID}-${index}`} role="option" aria-selected={index === selectedSuggestion}
@@ -144,6 +154,6 @@ export function WebWorkspaceAddress({
           <span className="web-workspace-address-suggestion-text"><span>{entry.title || entry.url}</span><span className="web-workspace-address-suggestion-url">{entry.url}</span></span>
         </li>)}
       </ul>
-    </FloatingMenuPortal> : null}
+    </FloatingMenuPortal></NativeBrowserPopover> : null}
   </>;
 }

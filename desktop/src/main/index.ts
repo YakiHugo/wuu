@@ -6,6 +6,8 @@ import { WebWorkspaceLibrary } from "./webWorkspaceLibrary";
 import { WebWorkspaceDownloads } from "./webWorkspaceDownloads";
 import type { WebWorkspaceDownloadCommand } from "../shared/webWorkspaceDownloads";
 import { NativeTooltip } from "./nativeTooltip";
+import { NativeBrowserPopover } from "./nativeBrowserPopover";
+import type { WebWorkspacePopoverBounds } from "../shared/webWorkspace";
 import type { WebWorkspaceTooltip, WebWorkspaceMenuRequest, WebWorkspaceBounds, WebWorkspaceCommand, WebWorkspaceDestination, WebWorkspaceLegacyDestination, WebWorkspaceFindOptions } from "../shared/webWorkspace";
 import { importBrowserCookies, listBrowserProfiles } from "./browserCookieImport";
 import { BrowserExtensionManager } from "./browserExtensions";
@@ -841,6 +843,7 @@ function persistMainWindowBoundsNow(win: BrowserWindow): void {
   saveMainWindowBounds(win.getBounds());
 }
 
+const nativeBrowserPopovers = new WeakMap<BrowserWindow, NativeBrowserPopover>();
 function loadRenderer(window: BrowserWindow): void {
   // Shell windows only: browser and observation surfaces keep their own zoom.
   window.webContents.on("before-input-event", (event, input) => {
@@ -887,9 +890,12 @@ function loadRenderer(window: BrowserWindow): void {
       return response === 0 ? "reload" : "close";
     },
   });
+  const popover = new NativeBrowserPopover(window);
+  nativeBrowserPopovers.set(window, popover);
   wireExternalNavigationGuards(window, {
     rendererURL,
     openExternal: openExternalNavigation,
+    openWindow: popover.open,
   });
 
   if (devRendererURL) {
@@ -2878,6 +2884,8 @@ app.whenReady().then(async () => {
     nativeTooltip.show(webWorkspaceSender(event), token, hint));
   ipcMain.handle("wuu:web-workspace-options", (event, id: string, request: WebWorkspaceMenuRequest) =>
     webWorkspaceHost.showOptions(webWorkspaceSender(event), id, request));
+  ipcMain.handle("wuu:web-workspace-popover", (event, token: string, bounds: WebWorkspacePopoverBounds | null) =>
+    nativeBrowserPopovers.get(webWorkspaceSender(event))?.report(token, bounds));
   ipcMain.handle("wuu:web-workspace-capture", (event, id: string) => webWorkspaceHost.capture(webWorkspaceSender(event), id));
   ipcMain.handle("wuu:web-workspace-bounds", (event, id: string, bounds: WebWorkspaceBounds | null) =>
     webWorkspaceHost.reportBounds(webWorkspaceSender(event), id, bounds));

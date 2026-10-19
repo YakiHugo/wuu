@@ -708,6 +708,12 @@ browserApi.onBrowserDock = (handler) => {
 };
 if (!process.argv.includes("--wuu-browser-disabled")) {
   (api as WuuDesktopApi & { webWorkspace: WebWorkspaceApi }).webWorkspace = {
+    reportPopover: (token, bounds) => ipcRenderer.invoke("wuu:web-workspace-popover", token, bounds),
+    onPopoverDismiss: handler => {
+      const listener = (_event: Electron.IpcRendererEvent, token: string) => handler(token);
+      ipcRenderer.on("wuu:web-workspace-popover-dismiss", listener);
+      return () => ipcRenderer.removeListener("wuu:web-workspace-popover-dismiss", listener);
+    },
     initializeTabs: (destinations) => ipcRenderer.invoke("wuu:web-workspace-tabs-initialize", destinations),
     open: (destination) => ipcRenderer.invoke("wuu:web-workspace-open", destination),
     showTooltip: (token, hint) => ipcRenderer.invoke("wuu:web-workspace-tooltip", token, hint),

@@ -62,7 +62,11 @@ export type WebWorkspaceTooltip = {
   style: { fontFamily: string; fontSize: string; fontWeight: string; fontStyle: string; color: string; backgroundColor: string; border: string; borderRadius: string; padding: string; lineHeight: string };
 };
 
+export type WebWorkspacePopoverBounds = { x: number; y: number; width: number; height: number; focus: boolean };
+
 export type WebWorkspaceApi = {
+  reportPopover: (token: string, bounds: WebWorkspacePopoverBounds | null) => Promise<void>;
+  onPopoverDismiss: (handler: (token: string) => void) => () => void;
   /** Restore the ribbon and migrate legacy website sessions once, without losing their child tabs. */
   initializeTabs: (destinations: WebWorkspaceLegacyDestination[]) => Promise<WebWorkspaceInitializationState>;
   /** The preload and native host understand window-relative edge geometry. */

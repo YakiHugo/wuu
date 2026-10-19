@@ -5,6 +5,7 @@ import { composerMenuWidth, FloatingMenuPortal, menuOpeningKey, useFloatingMenuF
 import { Download, X } from "./WuuIcons";
 import { useI18n } from "./i18n";
 import { rawErrorMessage } from "./UserFacingErrors";
+import { NativeBrowserPopover } from "./NativeBrowserPopover";
 import "./styles/web-workspace-downloads.css";
 
 /** Window-owned history stays available when the initiating website is closed. */
@@ -94,7 +95,7 @@ export function WebWorkspaceDownloadsMenu({ api, active = true, destinationId, p
       <Download className="icon" aria-hidden="true" />
       {presentation === "menu" ? <span>{title}</span> : activeCount ? <span className="web-workspace-download-count" aria-hidden="true">{formatNumber(activeCount)}</span> : null}
     </button>
-    {open && active ? <FloatingMenuPortal anchorRef={trigger} owner="web-workspace-downloads" placement="below" align="right" width={composerMenuWidth(400)} flip>
+    {open && active ? <NativeBrowserPopover onDismiss={() => setOpen(false)}><FloatingMenuPortal anchorRef={trigger} owner="web-workspace-downloads" placement="below" align="right" width={composerMenuWidth(400)} flip>
       <div ref={panel} id={panelId} className="web-workspace-downloads" data-web-workspace-downloads="" data-wuu-layer="popover" data-web-workspace-owner={destinationId}
         role="dialog" aria-labelledby={titleId} onKeyDown={event => {
           if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); }
@@ -131,6 +132,6 @@ export function WebWorkspaceDownloadsMenu({ api, active = true, destinationId, p
           </li>)}
         </ul> : null}
       </div>
-    </FloatingMenuPortal> : null}
+    </FloatingMenuPortal></NativeBrowserPopover> : null}
   </>;
 }

@@ -33,6 +33,7 @@ fs.writeFileSync(path.join(home, 'desktop-settings.json'), JSON.stringify({ onbo
 const html = kind => `<!doctype html><meta charset="utf-8"><title>Resize ${kind}</title><style>html{background:#dcecf5;color:#18394d;font:18px system-ui}body{margin:0}header{padding:20px;background:#c1dbe9;position:sticky;top:0}input,button{font:inherit;padding:8px}main{padding:24px;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(240px,100%),1fr));gap:16px}article{background:#fff;padding:16px;border:1px solid #8cacbf}#motion{width:70px;height:25px;background:#ee8047;transform:translateX(0)}#edge{position:fixed;inset:0;border:4px solid #128368;pointer-events:none;box-sizing:border-box}</style><header><input id="draft" aria-label="Draft"><button id="click">Clicks: 0</button><div id="motion"></div></header><main>${Array.from({length:kind==='static'?1:160},(_,i)=>`<article><h2>Card ${i}</h2><p>Fixed local text reflows continuously as the viewport changes. No network assets.</p></article>`).join('')}</main><div id="edge"></div><script>window.clicks=0;document.querySelector('#click').onclick=()=>document.querySelector('#click').textContent='Clicks: '+(++window.clicks);window.ticks=0;${kind==='animated'?`function tick(t){window.ticks++;document.querySelector('#motion').style.transform='translateX('+Math.round((Math.sin(t/220)+1)*Math.max(0,innerWidth-140)/2)+'px)';requestAnimationFrame(tick)}requestAnimationFrame(tick);`:''}</script>`;
 const report = { status:'running', versions:process.versions, platform:process.platform, architecture:process.arch, os:os.release(), cpus:os.cpus().map(c=>c.model), memory:os.totalmem(), buildMode:'electron-vite production build; shipping main/preload/renderer; safe-mode Go', trajectory:'programmatic setBounds at fixed 16ms targets; horizontal, vertical, four anchored diagonal returns; 1440x900 to 440x560 (main window has no app minimum; zero-size content is outside the timed usable range); not a native mouse drag', repeats:Number(process.env.WUU_RESIZE_REPEATS || 3), cases:[], errors:[], artifacts:[], fixtureHashes:Object.fromEntries(['static','scroll','animated'].map(k=>[k,createHash('sha256').update(html(k)).digest('hex')])) };
 const save=()=>fs.writeFileSync(path.join(output,'report.json'),JSON.stringify(report,null,2));
+process.on('uncaughtException', error => { report.status = 'failed'; report.error = String(error.stack); save(); console.error(error); app.exit(1); });
 let win, server, current;
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
 const originalHandle=ipcMain.handle.bind(ipcMain);
@@ -115,6 +116,14 @@ async function run(){
   }, origin);
   await until(() => evaluate(tabs => Object.values(tabs).every(tab => document.querySelector(`[data-ribbon-id="${tab.id}"]`)), fixtureTabs), 'resize fixture tabs');
   await settle();
+  if (process.env.WUU_TOOLBAR_ACCEPTANCE === '1') {
+    await click(`.sidebar-ribbon-main button[data-ribbon-id="${fixtureTabs.animated.id}"]`);
+    const views = parent => parent.children.flatMap(view => [view, ...views(view)]);
+    let view;
+    await until(() => { view = views(win.contentView).find(view => view.webContents?.getURL() === origin + '/animated' && view.getVisible()); return view && !view.webContents.isLoading(); }, 'animated toolbar fixture');
+    await require('./web-workspace-toolbar-acceptance.cjs')({ win, view, output, report, evaluate, until, settle, click, nativeInput, capture, delay });
+    report.status = 'passed'; save(); server.close(); app.quit(); return;
+  }
   for(let repeat=0;repeat<(process.env.WUU_RESIZE_ACCEPTANCE==='1'?0:report.repeats);repeat++)for(const [left,right] of [[false,false],[true,false],[false,true],[true,true]])for(const kind of ['none','static','scroll','animated']){
     if(process.env.WUU_RESIZE_KINDS&&!process.env.WUU_RESIZE_KINDS.split(',').includes(kind))continue;
     if(process.env.WUU_RESIZE_FOCUS==='1'&&(left||right))continue;
@@ -147,5 +156,5 @@ async function run(){
   report.idle=[];for(let i=0;i<5;i++){await delay(500);report.idle.push(app.getAppMetrics().map(p=>({pid:p.pid,type:p.type,cpu:p.cpu.percentCPUUsage,memory:p.memory})));}
   report.status='passed';save();server.close();for(const wc of webContents.getAllWebContents())if(wc.debugger.isAttached())wc.debugger.detach();app.quit();setTimeout(()=>app.exit(0),1000).unref();
 }
-const watchdog=setTimeout(()=>{report.error='watchdog';save();app.exit(1);},540000);watchdog.unref();
+const watchdog=setTimeout(()=>{report.error='watchdog';save();app.exit(1);},process.env.WUU_TOOLBAR_ACCEPTANCE === '1' ? 90000 : 540000);watchdog.unref();
 run().catch(async e=>{report.status='failed';report.error=String(e.stack||e);save();console.error(e);try{if(win)await capture('failure');}catch{}server?.close();for(const wc of webContents.getAllWebContents())if(wc.debugger.isAttached())wc.debugger.detach();process.exitCode=1;app.once('will-quit',()=>app.exit(1));app.quit();setTimeout(()=>app.exit(1),1000).unref();});
