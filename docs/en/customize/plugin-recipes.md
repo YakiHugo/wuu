@@ -112,7 +112,7 @@ Use the ordinary navigation contribution in the package's `plugin.json`:
 }
 ```
 
-For a single local TypeScript file without a manifest, add `api.registerViewPlacement({ id: "website-entry", view: "website", region: "primary" })` during activation to open the same View. The host owns its ribbon entry, placement, browser session, and cleanup. The site uses the same imported browser cookies as other Wuu browser pages; sign in when the session does not already contain a valid login. Unmounting or disabling the plugin closes its page and popups. No site is installed by this recipe. Older hosts can be detected with `typeof api.ui.WebPage === "function"`; non-desktop clients show the unavailable-browser state.
+For a single local TypeScript file without a manifest, add `api.registerViewPlacement({ id: "website-entry", view: "website", region: "primary" })` during activation to open the same View. The host owns its ribbon entry, placement, browser session, and cleanup. The site uses the same imported browser cookies as other Wuu browser pages; sign in when the session does not already contain a valid login. Unmounting or disabling the plugin closes its page and popups. No site is installed by this recipe. Older hosts can be detected with `typeof api.ui.WebPage === "function"`. This component works only in the main desktop workbench window; popped-out conversation windows and remote web/mobile clients are unsupported. Non-desktop clients show the unavailable-browser state.
 
 ## Connect a page to its runtime
 
