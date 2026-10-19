@@ -1,4 +1,4 @@
-import { BrowserWindow, Menu, WebContentsView, net, screen, session, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from "electron";
+import { BrowserWindow, Menu, WebContentsView, net, screen, session, type Event, type IpcMainEvent, type IpcMainInvokeEvent, type MouseInputEvent, type View, type WebContents } from "electron";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve, sep } from "node:path";
@@ -16,6 +16,7 @@ export class ChromeOverlayHost {
   private owner?: BrowserWindow;
   private initialized = false;
   private fullscreen = false;
+  private pointerSources = new Set<WebContents>();
   // Vite rewrites these existing imports to /@fs/. Keep the exception finite:
   // neither arbitrary checkout files nor arbitrary developer-machine files.
   private readonly devFiles: Set<string>;
@@ -179,6 +180,7 @@ export class ChromeOverlayHost {
     surface.view.webContents.setBackgroundThrottling(true);
     this.raise(surface.owner);
     if (surface.focusPending) { surface.focusPending = false; surface.view.webContents.focus(); }
+    if (surface.kind === "ribbon" && !this.pointerInside(surface)) this.scheduleLeave(surface);
   }
 
   command(event: IpcMainEvent, message: ChromeOverlayEvent): void {
@@ -199,8 +201,9 @@ export class ChromeOverlayHost {
     }
     if (command.type === "pointer") {
       if (typeof command.inside !== "boolean") return;
-      if (surface.leaveTimer) clearTimeout(surface.leaveTimer);
-      if (!command.inside && surface.kind === "ribbon") surface.leaveTimer = setTimeout(() => this.dismissOutsideRibbon(surface), 120);
+      // A queued renderer enter must not cancel a newer native outside move.
+      if (surface.kind === "ribbon" && (!command.inside || !this.pointerInside(surface))) this.scheduleLeave(surface);
+      else this.cancelLeave(surface);
       return;
     }
     if (command.type === "retain") { if (typeof command.active === "boolean") surface.retained = command.active; return; }
@@ -252,13 +255,66 @@ export class ChromeOverlayHost {
 
   private dismissOutsideRibbon(surface: Surface): void {
     if (!surface.request || surface.retained || surface.menu || this.surfaces.get("account")?.request) return;
-    const cursor = screen.getCursorScreenPoint(), origin = surface.owner.getContentBounds(), bounds = surface.view.getBounds();
-    if (cursor.x >= origin.x + bounds.x && cursor.x < origin.x + bounds.x + bounds.width && cursor.y >= origin.y + bounds.y && cursor.y < origin.y + bounds.y + bounds.height) return;
+    if (this.pointerInside(surface)) return;
     this.dismiss(surface, "leave");
   }
 
-  private dismiss(surface: Surface, reason?: Extract<ChromeOverlayCommand, { type: "dismiss" }>["reason"], restoreFocus = false): void {
+  private pointerInside(surface: Surface): boolean {
+    const cursor = screen.getCursorScreenPoint(), origin = surface.owner.getContentBounds(), bounds = surface.view.getBounds();
+    return cursor.x >= origin.x + bounds.x && cursor.x < origin.x + bounds.x + bounds.width && cursor.y >= origin.y + bounds.y && cursor.y < origin.y + bounds.y + bounds.height;
+  }
+
+  private cancelLeave(surface: Surface): void {
     if (surface.leaveTimer) clearTimeout(surface.leaveTimer);
+    surface.leaveTimer = undefined;
+  }
+
+  private scheduleLeave(surface: Surface): void {
+    if (!surface.leaveTimer) surface.leaveTimer = setTimeout(() => {
+      surface.leaveTimer = undefined;
+      this.dismissOutsideRibbon(surface);
+    }, 120);
+  }
+
+  private observePointerSources(owner: BrowserWindow): void {
+    const ribbon = this.surfaces.get("ribbon");
+    if (!ribbon?.request || !ribbon.view.getVisible()) return;
+    for (const contents of this.pointerSources) if (contents.isDestroyed()) this.pointerSources.delete(contents);
+    const watch = (contents: WebContents): void => {
+      if (contents.isDestroyed() || this.pointerSources.has(contents)) return;
+      this.pointerSources.add(contents);
+      contents.on("before-mouse-event", this.onMouseInput);
+    };
+    const walk = (parent: View): void => {
+      for (const child of parent.children) {
+        if (child instanceof WebContentsView) watch(child.webContents);
+        walk(child);
+      }
+    };
+    watch(owner.webContents);
+    walk(owner.contentView);
+  }
+
+  private stopObservingPointerSources(): void {
+    for (const contents of this.pointerSources) if (!contents.isDestroyed()) contents.removeListener("before-mouse-event", this.onMouseInput);
+    this.pointerSources.clear();
+  }
+
+  private onMouseInput = (_event: Event, mouse: MouseInputEvent): void => {
+    if (!["mouseMove", "mouseEnter", "mouseLeave", "mouseDown", "mouseWheel"].includes(mouse.type)) return;
+    const ribbon = this.surfaces.get("ribbon");
+    if (!ribbon?.request || !ribbon.view.getVisible()) return;
+    // Showing a reused child under a stationary pointer need not produce an
+    // enter/leave in that renderer. Real input delivered to the shell or a
+    // sibling is equally authoritative; keep the same bounds and leave grace.
+    // This observes native input only and never intercepts the page's event.
+    if (this.pointerInside(ribbon)) this.cancelLeave(ribbon);
+    else this.scheduleLeave(ribbon);
+  };
+
+  private dismiss(surface: Surface, reason?: Extract<ChromeOverlayCommand, { type: "dismiss" }>["reason"], restoreFocus = false): void {
+    this.cancelLeave(surface);
+    if (surface.kind === "ribbon") this.stopObservingPointerSources();
     const menu = surface.menu;
     surface.menu = undefined;
     surface.retained = false;
@@ -287,6 +343,7 @@ export class ChromeOverlayHost {
 
   /** Called after a new website view is attached; never restack over HTML fullscreen. */
   raise(owner: BrowserWindow): void {
+    this.observePointerSources(owner);
     for (const kind of ["capsule", "ribbon", "account"] as const) {
       const surface = this.surfaces.get(kind);
       if (surface?.owner === owner && surface.request && surface.view.getVisible()) owner.contentView.addChildView(surface.view);
@@ -332,6 +389,7 @@ export class ChromeOverlayHost {
     owner.webContents.on("render-process-gone", () => { close(); for (const value of this.surfaces.values()) if (value.kind === "capsule") this.dismiss(value); });
     owner.once("closed", () => {
       for (const surface of [...this.surfaces.values()]) this.remove(surface);
+      this.stopObservingPointerSources();
       this.owner = undefined;
     });
   }

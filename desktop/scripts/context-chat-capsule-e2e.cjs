@@ -7,7 +7,7 @@ const path = require('node:path');
 const http = require('node:http');
 const { spawnSync } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
-const { app, webContents, nativeImage } = require('electron');
+const { app, webContents, nativeImage, screen } = require('electron');
 const desktop = path.resolve(__dirname, '..');
 const output = process.env.WUU_CAPSULE_OUTPUT || path.join(desktop, 'out/e2e/context-chat-capsule');
 const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'wuu-capsule-'));
@@ -45,6 +45,12 @@ async function shot(name) {
   // BrowserWindow.capturePage omits WebContentsView children. Capture the real
   // X11 compositor so the fixture website and privileged capsule are visible.
   const bounds = main.getBounds();
+  const display = screen.getDisplayMatching(bounds);
+  assert.equal(display.scaleFactor, 1, 'X11 acceptance uses physical-pixel window coordinates.');
+  assert.ok(bounds.x >= display.bounds.x && bounds.y >= display.bounds.y
+    && bounds.x + bounds.width <= display.bounds.x + display.bounds.width
+    && bounds.y + bounds.height <= display.bounds.y + display.bounds.height,
+  `The entire native window must fit its capture display: ${JSON.stringify({ bounds, display: display.bounds })}`);
   const capture = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'x11grab', '-video_size', `${bounds.width}x${bounds.height}`,
     '-i', `${process.env.DISPLAY}+${bounds.x},${bounds.y}`, '-frames:v', '1', '-f', 'image2pipe', '-vcodec', 'png', 'pipe:1'], { timeout: 12000, maxBuffer: 24 * 1024 * 1024 });
   assert.equal(capture.status, 0, String(capture.stderr || capture.error));
@@ -92,7 +98,14 @@ module.exports = (async () => {
   void run(port).catch(fail);
 })().catch(fail);
 async function run(port) {
-  await until(() => main); main.setSize(1280, 900); main.show(); main.focus();
+  await until(() => main);
+  // Resizing preserves the startup window's position, which can put its lower
+  // and right edges outside Xvfb. Place the entire window before native input.
+  const workArea = screen.getPrimaryDisplay().workArea;
+  const width = Math.min(1280, workArea.width), height = Math.min(900, workArea.height);
+  const bounds = { x: workArea.x + Math.floor((workArea.width - width) / 2), y: workArea.y + Math.floor((workArea.height - height) / 2), width, height };
+  main.setBounds(bounds); main.show(); main.focus();
+  await until(() => { const actual = main.getBounds(); return Object.keys(bounds).every(key => actual[key] === bounds[key]); }, 'Native window fits the display work area');
   await until(() => evaluate(main.webContents, () => Boolean(document.querySelector('[data-context-capsule]'))));
   await shot('01-internal-ball'); checks.push('Internal Wuu view has compact capsule without opening a new conversation.');
   phase = 'hidden-page context boundary';
@@ -154,7 +167,7 @@ async function run(port) {
 async function fail(error) {
   errors.push(error.stack || String(error)); console.error(error);
   if (main && !main.isDestroyed()) {
-    diagnostics = { ownerVisible: main.isVisible(), ownerFocused: main.isFocused(), views: main.contentView.children.filter(view => view.webContents && !view.webContents.isDestroyed())
+    diagnostics = { ownerVisible: main.isVisible(), ownerFocused: main.isFocused(), bounds: main.getBounds(), display: screen.getDisplayMatching(main.getBounds()), views: main.contentView.children.filter(view => view.webContents && !view.webContents.isDestroyed())
       .map(view => ({ url: view.webContents.getURL(), visible: view.getVisible(), focused: view.webContents.isFocused(), bounds: view.getBounds() })) };
     try { diagnostics.capsule = await evaluate(capsuleView().webContents, () => ({ html: document.querySelector('#root')?.innerHTML.slice(0, 4000), focused: document.hasFocus(), active: document.activeElement?.outerHTML.slice(0, 300) })); } catch {}
     try { await shot('failure'); } catch (captureError) { errors.push(`Failure screenshot: ${captureError}`); }

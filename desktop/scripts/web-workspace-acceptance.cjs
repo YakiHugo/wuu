@@ -85,6 +85,7 @@ async function runWebsiteAcceptance(h, fixture) {
   const siteIDs = new Map();
   const ribbonGroup = 'ribbon-browser';
   const readSite = () => evaluate(() => window.wuu.webWorkspace.initializeTabs([]));
+  let independentFixtures = false;
   const webRoot = '[data-wuu-component="web-workspace"]';
   const address = `${webRoot} .web-workspace-toolbar .workspace-browser-url-input`;
   const startInput = '.web-workspace-stage:not([hidden]) .web-workspace-start-search input';
@@ -633,8 +634,33 @@ async function runWebsiteAcceptance(h, fixture) {
     assert.equal(wc.session, session.fromPartition('persist:wuu-browser'), 'Uses the existing persistent browser profile');
     return { sandbox: p.sandbox, contextIsolation: p.contextIsolation, nodeIntegration: p.nodeIntegration, preload: p.preload || null };
   }
+  async function ensureIndependentFixtures(journey) {
+    // The first journey owns real +/address/Pin acceptance. Once its result is
+    // recorded, missing prerequisites must not turn every later journey into
+    // the same missing-selector failure. API calls here are setup, not passes.
+    for (const [name, pathname] of [['Fixture Alpha', '/alpha'], ['Fixture Beta', '/beta']]) {
+      const state = await readSite();
+      if (state.tabs.some(tab => tab.id === siteIDs.get(name))) continue;
+      const restored = await evaluate(({ id, url }) => window.wuu.webWorkspace.createTab(id, url), { id: ribbonGroup, url: origin + pathname });
+      siteIDs.set(name, restored.activeTabId);
+      if (name === 'Fixture Alpha') alphaID = restored.activeTabId;
+      report.actions.push({ label: 'restore-missing-independent-fixture', setupOnly: true, journey, name, id: restored.activeTabId, url: origin + pathname, atMs: Date.now() - started }); save();
+      await waitFor(id => document.querySelector(`[data-ribbon-id="${id}"]`), restored.activeTabId);
+    }
+  }
+  async function ensureIndependentCookie(journey) {
+    const cookieCheck = report.checks.find(check => check.name === 'native website security cookies history reload and retained input');
+    if (cookieCheck?.status === 'passed') return;
+    const cookies = session.fromPartition('persist:wuu-browser').cookies;
+    if ((await cookies.get({ url: origin })).some(cookie => cookie.name === 'wuu_acceptance' && cookie.value === 'synthetic-session')) return;
+    await cookies.set({ url: origin, name: 'wuu_acceptance', value: 'synthetic-session', path: '/', expirationDate: Date.now() / 1000 + 86400, sameSite: 'lax' });
+    report.actions.push({ label: 'restore-independent-synthetic-cookie', setupOnly: true, journey, reason: 'The earlier cookie journey did not pass', atMs: Date.now() - started }); save();
+  }
   const testNative = (name, action) => test(name, async () => {
-    try { return await action(); }
+    try {
+      if (independentFixtures) await ensureIndependentFixtures(name);
+      return await action();
+    }
     catch (error) {
       try { await capture(`failure-${name}`); } catch {}
       // Keep the original failure, then dismiss only this fixture's popups.
@@ -775,43 +801,72 @@ async function runWebsiteAcceptance(h, fixture) {
   });
 
   await testNative('left plus opens one blank mascot tab and Pin retains the website', async () => {
-    assert.equal(await evaluate(selector => document.querySelectorAll(selector).length, webTabs), 0, 'No website tabs are added by default');
-    await blankTab('first-left-web-tab');
-    assert.equal(await evaluate(() => Boolean(document.querySelector('.web-workspace-tabstrip'))), false);
-    await fill(startInput, 'javascript:alert(1)'); xinput(['key', '--clearmodifiers', 'Return']);
-    await waitFor(selector => document.querySelector(selector)?.getAttribute('aria-invalid') === 'true', startInput);
-    assert.equal((await readSite()).url, 'about:blank', 'Unsafe scheme never navigates');
-    await capture('unsafe-address-rejected');
-    await closeActiveTab('close-final-blank-tab');
-    assert.equal((await readSite()).tabs.length, 0, 'Closing the final tab leaves no artificial replacement');
-    await waitFor(() => !document.querySelector('.web-workspace-stage:not([hidden])'));
-    alphaID = await blankTab('new-alpha-left-tab'); siteIDs.set('Fixture Alpha', alphaID);
-    await fill(startInput, origin + '/alpha'); xinput(['key', '--clearmodifiers', 'Return']);
-    await until(() => nativeView('/alpha')?.getVisible() && !nativeView('/alpha').webContents.isLoading(), 'First left tab loads fixture');
-    const options = await tabMenu(alphaID, 'pin-alpha');
-    assert.deepEqual(options, ['Pin tab', 'Close tab'], 'Website context menu stays minimal');
-    xinput(['key', 'Home', 'key', 'Return']);
-    await waitFor(id => document.querySelector(`[data-ribbon-id="${id}"]`)?.dataset.pinned === 'true', alphaID);
-    await addSite('Fixture Beta', '/beta');
-    await openSite('Fixture Alpha', '/alpha');
-    const vertical = { collapsed: await verticalTabGeometry() }, hostBefore = nativeView('/alpha').getBounds();
-    const viewportBefore = await nativeView('/alpha').webContents.executeJavaScript('({width:innerWidth,height:innerHeight})');
-    const focusBeforeHover = nativeView('/alpha').webContents.isFocused();
-    await hoverTab(siteIDs.get('Fixture Beta'));
-    vertical.expanded = await verticalTabGeometry(true);
-    await liveChrome('ribbon', nativeView('/alpha').webContents, 'hover rail');
-    assert.equal(nativeView('/alpha').webContents.isFocused(), focusBeforeHover, 'Pointer hover preserves existing native keyboard focus');
-    assert.deepEqual(nativeView('/alpha').getBounds(), hostBefore, 'Hover expansion does not resize the native website');
-    assert.deepEqual(await nativeView('/alpha').webContents.executeJavaScript('({width:innerWidth,height:innerHeight})'), viewportBefore, 'Hover expansion leaves the page viewport unchanged');
-    assert.ok(await evaluateRibbon(id => { const close = document.querySelector(`[data-ribbon-close-id="${id}"]`); return close && getComputedStyle(close).visibility === 'visible' && Number(getComputedStyle(close).opacity) > 0.95; }, siteIDs.get('Fixture Beta')), 'Hovered native tab exposes its close control');
-    await capture('vertical-left-tabs-with-hover-close');
-    await leaveRail();
-    await until(() => nativeView('/alpha')?.getVisible() && !chromeView('ribbon')?.getVisible(), 'Pointer leave dismisses chrome while retaining the same live page');
-    vertical.restored = await verticalTabGeometry();
-    await capture('collapsed-left-tabs-unchanged-web-viewport');
-    return { alphaID, betaID: siteIDs.get('Fixture Beta'), options, tabs: (await readSite()).tabs, vertical };
+    const probeContents = [win.webContents, chromeView('ribbon')?.webContents].filter(Boolean);
+    for (const wc of probeContents) await evaluateContents(wc, () => {
+      const events = [], types = ['pointerover', 'pointerout', 'pointermove', 'focusin', 'focusout', 'focus', 'blur'];
+      const observe = event => {
+        const nav = document.querySelector('.sidebar-ribbon');
+        events.push({ type: event.type, at: performance.now(), x: event.clientX, y: event.clientY,
+          target: event.target instanceof Element ? event.target.outerHTML.slice(0, 160) : String(event.target),
+          related: event.relatedTarget instanceof Element ? event.relatedTarget.outerHTML.slice(0, 160) : String(event.relatedTarget),
+          expanded: nav?.dataset.expanded, hovered: nav?.matches(':hover'), focusedWithin: nav?.contains(document.activeElement) });
+        if (events.length > 160) events.shift();
+      };
+      types.forEach(type => window.addEventListener(type, observe, true));
+      window.__wuuRailAcceptance = { events, stop: () => types.forEach(type => window.removeEventListener(type, observe, true)) };
+    });
+    try {
+      assert.equal(await evaluate(selector => document.querySelectorAll(selector).length, webTabs), 0, 'No website tabs are added by default');
+      await blankTab('first-left-web-tab');
+      assert.equal(await evaluate(() => Boolean(document.querySelector('.web-workspace-tabstrip'))), false);
+      await fill(startInput, 'javascript:alert(1)'); xinput(['key', '--clearmodifiers', 'Return']);
+      await waitFor(selector => document.querySelector(selector)?.getAttribute('aria-invalid') === 'true', startInput);
+      assert.equal((await readSite()).url, 'about:blank', 'Unsafe scheme never navigates');
+      await capture('unsafe-address-rejected');
+      await closeActiveTab('close-final-blank-tab');
+      assert.equal((await readSite()).tabs.length, 0, 'Closing the final tab leaves no artificial replacement');
+      await waitFor(() => !document.querySelector('.web-workspace-stage:not([hidden])'));
+      alphaID = await blankTab('new-alpha-left-tab'); siteIDs.set('Fixture Alpha', alphaID);
+      await fill(startInput, origin + '/alpha'); xinput(['key', '--clearmodifiers', 'Return']);
+      await until(() => nativeView('/alpha')?.getVisible() && !nativeView('/alpha').webContents.isLoading(), 'First left tab loads fixture');
+      const options = await tabMenu(alphaID, 'pin-alpha');
+      assert.deepEqual(options, ['Pin tab', 'Close tab'], 'Website context menu stays minimal');
+      xinput(['key', 'Home', 'key', 'Return']);
+      await waitFor(id => document.querySelector(`[data-ribbon-id="${id}"]`)?.dataset.pinned === 'true', alphaID);
+      await addSite('Fixture Beta', '/beta');
+      await openSite('Fixture Alpha', '/alpha');
+      const vertical = { collapsed: await verticalTabGeometry() }, hostBefore = nativeView('/alpha').getBounds();
+      const viewportBefore = await nativeView('/alpha').webContents.executeJavaScript('({width:innerWidth,height:innerHeight})');
+      const focusBeforeHover = nativeView('/alpha').webContents.isFocused();
+      await hoverTab(siteIDs.get('Fixture Beta'));
+      vertical.expanded = await verticalTabGeometry(true);
+      await liveChrome('ribbon', nativeView('/alpha').webContents, 'hover rail');
+      assert.equal(nativeView('/alpha').webContents.isFocused(), focusBeforeHover, 'Pointer hover preserves existing native keyboard focus');
+      assert.deepEqual(nativeView('/alpha').getBounds(), hostBefore, 'Hover expansion does not resize the native website');
+      assert.deepEqual(await nativeView('/alpha').webContents.executeJavaScript('({width:innerWidth,height:innerHeight})'), viewportBefore, 'Hover expansion leaves the page viewport unchanged');
+      assert.ok(await evaluateRibbon(id => { const close = document.querySelector(`[data-ribbon-close-id="${id}"]`); return close && getComputedStyle(close).visibility === 'visible' && Number(getComputedStyle(close).opacity) > 0.95; }, siteIDs.get('Fixture Beta')), 'Hovered native tab exposes its close control');
+      await capture('vertical-left-tabs-with-hover-close');
+      await leaveRail();
+      await until(() => nativeView('/alpha')?.getVisible() && !chromeView('ribbon')?.getVisible(), 'Pointer leave dismisses chrome while retaining the same live page');
+      vertical.restored = await verticalTabGeometry();
+      await capture('collapsed-left-tabs-unchanged-web-viewport');
+      return { alphaID, betaID: siteIDs.get('Fixture Beta'), options, tabs: (await readSite()).tabs, vertical };
+    } finally {
+      report.firstTabRailInteraction = await Promise.all(probeContents.map(async wc => {
+        if (wc.isDestroyed()) return { id: wc.id, destroyed: true };
+        const state = await evaluateContents(wc, () => {
+          const nav = document.querySelector('.sidebar-ribbon'), probe = window.__wuuRailAcceptance;
+          const result = { events: probe.events, expanded: nav?.dataset.expanded, hovered: nav?.matches(':hover'),
+            focusedWithin: nav?.contains(document.activeElement), documentFocused: document.hasFocus(), activeElement: document.activeElement?.outerHTML.slice(0, 300) };
+          probe.stop(); delete window.__wuuRailAcceptance; return result;
+        });
+        return { id: wc.id, url: wc.getURL(), focused: wc.isFocused(), ...state };
+      })).catch(error => [{ unavailable: String(error) }]);
+      save();
+    }
   });
 
+  independentFixtures = true;
   await testNative('ribbon reorders Chat away from first with real keyboard and pointer', async () => {
     await openSite('Fixture Alpha', '/alpha');
     const before = await evaluate(() => [...document.querySelectorAll('.sidebar-ribbon-main [data-ribbon-id]')].map(node => node.dataset.ribbonId));
@@ -1187,6 +1242,7 @@ async function runWebsiteAcceptance(h, fixture) {
   await runBrowserMediaAcceptance({ win, report, output, started, save, testNative, openSite, pageClick, navigateAddress, readSite, nativeView, until, evaluate, fill, address, capture, xinput, delay }, fixture);
 
   await testNative('left tab close recreation and renderer restart preserve order pin and cookies', async () => {
+    await ensureIndependentCookie('tab close and renderer restart');
     const wc = await openSite('Fixture Alpha', '/alpha');
     assert.ok((await wc.executeJavaScript('document.cookie')).includes('wuu_acceptance=synthetic-session'));
     const backgroundOwner = await openSite('Fixture Beta', '/beta'), beforeClose = win.getBounds();
@@ -1259,6 +1315,7 @@ async function runWebsiteAcceptance(h, fixture) {
   });
 
   await testNative('authored extension uses shared native website and unloads cleanly', async () => {
+    await ensureIndependentCookie('authored extension shared browser profile');
     await click(plugins, 'open-extension-inventory'); await hidden('extension inventory');
     await click(pick('.sidebar-section-item', 'Plugins'), 'select-plugin-inventory');
     await waitFor(() => document.querySelector('.catalog-row-open[aria-label*="Acceptance Webpage"]'));

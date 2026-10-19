@@ -60,6 +60,7 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Dismiss the live native hover ribbon on real pointer movement into the shell or page after reopening a tab, including when the reused overlay never received a pointer-enter event.
 - Keep tab-close focus inside the native ribbon instead of moving to its duplicate shell controls.
 
 - Keep website contents live under browser toolbar panels and retain the selected native page when hiding or restoring the window.
