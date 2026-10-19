@@ -60,6 +60,8 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Keep tab-close focus inside the native ribbon instead of moving to its duplicate shell controls.
+
 - Keep website contents live under browser toolbar panels and retain the selected native page when hiding or restoring the window.
 - Keep newly restored browser tabs from taking focus while hidden by the navigation rail.
 

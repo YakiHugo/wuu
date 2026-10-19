@@ -221,7 +221,7 @@ async function capture(label) {
 }
 async function click(target, label, evidence = true) {
   const p = await point(target);
-  const inRail = await evaluate(p => Boolean(document.elementFromPoint(p.x, p.y)?.closest('.sidebar-ribbon')), p);
+  const inRail = p.nativeChrome || await evaluate(p => Boolean(document.elementFromPoint(p.x, p.y)?.closest('.sidebar-ribbon')), p);
   if (evidence) await capture(`before-${label}`);
   // Route through the OS so a native chrome view cannot be bypassed by a
   // renderer-only event sent to the placeholder underneath it.
@@ -240,6 +240,16 @@ async function click(target, label, evidence = true) {
     assert.equal(moved.status, 0, moved.stderr || String(moved.error));
     report.actions.push({ label: `${label}-leave-rail`, atMs: Date.now() - started });
     await settle();
+    const account = win.contentView.children.find(view => view.webContents?.getURL() === 'wuu-chrome://ui/chrome-overlay.html?surface=account');
+    const menuRetains = account?.getVisible() || await evaluate(() => [...document.querySelectorAll('.sidebar-account-menu[role=menu]')].some(node => node.getBoundingClientRect().width > 0 && getComputedStyle(node).visibility !== 'hidden'));
+    if (!menuRetains) {
+      await waitFor(() => document.querySelector('.sidebar-ribbon')?.dataset.expanded !== 'true', undefined, 'Ordinary pointer navigation leaves the hover rail', 4000);
+      const deadline = Date.now() + 4000;
+      while (win.contentView.children.some(view => view.webContents?.getURL() === 'wuu-chrome://ui/chrome-overlay.html?surface=ribbon' && view.getVisible())) {
+        if (Date.now() >= deadline) throw new Error('Native hover rail remains visible after pointer leave');
+        await delay(40);
+      }
+    }
   }
 }
 async function fill(target, text) {

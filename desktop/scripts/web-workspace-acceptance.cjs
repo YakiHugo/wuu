@@ -151,10 +151,14 @@ async function runWebsiteAcceptance(h, fixture) {
     const result = spawnSync('xdotool', args, { encoding: 'utf8', timeout: 5000 });
     assert.equal(result.status, 0, result.stderr || String(result.error));
   }
-  async function leaveRail() {
+  async function leaveRail(waitForCollapse = true) {
     const outer = win.getContentBounds(), zoom = win.webContents.getZoomFactor();
     xinput(['mousemove', String(Math.round(outer.x + Math.min(300, outer.width / zoom - 20) * zoom)), String(Math.round(outer.y + 90 * zoom))]);
     await settle();
+    // Native chrome has a 120ms pointer-exit grace. Shell rAFs alone do not
+    // acknowledge its dismissal; never replace this with Escape or forced blur.
+    if (waitForCollapse) await until(async () => !chromeView('ribbon')?.getVisible()
+      && await evaluate(() => document.querySelector('.sidebar-ribbon')?.dataset.expanded !== 'true'), 'Native hover rail acknowledges pointer leave', 4000);
   }
   async function hoverTab(id) {
     const p = await chromePoint(tabButton(id)), outer = win.getContentBounds(), zoom = win.webContents.getZoomFactor();
@@ -163,7 +167,7 @@ async function runWebsiteAcceptance(h, fixture) {
     await until(() => chromeView('ribbon')?.getVisible(), 'Native expanded ribbon paints');
   }
   async function finishRailInteraction(wc, label) {
-    await leaveRail();
+    await leaveRail(false);
     if (await evaluate(() => document.querySelector('.sidebar-ribbon')?.dataset.expanded === 'true')) {
       // Escape/Tab can correctly retain keyboard focus in the expanded rail.
       // A real click back into browser chrome ends that interaction explicitly.
@@ -192,7 +196,9 @@ async function runWebsiteAcceptance(h, fixture) {
   async function typeAddress(value, label) {
     await focusAddress(label);
     xinput(['key', '--clearmodifiers', 'ctrl+a']);
-    xinput(['type', '--clearmodifiers', '--delay', '0', value]);
+    await waitFor(selector => { const input = document.querySelector(selector); return document.activeElement === input
+      && input.selectionStart === 0 && input.selectionEnd === input.value.length; }, address, 'Native select-all reaches the address input');
+    xinput(['type', '--clearmodifiers', '--delay', '8', value]);
     await waitFor(({ selector, value }) => document.activeElement?.matches(selector) && document.activeElement.value === value, { selector: address, value });
   }
   async function click(target, label, evidence = true, retainHover = false) {
@@ -206,7 +212,11 @@ async function runWebsiteAcceptance(h, fixture) {
     report.actions.push({ label: `web-${label}`, input: 'native-x11', atMs: Date.now() - started, point: p });
     await settle();
     if (evidence) await capture(`after-${label}`);
-    if (inRail && !retainHover) await leaveRail();
+    if (inRail && !retainHover) {
+      // An open account menu intentionally retains the rail until dismissal.
+      const menuRetains = chromeView('account')?.getVisible() || await evaluate(() => [...document.querySelectorAll('.sidebar-account-menu[role=menu]')].some(node => node.getBoundingClientRect().width > 0 && getComputedStyle(node).visibility !== 'hidden'));
+      await leaveRail(!menuRetains);
+    }
   }
   async function mascotGaze() {
     const selector = '.web-workspace-stage:not([hidden]) .web-workspace-start-mascot';
@@ -607,7 +617,9 @@ async function runWebsiteAcceptance(h, fixture) {
     };
     const created = [];
     const observe = (_event, wc) => {
-      if (wc === win.webContents) return;
+      // Trusted ribbon/account/capsule views are separate WebContents and
+      // must not be counted as repeated Notion website creation.
+      if (wc === win.webContents || wc.session !== session.fromPartition('persist:wuu-browser')) return;
       created.push(wc);
       const record = (event, detail = {}) => {
         diagnostic.events.push({ atMs: Date.now() - started, id: wc.id, event, ...detail }); save();
@@ -1007,7 +1019,7 @@ async function runWebsiteAcceptance(h, fixture) {
     await until(() => wc.getZoomFactor() === 1, 'actual native zoom reset'); xinput(['key', 'Escape']);
     await pageClick(wc, '#draft', 'native-close-tab-focus'); xinput(['key', '--clearmodifiers', 'ctrl+w']);
     await until(async () => !win.isDestroyed() && (await readSite()).tabs.length === before, 'native Ctrl+W closes one tab only');
-    wc = nativeView('/alpha').webContents;
+    wc = await openSite('Fixture Alpha', '/alpha');
     await pageClick(wc, '#draft', 'native-reopen-tab-focus'); xinput(['key', '--clearmodifiers', 'ctrl+shift+t']);
     await until(async () => (await readSite()).tabs.length === before + 1 && nativeView('/tab-two')?.getVisible(), 'native reopen restores closed tab');
     await click(address, 'address-focused-close-tab'); xinput(['key', '--clearmodifiers', 'ctrl+w']);
@@ -1144,7 +1156,15 @@ async function runWebsiteAcceptance(h, fixture) {
     assert.ok((await wc.executeJavaScript('document.cookie')).includes('wuu_acceptance=synthetic-session'));
     const backgroundOwner = await openSite('Fixture Beta', '/beta'), beforeClose = win.getBounds();
     await hoverTab(alphaID);
-    assert.ok(await evaluateRibbon(id => { const close = document.querySelector(`[data-ribbon-close-id="${id}"]`); return close && Number(getComputedStyle(close).opacity) > 0.95; }, alphaID), 'Native background close control is visible before clicking');
+    try {
+      await until(() => evaluateRibbon(id => { const close = document.querySelector(`[data-ribbon-close-id="${id}"]`); return close && getComputedStyle(close).visibility === 'visible' && Number(getComputedStyle(close).opacity) > 0.95; }, alphaID), 'Native background close control settles before clicking', 4000);
+    } catch (error) {
+      const pointer = spawnSync('xdotool', ['getmouselocation', '--shell'], { encoding: 'utf8', timeout: 5000 });
+      report.backgroundCloseFailure = { pointer: pointer.stdout, overlayBounds: chromeView('ribbon')?.getBounds(),
+        native: await evaluateRibbon(id => ({ hovered: [...document.querySelectorAll(':hover')].map(node => node.tagName + '.' + node.className),
+          activeElement: document.activeElement?.outerHTML.slice(0, 300),
+          close: document.querySelector(`[data-ribbon-close-id="${id}"]`)?.outerHTML }), alphaID) }; save(); throw error;
+    }
     await click(`.sidebar-ribbon-close[data-ribbon-close-id="${alphaID}"]`, 'close-background-alpha');
     await until(() => wc.isDestroyed(), 'Closed left tab releases native contents');
     assert.equal((await readSite()).activeTabId, siteIDs.get('Fixture Beta'), 'Closing a background tab does not select it or change the active tab');

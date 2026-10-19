@@ -188,7 +188,9 @@ export function NavigationRibbon({ items, websites = [], activeWebsiteId, onSele
   const nativePresented = useChromeOverlay(nativeAvailable && nativeOpen, nativeBounds, nativeModel, command => {
     if (command.type === "dismiss") dismissedUnderPointer.current = command.reason === "escape" || command.reason === "tab";
     else if (command.type === "select") destinationByID.get(command.id)?.onSelect();
-    else if (command.type === "close-tab") closeWebsite(command.id);
+    // The native ribbon owns its focus; focusing its duplicate shell button
+    // would steal keyboard input while the native surface is still open.
+    else if (command.type === "close-tab") onCloseTab?.(command.id);
     else if (command.type === "pin-tab") onPinTab?.(command.id, command.pinned);
     else if (command.type === "reorder") reorder(command.id, command.target);
     else if (command.type === "new-tab") onNewTab?.();

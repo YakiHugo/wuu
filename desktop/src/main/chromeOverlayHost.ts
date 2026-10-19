@@ -185,9 +185,14 @@ export class ChromeOverlayHost {
     const surface = this.trusted(event);
     if (!surface) return;
     const request = surface.request;
-    if (!request || !message || request.token !== message.token || request.generation !== message.generation || !surface.view.getVisible()) return;
+    if (!request || !message || request.token !== message.token || !surface.view.getVisible()) return;
     const command = message.command;
     if (!command || typeof command.type !== "string") return;
+    // Pointer/focus ownership belongs to this opening, not a title/progress
+    // revision. Dropping a leave during a model update strands the native rail.
+    const lifecycle = command.type === "pointer" || command.type === "retain" || command.type === "dismiss";
+    if (!Number.isSafeInteger(message.generation) || message.generation < 1
+      || (lifecycle ? message.generation > request.generation : message.generation !== request.generation)) return;
     if (command.type === "dismiss") {
       if (["escape", "tab"].includes(command.reason)) this.dismiss(surface, command.reason, true);
       return;
@@ -268,7 +273,12 @@ export class ChromeOverlayHost {
       surface.view.webContents.setBackgroundThrottling(true);
       surface.view.webContents.send("wuu:chrome-overlay-state", null);
     }
-    if (focused && restoreFocus && surface.focusBefore && !surface.focusBefore.isDestroyed()) surface.focusBefore.focus();
+    let returnTo = surface.kind === "account" ? surface.owner.webContents : surface.focusBefore;
+    if (!returnTo || returnTo.isDestroyed() || (returnTo !== surface.owner.webContents
+      && !surface.owner.contentView.children.some(child => child.getVisible() && (child as WebContentsView).webContents === returnTo))) returnTo = surface.owner.webContents;
+    // Hiding the focused child can leave the window with no keyboard owner.
+    // Never steal focus after an outside click or window deactivation.
+    if (focused && (restoreFocus || reason !== "owner") && surface.owner.isFocused() && surface.owner.isVisible() && !surface.owner.isMinimized() && !returnTo.isDestroyed()) returnTo.focus();
     if (surface.kind === "account") {
       const ribbon = this.surfaces.get("ribbon");
       if (ribbon && !restoreFocus) this.dismissOutsideRibbon(ribbon);
