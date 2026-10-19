@@ -1087,8 +1087,34 @@ async function runWebsiteAcceptance(h, fixture) {
     const restored = await readSite();
     assert.deepEqual(restored.tabs.map(tab => ({ id: tab.id, url: tab.url, pinned: Boolean(tab.pinned) })), stateBefore.tabs.map(tab => ({ id: tab.id, url: tab.url, pinned: Boolean(tab.pinned) })), 'Left tabs and pins survive renderer restart');
     assert.ok(nativeBefore.every(wc => wc.isDestroyed()), 'Shell reload releases old native pages before lazy recreation');
-    await openSite('Fixture Alpha Restored', '/alpha');
-    assert.ok((await contents('/alpha').executeJavaScript('document.cookie')).includes('wuu_acceptance=synthetic-session'));
+    await evaluate(() => {
+      const events = [], types = ['pointerover', 'pointerout', 'pointermove', 'focusin', 'focusout'];
+      const observe = event => {
+        const nav = document.querySelector('.sidebar-ribbon');
+        events.push({ type: event.type, at: performance.now(), x: event.clientX, y: event.clientY,
+          target: event.target instanceof Element ? event.target.outerHTML.slice(0, 200) : String(event.target),
+          related: event.relatedTarget instanceof Element ? event.relatedTarget.outerHTML.slice(0, 160) : String(event.relatedTarget),
+          expanded: nav?.dataset.expanded, hovered: nav?.matches(':hover'), focusedWithin: nav?.contains(document.activeElement) });
+        if (events.length > 100) events.shift();
+      };
+      types.forEach(type => document.addEventListener(type, observe, true));
+      window.__wuuRestartInputProbe = { events, stop: () => types.forEach(type => document.removeEventListener(type, observe, true)) };
+    });
+    try {
+      await openSite('Fixture Alpha Restored', '/alpha');
+      assert.ok((await contents('/alpha').executeJavaScript('document.cookie')).includes('wuu_acceptance=synthetic-session'));
+    } finally {
+      report.restartInteraction = await evaluate(() => {
+        const nav = document.querySelector('.sidebar-ribbon'), probe = window.__wuuRestartInputProbe;
+        const result = { events: probe.events, expanded: nav?.dataset.expanded, hovered: nav?.matches(':hover'),
+          focusedWithin: nav?.contains(document.activeElement), activeElement: document.activeElement?.outerHTML.slice(0, 300),
+          layers: [...document.querySelectorAll('[role="tooltip"],.sidebar-account-menu,.thread-row-context-menu')].map(node => node.outerHTML.slice(0, 240)) };
+        probe.stop(); delete window.__wuuRestartInputProbe; return result;
+      }).catch(error => ({ unavailable: String(error) }));
+      report.restartInteraction.nativeViews = views().map(view => ({ id: view.webContents.id, url: view.webContents.getURL(), visible: view.getVisible(), focused: view.webContents.isFocused(), bounds: view.getBounds() }));
+      report.restartInteraction.nativeChildren = win.getChildWindows().map(child => ({ title: child.getTitle(), visible: child.isVisible(), focusable: child.isFocusable(), url: child.webContents.getURL() }));
+      save();
+    }
     const library = await evaluate(() => window.wuu.webWorkspace.library.getState());
     if (clearedHistoryURL) {
       assert.ok(!library.history.some(entry => entry.url === clearedHistoryURL), 'Renderer restart does not restore cleared history');

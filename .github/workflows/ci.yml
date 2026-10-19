@@ -991,7 +991,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: titlebar-hosted-macos-controls-evidence
-          path: ${{ runner.temp }}/wuu-macos-focused-controls
+          path: |
+            ${{ runner.temp }}/wuu-macos-focused-controls/*.png
+            ${{ runner.temp }}/wuu-macos-focused-controls/*.json
+            ${{ runner.temp }}/wuu-macos-focused-controls/*.log
+            ${{ runner.temp }}/wuu-macos-focused-controls/*.txt
           if-no-files-found: warn
           retention-days: 14
 

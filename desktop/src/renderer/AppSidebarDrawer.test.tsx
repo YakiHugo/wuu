@@ -446,12 +446,46 @@ describe("collapsed sidebar hover drawer", () => {
     expect(ribbon.dataset.expanded).toBe("true");
     expect(history.hidden).toBe(collapsed);
     expect(history.hasAttribute("inert")).toBe(collapsed);
-    expect(document.activeElement).toBe(collapsed ? container.querySelector(".section-sidebar-toggle") : back);
+    expect(document.activeElement).toBe(collapsed ? appShell() : back);
     await act(async () => ribbon.dispatchEvent(new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body })));
     expect(ribbon.dataset.expanded).toBeUndefined();
     expect(history.hidden).toBe(false);
     expect(history.hasAttribute("inert")).toBe(false);
     expect(container.querySelector('[data-wuu-component="page-history-controls"]')).toBe(history);
+  });
+
+  it.each(["darwin", "linux"])("releases only an occluded toggle's focus without pinning ribbon expansion on %s", async (platform) => {
+    Object.defineProperty(window.wuu, "platform", { configurable: true, value: platform });
+    await renderCollapsedApp();
+    const toggle = container.querySelector<HTMLButtonElement>(".section-sidebar-toggle")!;
+    const ribbon = container.querySelector<HTMLElement>(".sidebar-ribbon")!;
+    await act(async () => toggle.focus());
+    await act(async () => ribbon.dispatchEvent(new MouseEvent("pointerover", { bubbles: true })));
+    expect(toggle.hidden).toBe(platform === "darwin");
+    expect(toggle.hasAttribute("inert")).toBe(platform === "darwin");
+    expect(document.activeElement).toBe(platform === "darwin" ? appShell() : toggle);
+    await act(async () => ribbon.dispatchEvent(new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body })));
+    expect(ribbon.dataset.expanded).toBeUndefined();
+    expect(toggle.hidden).toBe(false);
+    expect(toggle.hasAttribute("inert")).toBe(false);
+    expect(container.querySelector(".section-sidebar-toggle")).toBe(toggle);
+  });
+
+  it("retains genuine keyboard ribbon focus when the pointer leaves", async () => {
+    Object.defineProperty(window.wuu, "platform", { configurable: true, value: "darwin" });
+    await renderCollapsedApp();
+    const ribbon = container.querySelector<HTMLElement>(".sidebar-ribbon")!;
+    const destination = ribbon.querySelector<HTMLButtonElement>("button")!;
+    await act(async () => {
+      destination.focus();
+      destination.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" }));
+      ribbon.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+    });
+    await act(async () => ribbon.dispatchEvent(new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body })));
+    expect(ribbon.dataset.expanded).toBe("true");
+    expect(document.activeElement).toBe(destination);
+    await act(async () => appShell()!.focus());
+    expect(ribbon.dataset.expanded).toBeUndefined();
   });
 
   it("retains an edge-opened drawer while the pointer travels over its persistent toggle", async () => {

@@ -565,6 +565,16 @@ export function App(): JSX.Element {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [nativeRibbonPresent, setNativeRibbonPresent] = useState(false);
   const [nativeRibbonExpanded, setNativeRibbonExpanded] = useState(false);
+  const handleRibbonExpandedChange = useCallback((expanded: boolean) => {
+    const shell = appShellRef.current;
+    if (expanded && window.wuu.platform === "darwin"
+      && shell?.querySelector(".section-sidebar-toggle") === document.activeElement) {
+      // Release owned focus before hidden/inert can blur the covered toggle.
+      // Focusing a ribbon item here would turn hover into retained keyboard focus.
+      shell.focus({ preventScroll: true });
+    }
+    setNativeRibbonExpanded(expanded);
+  }, []);
   const embeddedSettings = !poppedOutMode && nativeRibbonPresent;
   const [mainComposerFocusRequest, setMainComposerFocusRequest] =
     useState<MainComposerFocusRequest | null>(null);
@@ -5674,6 +5684,7 @@ export function App(): JSX.Element {
       <ArtifactPreviewContext.Provider value={poppedOutMode || isTouchWebShell() ? undefined : openWorkspaceArtifactTab}>
         <div
           ref={appShellRef}
+          tabIndex={-1}
           className={shellClassName}
           style={shellStyle}
           data-wuu-component="app-shell"
@@ -5728,7 +5739,7 @@ export function App(): JSX.Element {
               settingsActive={settingsOpen}
               onLeaveSettings={() => { setSettingsOpen(false); setActiveWebsiteID(undefined); }}
               onRibbonPresenceChange={setNativeRibbonPresent}
-              onRibbonExpandedChange={setNativeRibbonExpanded}
+              onRibbonExpandedChange={handleRibbonExpandedChange}
               catalogSection={catalogSection}
               onSelectCatalogSection={setCatalogSection}
               sidebarCollapsed={sidebarCollapsed}
@@ -6435,6 +6446,8 @@ export function App(): JSX.Element {
         * cover this no-drag control. Keep it as the shell's last child. */}
       {!poppedOutMode ? (
         <button
+          hidden={window.wuu.platform === "darwin" && nativeRibbonPresent && nativeRibbonExpanded}
+          inert={window.wuu.platform === "darwin" && nativeRibbonPresent && nativeRibbonExpanded}
           className="icon-button side-panel-toggle-button sidebar-toggle-button sidebar-collapse-toggle section-sidebar-toggle"
           data-wuu-component="sidebar-toggle"
           type="button"

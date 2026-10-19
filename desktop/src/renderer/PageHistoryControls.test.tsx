@@ -14,7 +14,7 @@ describe("page history drawer occlusion", () => {
     root = createRoot(container);
     const back = vi.fn();
     const render = (hidden: boolean) => root.render(
-      <div className="app-shell" data-web-workspace-open={browser || undefined}>
+      <div className="app-shell" tabIndex={-1} data-web-workspace-open={browser || undefined}>
         <PageHistoryControls canGoBack canGoForward={false} onBack={back} onForward={vi.fn()} hidden={hidden} />
         <button className="section-sidebar-toggle" hidden={browser}>Toggle</button>
         <nav className="sidebar-ribbon"><button aria-current="page">Active website</button></nav>
@@ -24,9 +24,8 @@ describe("page history drawer occlusion", () => {
     await act(async () => render(false));
     const controls = container.querySelector<HTMLElement>(".shell-page-history-controls")!;
     const historyBack = controls.querySelector<HTMLButtonElement>("button")!;
-    const toggle = container.querySelector<HTMLButtonElement>(".section-sidebar-toggle")!;
     const other = container.querySelector<HTMLButtonElement>(".other-control")!;
-    const focusTarget = browser ? container.querySelector<HTMLButtonElement>('.sidebar-ribbon [aria-current="page"]')! : toggle;
+    const focusTarget = container.querySelector<HTMLElement>(".app-shell")!;
     (owned ? historyBack : other).focus();
     await act(async () => render(true));
     expect(controls.hidden).toBe(true);

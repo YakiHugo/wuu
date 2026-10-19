@@ -199,7 +199,10 @@ async function verifyNarrowSidebarControls(win) {
       await evaluate(win, () => document.documentElement.style.setProperty("--desktop-page-zoom", "0.75"));
       await settleChrome(win);
     }
-    if (fixturePlatform === "darwin" && totalWidth === 240) await verifyRibbonHistoryOcclusion(win);
+    if (fixturePlatform === "darwin" && totalWidth === 240) {
+      await verifyRibbonHistoryOcclusion(win);
+      await verifyRibbonControlFocus(win, "conversation");
+    }
     let collapsedGeometry;
     for (const layout of ["docked", "collapsed", "drawer"]) {
       if (layout === "collapsed") {
@@ -230,6 +233,7 @@ async function verifyNarrowSidebarControls(win) {
     saveResults();
     assertTopRow(geometry, { totalWidth, page: "settings", layout: "drawer", font: 20, zoom: 0.75 });
     await capture(win, `sidebar-${totalWidth}-20px-0.75-settings.png`);
+    if (fixturePlatform === "darwin" && totalWidth === 240) await verifyRibbonControlFocus(win, "settings");
     await evaluate(win, () => document.querySelector('[data-ribbon-id="conversations"]').click());
     const away = await evaluate(win, () => ({ x: innerWidth - 40, y: innerHeight - 40 }));
     win.webContents.sendInputEvent({ type: "mouseMove", x: Math.round(away.x * 0.75), y: Math.round(away.y * 0.75) });
@@ -305,6 +309,88 @@ async function verifyRibbonHistoryOcclusion(win) {
   win.webContents.setZoomFactor(savedZoom);
   await evaluate(win, zoom => document.documentElement.style.setProperty('--desktop-page-zoom', String(zoom)), savedZoom);
   await preparePointerInput(win);
+  await settleChrome(win);
+}
+
+async function verifyRibbonControlFocus(win, page) {
+  const originalCollapsed = await evaluate(win, () => document.querySelector('.app-shell').classList.contains('sidebar-collapsed'));
+  const snapshot = () => evaluate(win, () => {
+    const toggle = document.querySelector('.section-sidebar-toggle');
+    const history = document.querySelector('.shell-page-history-controls');
+    const settings = document.querySelector('.app-shell').hasAttribute('data-settings-open');
+    return { toggle: { hidden: toggle.hidden, inert: toggle.inert, rect: toggle.getBoundingClientRect().toJSON() },
+      history: { hidden: history.hidden, inert: history.inert },
+      title: document.querySelector(settings ? '.settings-page-title' : '.conversation-title-heading').getBoundingClientRect().toJSON(),
+      content: document.querySelector(settings ? '.settings-workbench-layer' : '.conversation-pane').getBoundingClientRect().toJSON(),
+      ribbonExpanded: !!document.querySelector('.sidebar-ribbon[data-expanded="true"]'),
+      focusInRibbon: !!document.activeElement.closest('.sidebar-ribbon'), focusOnShell: document.activeElement === document.querySelector('.app-shell') };
+  });
+  // The caller first records/asserts the unmodified settings transition. Move
+  // focus normally to the visible shell before starting independent cases.
+  await evaluate(win, () => document.querySelector('.app-shell').focus());
+  await preparePointerInput(win);
+  for (const layout of ['docked', 'collapsed', 'drawer']) {
+    await evaluate(win, collapsed => {
+      if (document.querySelector('.app-shell').classList.contains('sidebar-collapsed') !== collapsed)
+        document.querySelector('.section-sidebar-toggle').click();
+    }, layout !== 'docked');
+    await settleChrome(win);
+    if (layout === 'drawer') { await revealDrawerAtEdge(win); await settleChrome(win); }
+    for (const owner of layout === 'drawer' ? ['toggle'] : ['toggle', 'history']) {
+      const focused = await evaluate(win, owner => {
+        const target = document.querySelector(owner === 'toggle' ? '.section-sidebar-toggle' : '.shell-page-history-controls button:not(:disabled)');
+        if (!target || target.closest('[hidden], [inert]')) return false;
+        target.focus(); return document.activeElement === target;
+      }, owner);
+      assert.ok(focused, `${page}/${layout}/${owner}: the tested control must own focus`);
+      const before = await snapshot();
+      const point = await evaluate(win, () => {
+        const rect = document.querySelector('.sidebar-ribbon-main .sidebar-ribbon-button').getBoundingClientRect();
+        return { x: 12, y: rect.top + rect.height / 2 };
+      });
+      const zoom = win.webContents.getZoomFactor();
+      win.webContents.sendInputEvent({ type: 'mouseMove', x: Math.round(point.x * zoom), y: Math.round(point.y * zoom) });
+      await waitFor(win, () => !!document.querySelector('.sidebar-ribbon[data-expanded="true"]'), 3000);
+      await evaluate(win, () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      const expanded = await snapshot();
+      assert.ok(expanded.toggle.hidden && expanded.toggle.inert, 'Expanded Mac ribbon explicitly removes its covered toggle');
+      assert.equal(expanded.history.hidden, layout !== 'docked', 'Docked history remains outside the ribbon');
+      assert.equal(expanded.history.inert, expanded.history.hidden);
+      if (owner === 'toggle' || layout !== 'docked') assert.ok(expanded.focusOnShell, 'Covered control focus moves outside the ribbon');
+      assert.equal(expanded.focusInRibbon, false, 'Pointer expansion does not manufacture keyboard retention');
+      assert.deepEqual(expanded.title, before.title);
+      assert.deepEqual(expanded.content, before.content);
+      // A genuine pointer exit must collapse naturally, with no blur or focus reset.
+      await preparePointerInput(win);
+      await settleChrome(win);
+      const restored = await snapshot();
+      assert.ok(!restored.toggle.hidden && !restored.toggle.inert && !restored.ribbonExpanded);
+      assert.deepEqual(restored.toggle.rect, before.toggle.rect, 'The same toggle anchor returns');
+      assert.deepEqual(restored.title, before.title);
+      assert.deepEqual(restored.content, before.content);
+      results.push({ scenario: `ribbon-focus-${page}-${layout}-${owner}`, before, expanded, restored });
+      saveResults();
+    }
+  }
+  // Existing keyboard navigation in the ribbon must retain its own expansion.
+  await evaluate(win, () => document.querySelector('.sidebar-ribbon-main .sidebar-ribbon-button').focus());
+  win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'ArrowDown' });
+  win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'ArrowDown' });
+  await waitFor(win, () => !!document.querySelector('.sidebar-ribbon[data-expanded="true"]'), 3000);
+  const away = await evaluate(win, () => ({ x: innerWidth - 30, y: innerHeight - 30 }));
+  const zoom = win.webContents.getZoomFactor();
+  win.webContents.sendInputEvent({ type: 'mouseMove', x: Math.round(away.x * zoom), y: Math.round(away.y * zoom) });
+  await evaluate(win, () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const keyboard = await snapshot();
+  assert.ok(keyboard.ribbonExpanded && keyboard.focusInRibbon, 'Genuine keyboard ribbon focus survives pointer exit');
+  await evaluate(win, () => document.querySelector('.app-shell').focus());
+  await waitFor(win, () => !document.querySelector('.sidebar-ribbon[data-expanded="true"]'), 3000);
+  results.push({ scenario: `ribbon-keyboard-retention-${page}`, keyboard });
+  saveResults();
+  await evaluate(win, collapsed => {
+    if (document.querySelector('.app-shell').classList.contains('sidebar-collapsed') !== collapsed)
+      document.querySelector('.section-sidebar-toggle').click();
+  }, originalCollapsed);
   await settleChrome(win);
 }
 
@@ -606,6 +692,7 @@ async function chromeToggleGeometry(win) {
     });
     return {
       header: header.toJSON(), peers, separationTargets, historyState, drawerBounds,
+      toggleState: { expectedSuppressed: !!document.querySelector('.mac-window-controls') && !!document.querySelector('.sidebar-ribbon[data-expanded="true"]'), hidden: button.hidden, inert: button.inert },
       contentAxis: (header.top + parseFloat(headerStyle.paddingTop) + header.bottom - parseFloat(headerStyle.paddingBottom)) / 2,
       shellRow: shellBounds.toJSON(), shellControls,
       shellAxis: (shellBounds.top + parseFloat(shellStyle.paddingTop) + shellBounds.bottom - parseFloat(shellStyle.paddingBottom)) / 2,
@@ -702,7 +789,7 @@ function assertTopRow(geometry, context) {
   const details = JSON.stringify({ ...context, geometry });
   const axis = geometry.contentAxis;
   assert.ok(geometry.peers.length >= 2, `Active page title and actions must remain present: ${details}`);
-  const expectedControls = ["sidebar-toggle",
+  const expectedControls = [...(geometry.toggleState.expectedSuppressed ? [] : ["sidebar-toggle"]),
     ...(geometry.historyState.expectedSuppressed ? [] : ["page-history-back", "page-history-forward"]),
     ...(context.page === "settings" ? [] : ["right-sidebar-toggle"])];
   assert.deepEqual(geometry.shellControls.map(control => control.target).sort(), expectedControls.sort(),
@@ -732,6 +819,8 @@ function assertTopRow(geometry, context) {
 
 function assertControlSeparation(geometry, context) {
   const details = JSON.stringify({ ...context, geometry });
+  assert.equal(geometry.toggleState.hidden, geometry.toggleState.expectedSuppressed, `Ribbon toggle visibility is explicit: ${details}`);
+  assert.equal(geometry.toggleState.inert, geometry.toggleState.expectedSuppressed, `Covered toggle cannot receive keyboard input: ${details}`);
   const targets = geometry.separationTargets;
   const histories = targets.filter(target => target.history);
   const suppressed = geometry.historyState.expectedSuppressed;

@@ -41,6 +41,12 @@
   padding-top: var(--window-titlebar-height);
 }
 
+/* The rail belongs to the sidebar's stacking context. Raise that context over
+   the sibling toggle; caption controls follow the shell and remain above it. */
+:root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon[data-expanded="true"]) > .sidebar {
+  z-index: 152;
+}
+
 :root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon) > .shell-right-sidebar-toggle {
   top: calc(var(--workbench-top) + (var(--canvas-titlebar-height) - var(--control-size-toolbar)) / 2);
 }
@@ -674,6 +680,7 @@ html:not([data-app-background]) .navigation-ribbon-layout:has(.sidebar-ribbon) :
   padding: 0;
 }
 .shell-page-history-controls[hidden] { display: none; }
+.navigation-ribbon-layout:has(.sidebar-ribbon) > .section-sidebar-toggle[hidden] { display: none; }
 .shell-page-history-controls button,
 .shell-page-history-controls button * { -webkit-app-region: no-drag; }
 .navigation-ribbon-layout:has(.sidebar-ribbon) > .shell-page-history-controls {
