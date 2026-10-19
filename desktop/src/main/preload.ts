@@ -754,7 +754,7 @@ if (!process.argv.includes("--wuu-browser-disabled")) {
       return () => ipcRenderer.removeListener("wuu:web-workspace-state", listener);
     },
     onFocusAddress: (handler) => {
-      const listener = (_event: Electron.IpcRendererEvent, id: string) => handler(id);
+      const listener = (_event: Electron.IpcRendererEvent, target: { id: string; newTabId?: string }) => handler(target.id, target.newTabId);
       ipcRenderer.on("wuu:web-workspace-focus-address", listener);
       return () => ipcRenderer.removeListener("wuu:web-workspace-focus-address", listener);
     },

@@ -89,6 +89,7 @@ export function WebWorkspacePanel({
   }, [captureBackdrop, current?.loading, snapshotKey]);
 
   const focusAddress = useCallback(() => {
+    setFocusNewTab(undefined);
     setMenuOpen(false);
     inputRef.current?.focus();
     inputRef.current?.select();
@@ -121,7 +122,11 @@ export function WebWorkspacePanel({
   useEffect(() => {
     if (!api || !active) return;
     const visible = (id: string): boolean => id === currentSiteID.current && Boolean(hostRef.current && visibleElementRect(hostRef.current));
-    const offAddress = api.onFocusAddress((id) => { if (visible(id)) focusAddress(); });
+    const offAddress = api.onFocusAddress((id, newTabId) => {
+      if (!visible(id)) return;
+      if (newTabId) { setMenuOpen(false); setFocusNewTab(newTabId); }
+      else focusAddress();
+    });
     const offFind = api.onFocusFind((id) => {
       if (!visible(id)) return;
       setMenuOpen(false);
@@ -162,6 +167,8 @@ export function WebWorkspacePanel({
     setFindText("");
   }, [site?.id, current?.activeTabId, active]);
 
+  useEffect(() => { setFocusNewTab(undefined); }, [site?.id]);
+
   useLayoutEffect(() => {
     if (findOpen) { findInputRef.current?.focus(); findInputRef.current?.select(); }
   }, [findOpen]);
@@ -190,9 +197,17 @@ export function WebWorkspacePanel({
 
   useLayoutEffect(() => {
     if (!focusNewTab) return;
+    if (!active) { setFocusNewTab(undefined); return; }
+    // Native shortcut state and focus requests arrive separately. Keep the
+    // request until its tab has rendered instead of focusing stale chrome.
+    if (focusNewTab !== current?.activeTabId) {
+      // Once the new tab exists, another selected tab is a newer user choice.
+      if (pageTabs.some(tab => tab.id === focusNewTab)) setFocusNewTab(undefined);
+      return;
+    }
     setFocusNewTab(undefined);
-    if (active && blank && focusNewTab === current?.activeTabId) startInputRef.current?.focus();
-  }, [active, blank, current?.activeTabId, focusNewTab]);
+    if (blank) startInputRef.current?.focus();
+  }, [active, blank, current?.activeTabId, focusNewTab, pageTabs]);
 
   const closeFind = useCallback(() => {
     setFindOpen(false);

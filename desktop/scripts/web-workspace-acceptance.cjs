@@ -744,7 +744,14 @@ async function runWebsiteAcceptance(h, fixture) {
     await waitFor(url => document.querySelector(`[data-address-suggestion-url="${url}"]`)?.getAttribute('aria-selected') === 'true', origin + '/alpha');
     xinput(['key', '--clearmodifiers', 'Return']);
     await until(() => nativeView('/alpha')?.getVisible() && !nativeView('/alpha').webContents.isLoading(), 'Keyboard selection opens the saved bookmark');
-    await fill(address, 'history-target');
+    // The page now owns native focus. A renderer-only sendInputEvent can edit
+    // its DOM address field without moving OS focus from the WebContentsView.
+    // Exercise the real user's click and typing before judging autocomplete.
+    await click(address, 'focus-toolbar-history-suggestions');
+    await until(() => win.webContents.isFocused(), 'Native toolbar click transfers keyboard focus to the shell');
+    xinput(['key', '--clearmodifiers', 'ctrl+a']);
+    xinput(['type', '--clearmodifiers', '--delay', '0', 'history-target']);
+    await waitFor(selector => document.activeElement?.matches(selector) && document.activeElement.value === 'history-target', address);
     await waitFor(selector => document.querySelector(selector), suggestion(origin + '/history-target'));
     await assertMenuBackdrop('toolbar-address-suggestions');
     await capture('toolbar-history-suggestion-over-page');
