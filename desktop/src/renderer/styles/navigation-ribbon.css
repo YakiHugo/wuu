@@ -32,6 +32,7 @@
   border: 1px solid var(--hairline-soft);
   border-radius: var(--conversation-canvas-radius);
   background: var(--workbench-canvas-bg);
+  box-shadow: var(--shadow-card);
   content: "";
   pointer-events: none;
 }
