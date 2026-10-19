@@ -406,6 +406,18 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
         && this.contentsOwners.get(contents.id) === owned && owned.navigationGeneration === navigationGeneration
         && requestOrigin(contents.getURL()) === pageOrigin;
       if (allowed && TAB_PERMISSIONS.has(permission)) owned.grants.add(`${pageOrigin}\n${origin}\n${permission}`);
+      if (allowed && permission === "fullscreen" && !parent.isDestroyed() && parent.isVisible() && !parent.isMinimized()
+        && (contents !== owned.page.contents || (owned.page.bounds && owned.page.view.getVisible()
+          && owned.page.group.activeTabId === owned.page.tab.id))) {
+        // Closing a native permission dialog need not reactivate its owner
+        // (notably GTK). Restore the accepting user's input target before
+        // Chromium starts fullscreen; focusing a guest alone cannot do that.
+        const focused = BrowserWindow.getFocusedWindow();
+        if (!focused || focused === parent) {
+          parent.focus();
+          contents.focus();
+        }
+      }
       callback(allowed);
     }, () => callback(false)).finally(() => { this.permissionPrompts.delete(contents.id); });
   }
@@ -675,13 +687,19 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     owner.on("hide", layout);
     owner.on("minimize", layout);
     owner.on("restore", layout);
+    const focusFullscreenPage = () => {
+      if (!owner.isFocused()) return;
+      for (const page of this.pages.values()) {
+        if (page.owner === owner && page.htmlFullscreen && page.group.activeTabId === page.tab.id
+          && !page.contents.isDestroyed() && page.view.getVisible()) page.contents.focus();
+      }
+    };
+    // Native activation can finish after the HTML fullscreen event. Follow
+    // that event once rather than retrying focus or activating a background app.
+    owner.on("focus", focusFullscreenPage);
     owner.on("enter-full-screen", () => {
       layout();
-      // macOS completes its native transition asynchronously, after the HTML
-      // event. Reassert the requesting page's focus once that transition ends.
-      for (const page of this.pages.values()) {
-        if (page.owner === owner && page.htmlFullscreen && !page.contents.isDestroyed() && page.view.getVisible()) page.contents.focus();
-      }
+      focusFullscreenPage();
     });
     owner.on("leave-full-screen", layout);
     owner.webContents.on("did-start-navigation", details => { if (details.isMainFrame && !details.isSameDocument) closePages(); });
