@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { WEB_WORKSPACE_TAB_LIMIT } from "../shared/webWorkspace";
+import { WEB_WORKSPACE_RIBBON_ID, WEB_WORKSPACE_TAB_LIMIT } from "../shared/webWorkspace";
 import {
   persistentWebWorkspaceURL,
   type WebWorkspaceBookmark,
@@ -20,6 +20,7 @@ type Store = {
   history: WebWorkspaceHistoryEntry[];
   bookmarks: WebWorkspaceBookmark[];
   sessions: Record<string, WebWorkspaceSavedSession>;
+  ribbon?: WebWorkspaceSavedSession;
 };
 
 function titleText(value: unknown, fallback: string): string {
@@ -47,19 +48,29 @@ function restorableURL(input: string): string | undefined {
   return undefined;
 }
 
-function savedSession(value: unknown): WebWorkspaceSavedSession | undefined {
+function savedSession(value: unknown, ribbon = false): WebWorkspaceSavedSession | undefined {
   if (!value || typeof value !== "object" || !("tabs" in value) || !Array.isArray(value.tabs)) return undefined;
   const tabs: WebWorkspaceSavedSession["tabs"] = [];
-  for (const tab of value.tabs.slice(0, WEB_WORKSPACE_TAB_LIMIT)) {
+  // A migration may contain every tab from every old website. Keep those
+  // existing pages even when their total exceeds the new-tab resource limit.
+  for (const tab of ribbon ? value.tabs : value.tabs.slice(0, WEB_WORKSPACE_TAB_LIMIT)) {
     if (!tab || !validId(tab.id) || typeof tab.url !== "string" || tabs.some((entry) => entry.id === tab.id)) continue;
     const url = restorableURL(tab.url);
     if (!url) continue;
-    tabs.push({ id: tab.id, url, title: url === tab.url ? titleText(tab.title, url) : new URL(url).hostname });
+    tabs.push({ id: tab.id, url, title: url === tab.url ? titleText(tab.title, url) : new URL(url).hostname,
+      ...(tab.pinned === true ? { pinned: true } : {}) });
   }
-  if (!tabs.length) return undefined;
+  if (!tabs.length && !ribbon) return undefined;
   const requestedActive = "activeTabId" in value ? value.activeTabId : undefined;
   const homeURL = "homeURL" in value && typeof value.homeURL === "string" ? restorableURL(value.homeURL) : undefined;
-  return { tabs, activeTabId: tabs.some((tab) => tab.id === requestedActive) ? requestedActive as string : tabs[0].id, ...(homeURL ? { homeURL } : {}) };
+  const migratedTabGroups: Record<string, string[]> = Object.create(null);
+  if (ribbon && "migratedTabGroups" in value && value.migratedTabGroups && typeof value.migratedTabGroups === "object") {
+    for (const [id, tabIds] of Object.entries(value.migratedTabGroups)) {
+      if (validId(id) && Array.isArray(tabIds) && tabIds.every(validId)) migratedTabGroups[id] = [...tabIds];
+    }
+  }
+  return { tabs, activeTabId: tabs.some((tab) => tab.id === requestedActive) ? requestedActive as string : tabs[0]?.id ?? "", ...(homeURL ? { homeURL } : {}),
+    ...(Object.keys(migratedTabGroups).length ? { migratedTabGroups } : {}) };
 }
 
 /** Navigation metadata only. The browser's cookies and credentials stay in its profile. */
@@ -135,14 +146,21 @@ export class WebWorkspaceLibrary {
 
   getSession(id: string): WebWorkspaceSavedSession | undefined {
     this.load();
-    const session = this.store.sessions[id];
+    const session = id === WEB_WORKSPACE_RIBBON_ID ? this.store.ribbon : this.store.sessions[id];
     return session ? { ...session, tabs: session.tabs.map((tab) => ({ ...tab })) } : undefined;
   }
 
   saveSession(id: string, session: WebWorkspaceSavedSession): void {
     this.load();
     if (!validId(id)) return;
-    const clean = savedSession(session);
+    const ribbon = id === WEB_WORKSPACE_RIBBON_ID;
+    const clean = savedSession(session, ribbon);
+    if (ribbon) {
+      if (!clean || JSON.stringify(this.store.ribbon) === JSON.stringify(clean)) return;
+      this.store.ribbon = clean;
+      this.schedule();
+      return;
+    }
     if (!clean || JSON.stringify(this.store.sessions[id]) === JSON.stringify(clean)) return;
     delete this.store.sessions[id];
     this.store.sessions[id] = clean;
@@ -153,6 +171,11 @@ export class WebWorkspaceLibrary {
 
   removeSession(id: string): void {
     this.load();
+    if (id === WEB_WORKSPACE_RIBBON_ID) {
+      this.store.ribbon = { tabs: [], activeTabId: "" };
+      this.schedule();
+      return;
+    }
     if (!Object.hasOwn(this.store.sessions, id)) return;
     delete this.store.sessions[id];
     this.schedule();
@@ -222,6 +245,7 @@ export class WebWorkspaceLibrary {
           if (validId(id) && session) this.store.sessions[id] = session;
         }
       }
+      if ("ribbon" in data) this.store.ribbon = savedSession(data.ribbon, true);
       this.pruneHistory();
     } catch (error) {
       if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) {

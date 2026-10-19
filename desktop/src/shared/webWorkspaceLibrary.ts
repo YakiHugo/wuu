@@ -19,9 +19,11 @@ export type WebWorkspaceLibraryState = {
 };
 
 export type WebWorkspaceSavedSession = {
-  tabs: { id: string; url: string; title: string }[];
+  tabs: { id: string; url: string; title: string; pinned?: boolean }[];
   activeTabId: string;
   homeURL?: string;
+  /** Retained until legacy ribbon preferences are migrated, including interrupted writes. */
+  migratedTabGroups?: Record<string, string[]>;
 };
 
 export type WebWorkspaceLibraryApi = {

@@ -35,6 +35,8 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Changed
 
+- Represent each browser page as one ribbon tab, with direct new-tab creation, drag ordering, and a compact pin/close menu instead of nested tab rows and navigation management.
+
 - Refine browser tab sizing, selection surfaces, and close/new-tab alignment across font sizes.
 
 - Use a soft off-white workbench canvas across navigation, conversations, empty states, catalog/settings pages, and right-panel tools and previews while retaining distinct control surfaces.

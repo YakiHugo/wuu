@@ -2,6 +2,8 @@ import type { WebWorkspaceLibraryApi } from "./webWorkspaceLibrary";
 import type { WebWorkspaceDownloadCommand, WebWorkspaceDownloadState } from "./webWorkspaceDownloads";
 
 export const WEB_WORKSPACE_TAB_LIMIT = 64;
+/** One native tab collection, presented directly in the navigation ribbon. */
+export const WEB_WORKSPACE_RIBBON_ID = "ribbon-browser";
 export const WEB_WORKSPACE_ZOOM_MIN = 0.25;
 export const WEB_WORKSPACE_ZOOM_MAX = 3;
 
@@ -21,6 +23,10 @@ export type WebWorkspaceTabState = {
   canGoBack: boolean;
   canGoForward: boolean;
   zoomFactor: number;
+  pinned?: boolean;
+  favicon?: string;
+  /** False for a live about:blank popup, which may contain script-written content. */
+  startPage?: boolean;
   agentControlled?: boolean;
   findResult?: WebWorkspaceFindResult;
   error?: string;
@@ -35,12 +41,16 @@ export type WebWorkspaceState = Omit<WebWorkspaceTabState, "zoomFactor"> & {
 };
 
 export type WebWorkspaceDestination = { id: string; url: string; tabs?: boolean };
+export type WebWorkspaceLegacyDestination = { id: string; url: string; title?: string };
+export type WebWorkspaceInitializationState = WebWorkspaceState & { migratedTabGroups?: Record<string, string[]> };
 export type WebWorkspaceCommand = "back" | "forward" | "reload" | "reloadIgnoringCache" | "stop" | "navigate" | "focus" | "takeOver";
 
 export type WebWorkspaceApi = {
+  /** Restore the ribbon and migrate legacy website sessions once, without losing their child tabs. */
+  initializeTabs: (destinations: WebWorkspaceLegacyDestination[]) => Promise<WebWorkspaceInitializationState>;
   /** The preload and native host understand window-relative edge geometry. */
   supportsWindowInsets?: true;
-  /** Reopening retains navigation. Only ribbon destinations opt into tab groups. */
+  /** Reopening retains navigation. Extension pages retain their independent lifetime. */
   open: (destination: WebWorkspaceDestination) => Promise<WebWorkspaceState>;
   /** One current-page JPEG backdrop; null when hidden, stale, or unavailable. */
   capture: (id: string) => Promise<string | null>;
@@ -52,6 +62,8 @@ export type WebWorkspaceApi = {
   selectTab: (id: string, tabId: string) => Promise<WebWorkspaceState>;
   closeTab: (id: string, tabId: string) => Promise<WebWorkspaceState>;
   reopenTab: (id: string) => Promise<WebWorkspaceState>;
+  setTabPinned: (id: string, tabId: string, pinned: boolean) => Promise<WebWorkspaceState>;
+  reorderTabs: (id: string, tabIds: string[]) => Promise<WebWorkspaceState>;
   find: (id: string, text: string, options?: WebWorkspaceFindOptions) => Promise<WebWorkspaceState>;
   stopFind: (id: string) => Promise<WebWorkspaceState>;
   setZoom: (id: string, factor: number) => Promise<WebWorkspaceState>;

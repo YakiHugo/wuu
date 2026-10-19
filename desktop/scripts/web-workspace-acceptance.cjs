@@ -70,9 +70,12 @@ document.querySelector('#camera').onclick=async()=>{document.querySelector('#per
 async function runWebsiteAcceptance(h, fixture) {
   const { win, report, output, started, save, evaluate, waitFor, settle, delay, point, fill, key, pick, test, goConversations, goSettings, appearance, plugins, conversations } = h;
   const origin = fixture.origin;
-  const manager = 'button[aria-label="Customize navigation"]';
-  const formName = '.ribbon-website-form label:first-child input';
-  const formURL = '.ribbon-website-form label:nth-child(2) input';
+  const addTabButton = '.sidebar-ribbon-add';
+  const webTabs = '[data-wuu-component="website-navigation-item"]';
+  const tabButton = id => `${webTabs}[data-ribbon-id="${id}"]`;
+  const siteIDs = new Map();
+  const ribbonGroup = 'ribbon-browser';
+  const readSite = () => evaluate(() => window.wuu.webWorkspace.initializeTabs([]));
   const webRoot = '[data-wuu-component="web-workspace"]';
   const address = `${webRoot} .web-workspace-toolbar .workspace-browser-url-input`;
   const startInput = '.web-workspace-stage:not([hidden]) .web-workspace-start-search input';
@@ -143,17 +146,18 @@ async function runWebsiteAcceptance(h, fixture) {
       return {
         toolbar: rect('.web-workspace-toolbar'), navigation: rect('.workspace-browser-nav-cluster'),
         address: rect('.web-workspace-address'), input: rect('.workspace-browser-url-input'), actions: rect('.web-workspace-actions'),
-        tab: rect('.web-workspace-tab[data-active]'), close: rect('.web-workspace-tab[data-active] .web-workspace-tab-close'), add: rect('.web-workspace-new-tab'),
+        horizontalTabs: Boolean(root.querySelector('.web-workspace-tabstrip')),
+        leftTabs: document.querySelectorAll('[data-wuu-component="website-navigation-item"]').length,
       };
     });
-    const { toolbar, navigation, address: field, input, actions, tab, close, add } = geometry;
+    const { toolbar, navigation, address: field, input, actions } = geometry;
     assert.ok(Math.max(navigation.centerY, field.centerY, actions.centerY) - Math.min(navigation.centerY, field.centerY, actions.centerY) <= 1,
       `Browser navigation, address and actions stay on one centerline: ${JSON.stringify(geometry)}`);
     assert.ok(navigation.left >= toolbar.left && navigation.right <= field.left && field.right <= actions.left && actions.right <= toolbar.right,
       `Browser controls remain ordered and inside the toolbar: ${JSON.stringify(geometry)}`);
     assert.ok(input.width >= 48, `The address remains editable at the supported narrow width: ${JSON.stringify(geometry)}`);
-    assert.ok(Math.abs(tab.centerY - close.centerY) <= 1 && Math.abs(close.centerY - add.centerY) <= 1,
-      `Tab close and add controls share the tab centerline: ${JSON.stringify(geometry)}`);
+    assert.equal(geometry.horizontalTabs, false, 'Web pages have one left tab and no nested horizontal tab strip');
+    assert.ok(geometry.leftTabs > 0, 'Live website tabs remain reachable from the ribbon');
     return geometry;
   }
   async function assertMenuBackdrop(label) {
@@ -215,10 +219,10 @@ async function runWebsiteAcceptance(h, fixture) {
     return geometry;
   }
   async function openSite(name, pathname) {
-    await click(ribbon(name), `open-${name}`);
+    await click(siteIDs.has(name) ? tabButton(siteIDs.get(name)) : ribbon(name), `open-${name}`);
     await waitFor(() => [...document.querySelectorAll('[data-wuu-component="web-workspace"]')].some(node => node.getBoundingClientRect().width > 0));
     const id = await evaluate(() => [...document.querySelectorAll('[data-wuu-component="web-workspace"]')].find(node => node.getBoundingClientRect().width > 0).dataset.websiteId);
-    const state = await evaluate(({ id, url }) => window.wuu.webWorkspace.open({ id, url, tabs: Boolean(document.querySelector('.web-workspace-stage:not([hidden]) .web-workspace-tabs')) }), { id, url: origin + pathname });
+    const state = id === ribbonGroup ? await readSite() : await evaluate(({ id, url }) => window.wuu.webWorkspace.open({ id, url }), { id, url: origin + pathname });
     if (state.url !== origin + pathname || state.error) {
       // Independent journey setup only. Address-bar behavior has its own real
       // native Return assertion and a failed navigation is never erased.
@@ -235,13 +239,35 @@ async function runWebsiteAcceptance(h, fixture) {
     report.actions.push({ label: `native-address-submit-${label}`, input: 'native-x11-Return', atMs: Date.now() - started });
     await until(() => nativeView(pathname)?.getVisible() && !nativeView(pathname).webContents.isLoading(), `native address navigation ${pathname}`);
   }
+  async function tabMenu(id, label) {
+    const p = await point(tabButton(id)), bounds = win.getContentBounds(), zoom = win.webContents.getZoomFactor();
+    xinput(['mousemove', String(Math.round(bounds.x + p.x * zoom)), String(Math.round(bounds.y + p.y * zoom)), 'click', '3']);
+    await waitFor(() => document.querySelector('.thread-row-context-menu [role="menuitem"]'));
+    await capture(`tab-context-${label}`);
+  }
+  async function closeActiveTab(label) {
+    const id = (await readSite()).activeTabId;
+    await tabMenu(id, label);
+    await click(pick('.thread-row-context-menu [role="menuitem"]', 'Close tab'), label);
+    await until(async () => !(await readSite()).tabs.some(tab => tab.id === id), 'Closed tab leaves the ribbon');
+  }
+  async function blankTab(label) {
+    const before = (await readSite()).tabs.length;
+    await click(addTabButton, label);
+    await until(async () => (await readSite()).tabs.length === before + 1, 'Left plus creates one real tab');
+    await waitFor(selector => document.activeElement?.matches(selector), startInput);
+    const state = await readSite();
+    assert.equal(state.url, 'about:blank');
+    await hidden('blank mascot page');
+    return state.activeTabId;
+  }
   async function addSite(name, pathname) {
-    await click(manager, 'customize-navigation');
-    await click(pick('.ribbon-manager button', 'Add website'), 'add-website');
-    await fill(formName, name); await fill(formURL, pathname.startsWith('http') ? pathname : origin + pathname);
-    await click(pick('.ribbon-manager button', 'Save'), 'save-website');
-    await waitFor(name => [...document.querySelectorAll('[data-ribbon-manager-id]')].some(row => row.textContent.includes(name)), name);
-    await click(pick('.ribbon-manager button', 'Close'), 'close-customize');
+    const id = await blankTab(`new-${name}`);
+    siteIDs.set(name, id);
+    await fill(startInput, pathname.startsWith('http') ? pathname : origin + pathname);
+    xinput(['key', '--clearmodifiers', 'Return']);
+    if (!pathname.startsWith('http')) await until(() => nativeView(pathname)?.getVisible() && !nativeView(pathname).webContents.isLoading(), `New left tab loads ${pathname}`);
+    return id;
   }
   function security(wc) {
     const p = wc.getLastWebPreferences();
@@ -389,70 +415,63 @@ async function runWebsiteAcceptance(h, fixture) {
     }
   });
 
-  await testNative('optional websites add safely and stay lazy until selected', async () => {
-    assert.equal(await evaluate(() => document.querySelectorAll('[data-wuu-component="website-navigation-item"]').length), 0, 'No websites are added by default');
-    await click(manager, 'customize-empty');
-    await click(pick('.ribbon-manager button', 'Add website'), 'add-invalid-website');
-    await fill(formName, 'Invalid fixture'); await fill(formURL, 'javascript:alert(1)');
-    await click(pick('.ribbon-manager button', 'Save'), 'reject-unsafe-scheme');
-    await waitFor(() => document.querySelector('#ribbon-website-error'));
-    assert.equal((await prefs()).websites.length, 0);
-    await click(pick('.ribbon-manager button', 'Cancel'), 'cancel-invalid');
-    await click(pick('.ribbon-manager button', 'Close'), 'close-invalid');
-    // Resolve the actual shipped SVGs without visiting an external website.
-    // Both theme assets must decode, even when their optional plugin is off.
-    const brandedSites = [
-      ['Notion mark fixture', 'https://www.notion.so/', 'notion'],
-      ['Feishu mark fixture', 'https://www.feishu.cn/', 'feishu'],
-      ['ChatGPT mark fixture', 'https://chatgpt.com/', 'chatgpt'],
-    ];
-    for (const [title, url] of brandedSites) await addSite(title, url);
-    await waitFor(brands => brands.every(brand => {
-      const images = [...document.querySelectorAll(`.sidebar-ribbon-main [data-website-brand="${brand}"] img`)];
-      return images.length === 2 && images.every(image => image.complete && image.naturalWidth > 0);
-    }), brandedSites.map(site => site[2]), 'Shipped light and dark website SVGs decode');
-    const decodedMarks = await evaluate(() => [...document.querySelectorAll('.sidebar-ribbon-main [data-website-brand] img')]
-      .map(image => ({ brand: image.parentElement.dataset.websiteBrand, width: image.naturalWidth, height: image.naturalHeight, source: image.currentSrc })));
-    await capture('decoded-local-website-marks');
-    await click(manager, 'remove-unvisited-brand-fixtures');
-    for (const [title] of brandedSites) await click(`.ribbon-manager button[aria-label="Remove ${title} shortcut"]`, `remove-${title}`);
-    await click(pick('.ribbon-manager button', 'Close'), 'close-brand-fixtures');
-    await addSite('Fixture Alpha', '/alpha'); await addSite('Fixture Beta', '/beta');
-    const p = await prefs();
-    alphaID = p.websites.find(site => site.title === 'Fixture Alpha').id;
-    assert.equal(views().length, 0, 'Saved unvisited destinations create no native contents');
-    return { sites: p.websites, nativeViews: 0, decodedMarks };
+  await testNative('left plus opens one blank mascot tab and Pin retains the website', async () => {
+    assert.equal(await evaluate(selector => document.querySelectorAll(selector).length, webTabs), 0, 'No website tabs are added by default');
+    await blankTab('first-left-web-tab');
+    assert.equal(await evaluate(() => Boolean(document.querySelector('.web-workspace-tabstrip'))), false);
+    await fill(startInput, 'javascript:alert(1)'); xinput(['key', '--clearmodifiers', 'Return']);
+    await waitFor(selector => document.querySelector(selector)?.getAttribute('aria-invalid') === 'true', startInput);
+    assert.equal((await readSite()).url, 'about:blank', 'Unsafe scheme never navigates');
+    await capture('unsafe-address-rejected');
+    await closeActiveTab('close-final-blank-tab');
+    assert.equal((await readSite()).tabs.length, 0, 'Closing the final tab leaves no artificial replacement');
+    await waitFor(() => !document.querySelector('.web-workspace-stage:not([hidden])'));
+    alphaID = await blankTab('new-alpha-left-tab'); siteIDs.set('Fixture Alpha', alphaID);
+    await fill(startInput, origin + '/alpha'); xinput(['key', '--clearmodifiers', 'Return']);
+    await until(() => nativeView('/alpha')?.getVisible() && !nativeView('/alpha').webContents.isLoading(), 'First left tab loads fixture');
+    await tabMenu(alphaID, 'pin-alpha');
+    const options = await evaluate(() => [...document.querySelectorAll('.thread-row-context-menu [role="menuitem"]')].map(item => item.textContent.trim()));
+    assert.deepEqual(options, ['Pin tab', 'Close tab'], 'Website context menu stays minimal');
+    await click(pick('.thread-row-context-menu [role="menuitem"]', 'Pin tab'), 'pin-alpha');
+    await waitFor(id => document.querySelector(`[data-ribbon-id="${id}"]`)?.dataset.pinned === 'true', alphaID);
+    await addSite('Fixture Beta', '/beta');
+    await openSite('Fixture Alpha', '/alpha');
+    await capture('flat-left-tabs-ready');
+    return { alphaID, betaID: siteIDs.get('Fixture Beta'), options, tabs: (await readSite()).tabs };
   });
 
   await testNative('ribbon reorders Chat away from first with real keyboard and pointer', async () => {
     await openSite('Fixture Alpha', '/alpha');
     const before = await evaluate(() => [...document.querySelectorAll('.sidebar-ribbon-main [data-ribbon-id]')].map(node => node.dataset.ribbonId));
-    // Opening native contents can focus the page. Enter the ribbon by actual
-    // keyboard traversal from its adjacent Customize control before reordering.
-    win.webContents.focus();
-    await evaluate(selector => document.querySelector(selector).focus(), manager);
-    await waitFor(selector => document.activeElement === document.querySelector(selector), manager);
-    for (let step = 0; step < before.length; step++) {
-      xinput(['key', '--clearmodifiers', 'shift+Tab']);
-      await delay(60);
+    await click('.sidebar-account-trigger', 'anchor-ribbon-keyboard'); xinput(['key', 'Escape']);
+    await waitFor(() => document.activeElement?.matches('.sidebar-account-trigger'));
+    for (let step = 0; step < before.length + 4; step++) {
+      xinput(['key', '--clearmodifiers', 'shift+Tab']); await delay(60);
       if (await evaluate(id => document.activeElement?.dataset.ribbonId === id, alphaID)) break;
     }
-    assert.ok(await evaluate(id => document.activeElement?.dataset.ribbonId === id, alphaID), 'Real keyboard traversal reaches the website ribbon button');
-    assert.equal(await evaluate(() => document.documentElement.dataset.focusModality), 'keyboard');
+    assert.ok(await evaluate(id => document.activeElement?.dataset.ribbonId === id, alphaID), 'Real keyboard traversal reaches the left web tab');
     await capture('ribbon-keyboard-focus-before-reorder');
     for (let index = before.indexOf(alphaID); index > 0; index--) {
       xinput(['key', '--clearmodifiers', 'alt+Up']);
-      await waitFor(({ id, index }) => document.querySelectorAll('.sidebar-ribbon-main [data-ribbon-id]')[index - 1]?.getAttribute('data-ribbon-id') === id, { id: alphaID, index });
+      await waitFor(({ id, index }) => document.querySelectorAll('.sidebar-ribbon-main [data-ribbon-id]')[index - 1]?.dataset.ribbonId === id, { id: alphaID, index });
       assert.ok(await evaluate(id => document.activeElement?.dataset.ribbonId === id, alphaID), 'Keyboard reorder retains ribbon focus');
     }
-    await click(manager, 'customize-order');
-    await click('.ribbon-manager button[aria-label="Move Fixture Beta up"]', 'move-beta-up');
-    await click(pick('.ribbon-manager button', 'Close'), 'save-order');
-    savedOrder = await evaluate(() => [...document.querySelectorAll('.sidebar-ribbon-main [data-ribbon-id]')].map(node => node.getAttribute('data-ribbon-id')));
-    assert.equal(savedOrder[0], alphaID);
+    const betaID = siteIDs.get('Fixture Beta');
+    const from = await point(tabButton(betaID)), to = await point(tabButton(alphaID));
+    const bounds = win.getContentBounds(), zoom = win.webContents.getZoomFactor();
+    const sx = bounds.x + from.x * zoom, sy = bounds.y + from.y * zoom, ex = bounds.x + to.x * zoom, ey = bounds.y + to.y * zoom;
+    try {
+      xinput(['mousemove', String(Math.round(sx)), String(Math.round(sy)), 'mousedown', '1']); await delay(80);
+      for (let step = 1; step <= 8; step++) {
+        xinput(['mousemove', String(Math.round(sx + (ex - sx) * step / 8)), String(Math.round(sy + (ey - sy) * step / 8))]); await delay(40);
+      }
+      xinput(['mouseup', '1']);
+      await waitFor(id => document.querySelector('.sidebar-ribbon-main [data-ribbon-id]')?.dataset.ribbonId === id, betaID);
+    } finally { xinput(['mouseup', '1']); }
+    savedOrder = await evaluate(() => [...document.querySelectorAll('.sidebar-ribbon-main [data-ribbon-id]')].map(node => node.dataset.ribbonId));
     assert.ok(savedOrder.indexOf(await evaluate(selector => document.querySelector(selector).dataset.ribbonId, conversations)) > 0, 'Chat is not pinned first');
     assert.deepEqual((await prefs()).order.filter(id => savedOrder.includes(id)), savedOrder);
-    await capture('reordered-ribbon'); return { before, after: savedOrder };
+    await capture('reordered-left-tabs'); return { before, after: savedOrder };
   });
 
   await testNative('native website security cookies history reload and retained input', async () => {
@@ -489,13 +508,11 @@ async function runWebsiteAcceptance(h, fixture) {
 
   await testNative('native websites yield to sections dialogs and restore real focus', async () => {
     const wc = await openSite('Fixture Alpha', '/alpha');
-    await click(manager, 'native-page-customization-modal');
-    const managerHidden = await hidden('customization dialog'); await capture('dialog-over-native-page');
-    await click(pick('.ribbon-manager button', 'Add website'), 'native-page-add-modal');
-    await hidden('add dialog');
-    await click(pick('.ribbon-manager button', 'Cancel'), 'cancel-add-modal');
-    await click(pick('.ribbon-manager button', 'Close'), 'restore-after-modal');
-    await until(() => nativeView('/alpha')?.getVisible(), 'restore after modal');
+    await tabMenu(alphaID, 'over-live-page');
+    const managerHidden = await hidden('tab context menu'); await assertMenuBackdrop('tab context menu');
+    await capture('context-menu-over-native-page');
+    xinput(['key', 'Escape']);
+    await until(() => nativeView('/alpha')?.getVisible(), 'restore after tab context menu');
     await goSettings('Appearance'); await hidden('Settings'); await capture('settings-with-native-hidden');
     await openSite('Fixture Alpha', '/alpha');
     await click(plugins, 'native-to-extensions'); await hidden('Extensions');
@@ -530,49 +547,14 @@ async function runWebsiteAcceptance(h, fixture) {
         const bounds = view.getBounds(), [w, h] = win.getContentSize();
         assert.ok(bounds.x >= 0 && bounds.y >= 0 && bounds.x + bounds.width <= w && bounds.y + bounds.height <= h);
         const chrome = await chromeGeometry();
-        if (width === 700) {
-          const before = win.getBounds(), outer = win.getContentBounds();
-          const drag = await evaluate(() => {
-            const stage = document.querySelector('.web-workspace-stage:not([hidden])');
-            const strip = stage.querySelector('.web-workspace-tabstrip').getBoundingClientRect();
-            const add = stage.querySelector('.web-workspace-new-tab').getBoundingClientRect();
-            return { x: (add.right + strip.right) / 2, y: strip.top + strip.height / 2 };
-          });
-          const x = Math.round(outer.x + drag.x * zoom), y = Math.round(outer.y + drag.y * zoom);
-          try {
-            await capture('before-tabstrip-drag');
-            report.actions.push({ label: 'native-browser-tabstrip-drag-start', input: 'native-x11', point: { x, y }, before, atMs: Date.now() - started });
-            save();
-            xinput(['mousemove', '--sync', String(x), String(y), 'mousedown', '1']);
-            // Yield between native events: Electron must process the press to
-            // enter its window-manager move loop before motion and release.
-            await delay(100);
-            for (let step = 1; step <= 5; step++) {
-              xinput(['mousemove', String(x + step * 10), String(y + step * 8)]);
-              await delay(40);
-            }
-            await until(() => Math.abs(win.getBounds().x - before.x) >= 20 || Math.abs(win.getBounds().y - before.y) >= 20,
-              'Dragging empty browser tab strip moves the actual native window');
-            xinput(['mouseup', '1']);
-            await settle();
-            report.actions.push({ label: 'native-browser-tabstrip-drag', input: 'native-x11', before, after: win.getBounds(), atMs: Date.now() - started });
-            await capture('after-tabstrip-drag');
-          } finally {
-            xinput(['mouseup', '1']); await delay(40);
-            xinput(['key', '--clearmodifiers', 'Escape']); await settle();
-            win.setBounds(before);
-            await until(() => ['x', 'y', 'width', 'height'].every(key => Math.abs(win.getBounds()[key] - before[key]) <= 1),
-              'Native drag cleanup restores the original window bounds');
-          }
-        }
         await capture(`bounds-${theme}-${width}-zoom-${zoom}`);
         if (width === 440 || theme === 'dark') {
-          await click('.web-workspace-stage:not([hidden]) .web-workspace-new-tab', `new-tab-${theme}-${width}`);
+          await blankTab(`new-tab-${theme}-${width}`);
           await waitFor(selector => document.activeElement?.matches(selector), startInput);
           await hidden('new-tab start page');
           await capture(`new-tab-${theme}-${width}-font-${size}`);
           if (width === 440) await profileMenu('narrow-new-tab');
-          await click('.web-workspace-stage:not([hidden]) .web-workspace-tab[data-active] .web-workspace-tab-close', 'return-from-visual-new-tab');
+          await closeActiveTab('return-from-visual-new-tab');
           await until(() => nativeView('/alpha')?.getVisible(), 'Closing visual new tab restores website');
         }
         samples.push({ theme, size, width, zoom, bounds, chrome });
@@ -591,21 +573,17 @@ async function runWebsiteAcceptance(h, fixture) {
     security(blank.webContents);
     assert.deepEqual(await blank.webContents.executeJavaScript('({wuu:typeof window.wuu,require:typeof require,process:typeof process})'), { wuu: 'undefined', require: 'undefined', process: 'undefined' });
     await capture('blank-popup-opener'); blank.close(); win.focus();
-    const grouped = await evaluate(() => Boolean(document.querySelector('.web-workspace-stage:not([hidden]) .web-workspace-tabs')));
-    const tabsBefore = await evaluate(() => document.querySelectorAll('.web-workspace-stage:not([hidden]) .web-workspace-tabs [role=tab]').length);
+    const tabsBefore = (await readSite()).tabs.length;
     await pageClick(wc, '#post', 'open-post-popup');
     await until(() => fixture.requests.some(request => request.path === '/posted' && request.method === 'POST' && request.body === 'fixture=post-preserved'), 'native POST body preserved');
-    await until(() => contents('/posted') && !contents('/posted').isLoading(), 'POST popup loaded');
-    const post = contents('/posted'); security(post); await capture('post-popup');
-    if (grouped) {
-      assert.ok(nativeView('/posted')?.getVisible(), 'Ordinary target=_blank POST opens in the destination tab group');
-      assert.equal(await evaluate(() => document.querySelectorAll('.web-workspace-stage:not([hidden]) .web-workspace-tabs [role=tab]').length), tabsBefore + 1);
-      await click('.web-workspace-stage:not([hidden]) .web-workspace-tab[data-active] .web-workspace-tab-close', 'close-post-tab');
-    } else {
-      const popup = BrowserWindow.fromWebContents(post); assert.ok(popup && popup !== win); popup.close();
-    }
+    await until(() => contents('/posted') && !contents('/posted').isLoading(), 'POST left tab loaded');
+    const post = contents('/posted'); security(post); await capture('post-left-tab');
+    assert.ok(nativeView('/posted')?.getVisible(), 'Ordinary target=_blank POST opens a left tab');
+    assert.equal((await readSite()).tabs.length, tabsBefore + 1);
+    assert.equal(await evaluate(selector => document.querySelectorAll(selector).length, webTabs), tabsBefore + 1);
+    await closeActiveTab('close-post-tab');
     win.focus();
-    return { openerRoundtrip: true, ordinaryPostMode: grouped ? 'tab' : 'popup', post: fixture.requests.find(request => request.path === '/posted') };
+    return { openerRoundtrip: true, ordinaryPostMode: 'left-tab', post: fixture.requests.find(request => request.path === '/posted') };
   });
 
   await testNative('website camera and location never receive silent grants', async () => {
@@ -632,21 +610,16 @@ async function runWebsiteAcceptance(h, fixture) {
   });
 
   const liveStage = '.web-workspace-stage:not([hidden])';
-  const readSite = () => evaluate(({ id, url }) => window.wuu.webWorkspace.open({ id, url, tabs: true }), { id: alphaID, url: origin + '/alpha' });
   let clearedHistoryURL;
 
-  await testNative('grouped tabs native shortcuts find and per-page zoom', async () => {
+  await testNative('left web tabs native shortcuts find and per-page zoom', async () => {
     let wc = await openSite('Fixture Alpha', '/alpha');
     const before = (await readSite()).tabs.length;
-    await click(`${liveStage} .web-workspace-new-tab`, 'click-add-tab');
-    await waitFor(({ stage, count }) => document.querySelectorAll(`${stage} [role=tab]`).length === count,
-      { stage: liveStage, count: before + 1 });
-    await click(`${liveStage} .web-workspace-tab[data-active] .web-workspace-tab-close`, 'click-close-tab');
-    await waitFor(({ stage, count }) => document.querySelectorAll(`${stage} [role=tab]`).length === count,
-      { stage: liveStage, count: before });
-    await until(() => nativeView('/alpha')?.getVisible(), 'Native tab buttons remain clickable inside the draggable strip');
+    await blankTab('click-left-add-tab');
+    await closeActiveTab('click-close-left-tab');
+    await until(() => nativeView('/alpha')?.getVisible(), 'Closing left tab restores prior page');
     await pageClick(wc, '#draft', 'native-tab-shortcut-focus'); xinput(['key', '--clearmodifiers', 'ctrl+t']);
-    await waitFor(({ stage, count, input }) => document.querySelectorAll(`${stage} [role=tab]`).length === count && document.activeElement?.matches(input), { stage: liveStage, count: before + 1, input: startInput });
+    await waitFor(({ count, input }) => document.querySelectorAll('[data-wuu-component="website-navigation-item"]').length === count && document.activeElement?.matches(input), { count: before + 1, input: startInput });
     await hidden('new blank tab');
     await fill(startInput, origin + '/tab-two');
     await capture('new-tab-central-address'); xinput(['key', '--clearmodifiers', 'Return']);
@@ -724,7 +697,7 @@ async function runWebsiteAcceptance(h, fixture) {
     await waitFor(() => document.querySelector('[data-browser-bookmark-current]')?.getAttribute('aria-pressed') === 'true');
     await navigateAddress('/history-target', 'history-page');
     const tabsBeforeStart = (await readSite()).tabs.length;
-    await click(`${liveStage} .web-workspace-new-tab`, 'saved-history-new-tab');
+    await blankTab('saved-history-new-tab');
     await waitFor(selector => document.activeElement?.matches(selector), startInput);
     await waitFor(() => {
       const mascot = document.querySelector('.web-workspace-start-mascot');
@@ -766,7 +739,7 @@ async function runWebsiteAcceptance(h, fixture) {
     const profile = await profileMenu('live-website', selectedPage);
     assert.equal(selectedPage.getURL(), origin + '/history-target');
     await capture('profile-dismissed-native-page-restored');
-    await click(`${liveStage} .web-workspace-tab[data-active] .web-workspace-tab-close`, 'close-suggestion-journey-tab');
+    await closeActiveTab('close-suggestion-journey-tab');
     await until(async () => (await readSite()).tabs.length === tabsBeforeStart && nativeView('/history-target')?.getVisible(), 'Close journey tab restores original browsing state');
     await click('[data-browser-library-trigger]', 'open-browser-library'); await assertMenuBackdrop('browser library');
     await fill('[data-browser-library] input[type=search]', 'history-target');
@@ -802,31 +775,28 @@ async function runWebsiteAcceptance(h, fixture) {
 
   await runBrowserMediaAcceptance({ win, report, output, started, save, testNative, openSite, pageClick, navigateAddress, readSite, nativeView, until, evaluate, fill, address, capture, xinput, delay }, fixture);
 
-  await testNative('website edit removal recreation and renderer restart preserve saved state', async () => {
-    await openSite('Fixture Alpha', '/alpha');
-    await click(manager, 'edit-active-destination'); await hidden('edit manager');
-    await click('.ribbon-manager button[aria-label="Edit Fixture Alpha"]', 'edit-alpha');
-    await fill(formName, 'Fixture Alpha Edited'); await fill(formURL, origin + '/edited');
-    await click(pick('.ribbon-manager button', 'Save'), 'save-edit');
-    await click(pick('.ribbon-manager button', 'Close'), 'close-edit');
-    const wc = await openSite('Fixture Alpha Edited', '/edited');
+  await testNative('left tab close recreation and renderer restart preserve order pin and cookies', async () => {
+    const wc = await openSite('Fixture Alpha', '/alpha');
     assert.ok((await wc.executeJavaScript('document.cookie')).includes('wuu_acceptance=synthetic-session'));
-    await click(manager, 'remove-active-destination');
-    await click('.ribbon-manager button[aria-label="Remove Fixture Alpha Edited shortcut"]', 'remove-alpha');
-    await until(() => wc.isDestroyed(), 'removed native contents destroyed');
-    await click(pick('.ribbon-manager button', 'Close'), 'close-remove');
-    assert.ok(!(await prefs()).websites.some(site => site.id === alphaID));
-    await addSite('Fixture Alpha Restored', '/alpha');
-    await openSite('Fixture Alpha Restored', '/alpha');
-    assert.ok((await contents('/alpha').executeJavaScript('document.cookie')).includes('wuu_acceptance=synthetic-session'), 'Removing shortcut never clears shared login/session data');
-    const before = await prefs();
+    await closeActiveTab('close-original-alpha');
+    await until(() => wc.isDestroyed(), 'Closed left tab releases native contents');
+    assert.ok(!(await readSite()).tabs.some(tab => tab.id === alphaID));
+    alphaID = await addSite('Fixture Alpha Restored', '/alpha'); siteIDs.set('Fixture Alpha', alphaID);
+    await tabMenu(alphaID, 'pin-restored-alpha');
+    await click(pick('.thread-row-context-menu [role="menuitem"]', 'Pin tab'), 'pin-restored-alpha');
+    await waitFor(id => document.querySelector(`[data-ribbon-id="${id}"]`)?.dataset.pinned === 'true', alphaID);
+    assert.ok((await contents('/alpha').executeJavaScript('document.cookie')).includes('wuu_acceptance=synthetic-session'), 'Closing a tab never clears shared login/session data');
+    const before = await prefs(), stateBefore = await readSite();
+    const nativeBefore = views().map(view => view.webContents);
     const reloaded = new Promise(resolve => win.webContents.once('did-finish-load', resolve));
     win.webContents.reload();
     await Promise.race([reloaded, delay(30000).then(() => { throw new Error('Renderer reload did not finish'); })]);
     await waitFor(() => window.wuu && document.querySelector('.sidebar-ribbon-main'), undefined, 'reloaded workbench ready', 30000);
-    assert.deepEqual(await prefs(), before, 'Saved order and destinations survive renderer restart');
-    const order = await evaluate(() => [...document.querySelectorAll('.sidebar-ribbon-main [data-ribbon-id]')].map(node => node.dataset.ribbonId));
-    assert.deepEqual(order, before.order.filter(id => order.includes(id)));
+    await waitFor(count => document.querySelectorAll('[data-wuu-component="website-navigation-item"]').length === count, stateBefore.tabs.length);
+    assert.deepEqual(await prefs(), before, 'Saved ribbon order survives renderer restart');
+    const restored = await readSite();
+    assert.deepEqual(restored.tabs.map(tab => ({ id: tab.id, url: tab.url, pinned: Boolean(tab.pinned) })), stateBefore.tabs.map(tab => ({ id: tab.id, url: tab.url, pinned: Boolean(tab.pinned) })), 'Left tabs and pins survive renderer restart');
+    assert.ok(nativeBefore.every(wc => wc.isDestroyed()), 'Shell reload releases old native pages before lazy recreation');
     await openSite('Fixture Alpha Restored', '/alpha');
     assert.ok((await contents('/alpha').executeJavaScript('document.cookie')).includes('wuu_acceptance=synthetic-session'));
     const library = await evaluate(() => window.wuu.webWorkspace.library.getState());
@@ -834,7 +804,7 @@ async function runWebsiteAcceptance(h, fixture) {
       assert.ok(!library.history.some(entry => entry.url === clearedHistoryURL), 'Renderer restart does not restore cleared history');
       assert.ok(library.bookmarks.some(entry => entry.url === origin + '/alpha'), 'Bookmark survives renderer restart');
     }
-    await capture('saved-destinations-after-restart'); return { before, order, sharedCookieRetained: true };
+    await capture('left-tabs-after-restart'); return { before, restoredTabs: restored.tabs, sharedCookieRetained: true };
   });
 
   await testNative('authored extension uses shared native website and unloads cleanly', async () => {
@@ -869,15 +839,35 @@ async function runWebsiteAcceptance(h, fixture) {
     assert.equal(views().filter(view => view.webContents.getURL() === origin + '/extension').length, 1, 'Exactly one replacement plugin native page');
     return { sharedCookieRetained: true, hiddenPageRetained: true, retainedDraft: true, oldGenerationDestroyed: true, singleReplacementPage: true };
   });
-  if (report.checks.every(check => check.status === 'passed') && report.errors.length === 0) {
-    const optional = { name: 'Public Notion landing page', required: false, status: 'unavailable' };
+  {
+    // This is the user's saved-website path, separate from the earlier bundled
+    // plugin probe. Public network availability is diagnostic, never a gate.
+    const optional = { name: 'Notion opened as a real left web tab', requestedURL: 'https://www.notion.so/', required: false, status: 'unavailable', events: [], accountUsed: false };
+    const observed = [];
+    const observe = (_event, wc) => {
+      if (wc === win.webContents) return;
+      observed.push(wc);
+      wc.on('did-navigate', (_event, url, code) => optional.events.push({ event: 'navigate', id: wc.id, url, code }));
+      wc.on('did-fail-load', (_event, code, description, url, mainFrame) => { if (mainFrame) optional.events.push({ event: 'failed', id: wc.id, code, description, url }); });
+      wc.on('did-stop-loading', () => optional.events.push({ event: 'loaded', id: wc.id, url: wc.getURL() }));
+    };
+    app.on('web-contents-created', observe);
     try {
-      await addSite('Public Notion preview', 'https://www.notion.com/');
-      await click(ribbon('Public Notion preview'), 'optional-public-notion');
-      await until(() => win.contentView.children.some(view => view.webContents && !view.webContents.isDestroyed() && view.getVisible() && /^https:\/\/(?:www\.)?notion\.(?:com|so)\//.test(view.webContents.getURL()) && !view.webContents.isLoading()), 'optional public site', 10000);
-      optional.status = 'loaded';
-      await capture('optional-public-notion');
-    } catch (error) { optional.error = String(error); try { await capture('optional-public-site-unavailable'); } catch {} }
+      await addSite('Public Notion preview', optional.requestedURL);
+      const notion = () => observed.find(wc => !wc.isDestroyed() && /^https:\/\/(?:[a-z0-9-]+\.)*notion\.(?:com|so)\//.test(wc.getURL()));
+      await until(() => notion() && !notion().isLoadingMainFrame(), 'optional Notion left-tab document', 12000);
+      const wc = notion();
+      const login = await wc.executeJavaScript(`(() => {const links=[...document.querySelectorAll('a[href]')];const a=links.find(a=>/log\\s*in/i.test(a.textContent)&&/^https:\\/\\/(?:[a-z0-9-]+\\.)*notion\\.(?:com|so)\\//.test(a.href));return a?.getAttribute('href')||null;})()`);
+      if (login && !/\/login(?:[/?#]|$)/.test(wc.getURL())) {
+        await pageClick(wc, `a[href=${JSON.stringify(login)}]`, 'notion-public-login-link');
+      }
+      await until(async () => !wc.isDestroyed() && !wc.isLoadingMainFrame() && await wc.executeJavaScript(`Boolean([...document.querySelectorAll('input[type=email]')].find(input=>input.getBoundingClientRect().width>0))`), 'optional Notion public login form', 12000);
+      optional.status = 'public-login-visible';
+      optional.document = await wc.executeJavaScript(`({url:location.href,title:document.title,ready:document.readyState,userAgent:navigator.userAgent,text:document.body.innerText.slice(0,1200)})`);
+      optional.nativeContentsID = wc.id;
+      await capture('optional-left-tab-notion-public-login');
+    } catch (error) { optional.error = String(error); try { await capture('optional-left-tab-notion-unavailable'); } catch {} }
+    finally { app.removeListener('web-contents-created', observe); }
     report.optionalEvidence = [optional]; save();
   }
   await goConversations();

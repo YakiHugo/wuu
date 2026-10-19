@@ -268,8 +268,9 @@ import {
 import { DesktopWorkbench } from "./plugins";
 import { usePrimaryPluginViewCover } from "./PrimaryPluginViewCover";
 import { WebWorkspacePanel } from "./WebWorkspace";
-import { useNavigationRibbonPreferences, type RibbonWebsite } from "./NavigationRibbonPreferences";
-import type { WebWorkspaceApi } from "../shared/webWorkspace";
+import type { RibbonWebsite } from "./NavigationRibbonPreferences";
+import { useRibbonBrowserTabs } from "./RibbonBrowserState";
+import { WEB_WORKSPACE_RIBBON_ID, WEB_WORKSPACE_TAB_LIMIT, type WebWorkspaceApi } from "../shared/webWorkspace";
 import { releaseWindowResizeClass, WINDOW_RESIZING_CLASS } from "./WindowResizeState";
 import { useComposerDraftState } from "./ComposerDraftState";
 import { useComposerPendingState } from "./ComposerPendingState";
@@ -717,20 +718,13 @@ export function App(): JSX.Element {
   });
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
   const [nativeSection, setNativeSection] = useState<"conversations" | "catalog">("conversations");
-  const ribbonPreferences = useNavigationRibbonPreferences();
+  const ribbonBrowser = useRibbonBrowserTabs(!poppedOutMode);
   const [activeWebsiteID, setActiveWebsiteID] = useState<string>();
-  const activeWebsite = ribbonPreferences.websites.find((website) => website.id === activeWebsiteID);
-  const showingWebsite = Boolean(activeWebsite);
-  const previousWebsiteIDs = useRef(new Set(ribbonPreferences.websites.map((website) => website.id)));
+  const activeWebsite = ribbonBrowser.state?.tabs?.find((website) => website.id === ribbonBrowser.state?.activeTabId);
+  const showingWebsite = Boolean(activeWebsiteID && activeWebsite);
   useEffect(() => {
-    const ids = new Set(ribbonPreferences.websites.map((website) => website.id));
-    const api = (window.wuu as typeof window.wuu & { webWorkspace?: WebWorkspaceApi }).webWorkspace;
-    for (const id of previousWebsiteIDs.current) {
-      if (!ids.has(id)) void api?.close(id).catch((error: unknown) => showErrorToast(error));
-    }
-    previousWebsiteIDs.current = ids;
-    if (activeWebsiteID && !ids.has(activeWebsiteID)) setActiveWebsiteID(undefined);
-  }, [ribbonPreferences.websites, activeWebsiteID]);
+    if (ribbonBrowser.state && !ribbonBrowser.state.tabs?.length) setActiveWebsiteID(undefined);
+  }, [ribbonBrowser.state]);
   const [catalogSection, setCatalogSection] = useState<SkillsCatalogSection>("plugins");
   const [catalogVisited, setCatalogVisited] = useState(false);
   const showingPrimaryPluginView = usePrimaryPluginViewCover();
@@ -3855,8 +3849,7 @@ export function App(): JSX.Element {
     const api = (window.wuu as typeof window.wuu & { webWorkspace?: WebWorkspaceApi }).webWorkspace;
     if (!api?.onReveal) return;
     return api.onReveal((id) => {
-      const website = ribbonPreferences.websites.find((item) => item.id === id);
-      if (website) { showWebsite(website); return; }
+      if (id === WEB_WORKSPACE_RIBBON_ID) { revealWebsite(); return; }
       // The native page belongs to this retained instance. Never open a new
       // plugin view to approximate its URL or lose its live document state.
       const panel = [...document.querySelectorAll<HTMLElement>(".web-workspace-panel")]
@@ -3867,7 +3860,7 @@ export function App(): JSX.Element {
       setAccountOpen(false);
       desktopWorkbenchController.activateView(instanceID);
     });
-  }, [ribbonPreferences.websites, showWebsite]);
+  }, [revealWebsite]);
 
   useEffect(() => {
     const subscribe = window.wuu.onBrowserDock;
@@ -3969,7 +3962,7 @@ export function App(): JSX.Element {
     setNativeSection("conversations");
   }
 
-  function showWebsite(website: RibbonWebsite): void {
+  function revealWebsite(): void {
     desktopWorkbenchController.deactivateRegion("primary");
     closeWorkspaceMenus();
     closeConversationSearch({ immediate: true });
@@ -3978,8 +3971,34 @@ export function App(): JSX.Element {
     setSettingsOpen(false);
     setAccountOpen(false);
     closeSidebarDrawer();
-    setActiveWebsiteID(website.id);
+    setActiveWebsiteID(WEB_WORKSPACE_RIBBON_ID);
   }
+
+  function showWebsite(website: RibbonWebsite): void {
+    revealWebsite();
+    void ribbonBrowser.selectTab(website.id);
+  }
+
+  async function createWebsiteTab(reopen = false): Promise<void> {
+    const next = await (reopen ? ribbonBrowser.reopenTab() : ribbonBrowser.createTab());
+    if (next?.activeTabId) revealWebsite();
+  }
+
+  useEffect(() => {
+    if (!ribbonBrowser.state) return;
+    const onKeyDown = (event: KeyboardEvent): void => {
+      const modifier = window.wuu.platform === "darwin" ? event.metaKey : event.ctrlKey;
+      if (!modifier || event.altKey || event.defaultPrevented || event.key.toLowerCase() !== "t") return;
+      // Retained extension WebPages keep their own browser shortcut contract.
+      if ((event.target as Element | null)?.closest?.(".web-workspace-panel")) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if ((ribbonBrowser.state?.tabs?.length ?? 0) >= WEB_WORKSPACE_TAB_LIMIT || (event.shiftKey && !ribbonBrowser.state?.canReopenTab)) return;
+      void createWebsiteTab(event.shiftKey);
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [ribbonBrowser.state, createWebsiteTab]);
 
   function showConversations(): void {
     revealConversationFromFocusedWorkspace();
@@ -5564,7 +5583,12 @@ export function App(): JSX.Element {
           <HoverRevealScopeContext.Provider value={sidebarHoverScope}>
             <AppSidebar
               onShowConversations={showConversations}
-              activeWebsiteId={settingsOpen ? undefined : activeWebsite?.id}
+              activeWebsiteId={showingWebsite && !settingsOpen ? activeWebsite?.id : undefined}
+              websites={ribbonBrowser.state?.tabs}
+              onNewTab={ribbonBrowser.state && (ribbonBrowser.state.tabs?.length ?? 0) < WEB_WORKSPACE_TAB_LIMIT ? () => { void createWebsiteTab(); } : undefined}
+              onCloseTab={ribbonBrowser.closeTab}
+              onPinTab={ribbonBrowser.pinTab}
+              onReorderTabs={ribbonBrowser.reorderTabs}
               onSelectWebsite={showWebsite}
               catalogActive={showingSkillsCatalog}
               settingsActive={settingsOpen}
@@ -6224,7 +6248,7 @@ export function App(): JSX.Element {
       ) : null}
       {!poppedOutMode ? (
         <section className="web-workspace-stage" hidden={!showingWebsite || settingsOpen} aria-label={activeWebsite?.title}>
-          <WebWorkspacePanel site={activeWebsite} active={showingWebsite && !settingsOpen && !accountOpen} tabs resizeWithWindow />
+          <WebWorkspacePanel site={ribbonBrowser.state ? { id: WEB_WORKSPACE_RIBBON_ID, url: "about:blank", title: activeWebsite?.title } : undefined} active={showingWebsite && !settingsOpen && !accountOpen} tabs resizeWithWindow />
         </section>
       ) : null}
       <DesktopWorkbench

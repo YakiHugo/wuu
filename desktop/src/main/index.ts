@@ -5,7 +5,7 @@ import { WebWorkspaceHost } from "./webWorkspaceHost";
 import { WebWorkspaceLibrary } from "./webWorkspaceLibrary";
 import { WebWorkspaceDownloads } from "./webWorkspaceDownloads";
 import type { WebWorkspaceDownloadCommand } from "../shared/webWorkspaceDownloads";
-import type { WebWorkspaceBounds, WebWorkspaceCommand, WebWorkspaceDestination, WebWorkspaceFindOptions } from "../shared/webWorkspace";
+import type { WebWorkspaceBounds, WebWorkspaceCommand, WebWorkspaceDestination, WebWorkspaceLegacyDestination, WebWorkspaceFindOptions } from "../shared/webWorkspace";
 import { importBrowserCookies, listBrowserProfiles } from "./browserCookieImport";
 import { BrowserExtensionManager } from "./browserExtensions";
 import { saveArtifactFile } from "./artifactSave";
@@ -2868,6 +2868,8 @@ app.whenReady().then(async () => {
     if (!isAppContextSender(event)) throw new Error("Website destinations are available from Wuu's main window only.");
     return windowRegistry.mainWindow()!;
   };
+  ipcMain.handle("wuu:web-workspace-tabs-initialize", (event, destinations: WebWorkspaceLegacyDestination[]) =>
+    webWorkspaceHost.initializeTabs(webWorkspaceSender(event), destinations));
   ipcMain.handle("wuu:web-workspace-open", (event, destination: WebWorkspaceDestination) =>
     webWorkspaceHost.open(webWorkspaceSender(event), destination));
   ipcMain.handle("wuu:web-workspace-capture", (event, id: string) => webWorkspaceHost.capture(webWorkspaceSender(event), id));
@@ -2887,6 +2889,10 @@ app.whenReady().then(async () => {
     webWorkspaceHost.closeTab(webWorkspaceSender(event), id, tabId));
   ipcMain.handle("wuu:web-workspace-tab-reopen", (event, id: string) =>
     webWorkspaceHost.reopenTab(webWorkspaceSender(event), id));
+  ipcMain.handle("wuu:web-workspace-tab-pin", (event, id: string, tabId: string, pinned: boolean) =>
+    webWorkspaceHost.setTabPinned(webWorkspaceSender(event), id, tabId, pinned));
+  ipcMain.handle("wuu:web-workspace-tabs-reorder", (event, id: string, tabIds: string[]) =>
+    webWorkspaceHost.reorderTabs(webWorkspaceSender(event), id, tabIds));
   ipcMain.handle("wuu:web-workspace-find", (event, id: string, text: string, options?: WebWorkspaceFindOptions) =>
     webWorkspaceHost.find(webWorkspaceSender(event), id, text, options));
   ipcMain.handle("wuu:web-workspace-stop-find", (event, id: string) =>

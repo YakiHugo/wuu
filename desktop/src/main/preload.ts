@@ -708,6 +708,7 @@ browserApi.onBrowserDock = (handler) => {
 };
 if (!process.argv.includes("--wuu-browser-disabled")) {
   (api as WuuDesktopApi & { webWorkspace: WebWorkspaceApi }).webWorkspace = {
+    initializeTabs: (destinations) => ipcRenderer.invoke("wuu:web-workspace-tabs-initialize", destinations),
     open: (destination) => ipcRenderer.invoke("wuu:web-workspace-open", destination),
     capture: (id) => ipcRenderer.invoke("wuu:web-workspace-capture", id),
     onReveal: handler => {
@@ -724,6 +725,8 @@ if (!process.argv.includes("--wuu-browser-disabled")) {
     selectTab: (id, tabId) => ipcRenderer.invoke("wuu:web-workspace-tab-select", id, tabId),
     closeTab: (id, tabId) => ipcRenderer.invoke("wuu:web-workspace-tab-close", id, tabId),
     reopenTab: (id) => ipcRenderer.invoke("wuu:web-workspace-tab-reopen", id),
+    setTabPinned: (id, tabId, pinned) => ipcRenderer.invoke("wuu:web-workspace-tab-pin", id, tabId, pinned),
+    reorderTabs: (id, tabIds) => ipcRenderer.invoke("wuu:web-workspace-tabs-reorder", id, tabIds),
     find: (id, text, options) => ipcRenderer.invoke("wuu:web-workspace-find", id, text, options),
     stopFind: (id) => ipcRenderer.invoke("wuu:web-workspace-stop-find", id),
     setZoom: (id, factor) => ipcRenderer.invoke("wuu:web-workspace-zoom", id, factor),

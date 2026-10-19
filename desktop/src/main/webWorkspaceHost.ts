@@ -1,7 +1,7 @@
 import { BrowserWindow, Menu, clipboard, dialog, shell, type DownloadItem, type WebContents, type WebContentsView, type WebContentsViewConstructorOptions } from "electron";
 import { randomUUID } from "node:crypto";
-import { WEB_WORKSPACE_ZOOM_MIN, WEB_WORKSPACE_ZOOM_MAX, WEB_WORKSPACE_TAB_LIMIT } from "../shared/webWorkspace";
-import type { WebWorkspaceBounds, WebWorkspaceCommand, WebWorkspaceDestination, WebWorkspaceFindOptions, WebWorkspaceFindResult, WebWorkspaceState, WebWorkspaceTabState } from "../shared/webWorkspace";
+import { WEB_WORKSPACE_ZOOM_MIN, WEB_WORKSPACE_ZOOM_MAX, WEB_WORKSPACE_TAB_LIMIT, WEB_WORKSPACE_RIBBON_ID } from "../shared/webWorkspace";
+import type { WebWorkspaceBounds, WebWorkspaceCommand, WebWorkspaceDestination, WebWorkspaceLegacyDestination, WebWorkspaceInitializationState, WebWorkspaceFindOptions, WebWorkspaceFindResult, WebWorkspaceState, WebWorkspaceTabState } from "../shared/webWorkspace";
 import { BROWSER_PARTITION, BROWSER_WORKSPACE_TAB_PREFIX, type BrowserWorkspaceSource, type BrowserWorkspaceAttachment, type BrowserViewHandle, type BrowserParentWindowHandle, type BrowserPermissionRequestDetails, type BrowserSessionPermissionDelegate } from "./browserHostWindows";
 import { createBrowserView } from "./browserView";
 import type { WebWorkspaceLibrary } from "./webWorkspaceLibrary";
@@ -9,7 +9,7 @@ import type { WebWorkspaceDownloads } from "./webWorkspaceDownloads";
 
 // Website pages keep their native ownership. Explicit, turn-scoped automation
 // borrows a live view; restored tabs create native views only when selected.
-type WorkspaceTab = { id: string; url: string; title: string; zoomFactor: number; page?: WorkspacePage };
+type WorkspaceTab = { id: string; url: string; title: string; zoomFactor: number; pinned?: boolean; favicon?: string; startPage?: boolean; page?: WorkspacePage };
 type WorkspaceGroup = {
   id: string;
   owner: BrowserWindow;
@@ -18,7 +18,8 @@ type WorkspaceGroup = {
   tabs: WorkspaceTab[];
   activeTabId: string;
   bounds: WebWorkspaceBounds | null;
-  closedTabs: { url: string; title: string; zoomFactor: number }[];
+  closedTabs: { url: string; title: string; zoomFactor: number; pinned?: boolean }[];
+  migratedTabGroups?: Record<string, string[]>;
 };
 type AutomationRestriction = { active: boolean };
 type WorkspacePage = {
@@ -127,15 +128,59 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     };
   }
 
+  initializeTabs(owner: BrowserWindow, destinations: WebWorkspaceLegacyDestination[]): WebWorkspaceInitializationState {
+    const existing = this.groups.get(WEB_WORKSPACE_RIBBON_ID);
+    if (existing) return { ...this.state(this.group(owner, existing.id)), migratedTabGroups: existing.migratedTabGroups };
+    if (!Array.isArray(destinations)) throw new Error("Website destinations must be a list.");
+    this.observeOwner(owner);
+    const restored = this.options.library?.getSession(WEB_WORKSPACE_RIBBON_ID);
+    const tabs: WorkspaceTab[] = restored ? restored.tabs.map(tab => ({ ...tab, zoomFactor: 1 })) : [];
+    const migratedTabGroups: Record<string, string[]> = restored?.migratedTabGroups ?? Object.create(null);
+    if (!restored) {
+      const ids = new Set<string>();
+      for (const destination of destinations) {
+        if (!destination || typeof destination.id !== "string" || !/^website:[a-z\d_-]+$/i.test(destination.id)) throw new Error("Invalid legacy website destination.");
+        if (ids.has(destination.id)) continue;
+        const url = websiteURL(destination.url);
+        const session = this.options.library?.getSession(destination.id);
+        const previousTabs = session?.tabs.length ? session.tabs : [{ id: destination.id, url, title: destination.title ?? "" }];
+        migratedTabGroups[destination.id] = [];
+        for (const previous of previousTabs) {
+          let id = !session || previous.id === session.activeTabId ? destination.id : `website:${previous.id}`;
+          if (ids.has(id)) id = `website:${randomUUID()}`;
+          ids.add(id);
+          migratedTabGroups[destination.id].push(id);
+          tabs.push({ ...previous, id, zoomFactor: 1 });
+        }
+      }
+    }
+    const group: WorkspaceGroup = {
+      id: WEB_WORKSPACE_RIBBON_ID, owner, tabbed: true, homeURL: "about:blank", tabs,
+      activeTabId: restored?.activeTabId ?? destinations[0]?.id ?? "", bounds: null, closedTabs: [],
+      migratedTabGroups,
+    };
+    this.groups.set(group.id, group);
+    // Keep legacy sessions intact. The new collection is saved separately, so
+    // a failed migration write cannot consume or evict the old destinations.
+    this.emit(group);
+    return { ...this.state(group), migratedTabGroups };
+  }
+
   open(owner: BrowserWindow, destination: WebWorkspaceDestination): WebWorkspaceState {
     if (typeof destination?.id !== "string" || !destination.id.trim() || destination.id.length > 256) throw new Error("A website destination ID is required.");
+    if (destination.id === WEB_WORKSPACE_RIBBON_ID) {
+      const group = this.group(owner, destination.id);
+      const tab = this.activeTab(group);
+      if (tab) this.ensurePage(group, tab);
+      return this.state(group);
+    }
     const url = websiteURL(destination.url);
     const existing = this.groups.get(destination.id);
     if (existing) {
       if (existing.owner !== owner) throw new Error("This website belongs to another window.");
       if (existing.homeURL !== url) {
         existing.homeURL = url;
-        this.navigate(this.ensurePage(existing, this.activeTab(existing)), url);
+        this.navigate(this.ensurePage(existing, this.activeTab(existing)!), url);
         this.emit(existing);
       }
       return this.state(existing);
@@ -157,7 +202,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
       bounds: null, closedTabs: [],
     };
     this.groups.set(group.id, group);
-    this.ensurePage(group, this.activeTab(group));
+    this.ensurePage(group, this.activeTab(group)!);
     this.emit(group);
     return this.state(group);
   }
@@ -165,11 +210,11 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
   /** One bounded, in-memory backdrop for chrome overlays; no capture subscription. */
   async capture(owner: BrowserWindow, id: string): Promise<string | null> {
     const group = this.group(owner, id);
-    const page = this.activeTab(group).page;
+    const page = this.activeTab(group)?.page;
     if (!page || !page.bounds || page.automation?.external || page.contents.isDestroyed() || !owner.isVisible() || owner.isMinimized()) return null;
     const generation = page.navigationGeneration;
     const image = await page.contents.capturePage(undefined, { stayHidden: true });
-    if (this.groups.get(id) !== group || this.activeTab(group).page !== page || page.contents.isDestroyed() || page.navigationGeneration !== generation || image.isEmpty()) return null;
+    if (this.groups.get(id) !== group || this.activeTab(group)?.page !== page || page.contents.isDestroyed() || page.navigationGeneration !== generation || image.isEmpty()) return null;
     const size = image.getSize();
     const scale = Math.min(1, 1280 / Math.max(size.width, size.height));
     const jpeg = image.resize({ width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)) }).toJPEG(65);
@@ -198,7 +243,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
   handleShellInput(contents: WebContents, event: Electron.Event, input: Electron.Input): boolean {
     const id = this.shortcutTargets.get(contents.id);
     const group = id ? this.groups.get(id) : undefined;
-    if (!group || group.owner.webContents !== contents || !group.owner.isVisible() || group.owner.isMinimized()) return false;
+    if (!group || !group.tabs.length || group.owner.webContents !== contents || !group.owner.isVisible() || group.owner.isMinimized()) return false;
     const key = input.key.toLowerCase();
     const modifier = process.platform === "darwin" ? input.meta : input.control;
     if (input.alt) return false;
@@ -213,14 +258,16 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
       if (closeTab) void this.closeTab(group.owner, group.id, group.activeTabId).catch(error => console.warn("[web-workspace] Could not close tab", error));
       else if (reload) this.command(group.owner, group.id, input.shift ? "reloadIgnoringCache" : "reload");
       else if (key === "0") this.setZoom(group.owner, group.id, 1);
-      else this.stepZoom(this.ensurePage(group, this.activeTab(group)), key === "-" ? -1 : 1);
+      else this.stepZoom(this.ensurePage(group, this.activeTab(group)!), key === "-" ? -1 : 1);
     }
     return true;
   }
 
   command(owner: BrowserWindow, id: string, command: WebWorkspaceCommand, url?: string): WebWorkspaceState {
     const group = this.group(owner, id);
-    const page = this.ensurePage(group, this.activeTab(group));
+    const tab = this.activeTab(group);
+    if (!tab) throw new Error("Open a browser tab first.");
+    const page = this.ensurePage(group, tab);
     const contents = page.contents;
     if (command !== "focus") page.automation?.reclaim();
     switch (command) {
@@ -249,11 +296,12 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
 
   createTab(owner: BrowserWindow, id: string, url?: string): WebWorkspaceState {
     const group = this.tabGroup(owner, id);
-    if (group.tabs.length >= WEB_WORKSPACE_TAB_LIMIT) throw new Error(`A website can have up to ${WEB_WORKSPACE_TAB_LIMIT} tabs. Close a tab before opening another.`);
-    const tab: WorkspaceTab = { id: randomUUID(), url: url === undefined ? "about:blank" : websiteURL(url), title: "", zoomFactor: 1 };
+    if (group.tabs.length >= WEB_WORKSPACE_TAB_LIMIT) throw new Error(`Close a tab before opening another. The browser limit is ${WEB_WORKSPACE_TAB_LIMIT} tabs.`);
+    const tab: WorkspaceTab = { id: group.id === WEB_WORKSPACE_RIBBON_ID ? `website:${randomUUID()}` : randomUUID(), url: url === undefined ? "about:blank" : websiteURL(url), title: "", zoomFactor: 1 };
     group.tabs.push(tab);
     this.activate(group, tab);
     this.emit(group);
+    if (group.id === WEB_WORKSPACE_RIBBON_ID) this.options.onReveal?.(owner, group.id);
     return this.state(group);
   }
 
@@ -290,14 +338,34 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
 
   reopenTab(owner: BrowserWindow, id: string): WebWorkspaceState {
     const group = this.tabGroup(owner, id);
-    if (group.tabs.length >= WEB_WORKSPACE_TAB_LIMIT) throw new Error(`Close a tab before restoring another. The limit is ${WEB_WORKSPACE_TAB_LIMIT} tabs per website.`);
+    if (group.tabs.length >= WEB_WORKSPACE_TAB_LIMIT) throw new Error(`Close a tab before restoring another. The browser limit is ${WEB_WORKSPACE_TAB_LIMIT} tabs.`);
     const closed = group.closedTabs.pop();
     if (closed) {
-      const tab: WorkspaceTab = { ...closed, id: randomUUID() };
+      const tab: WorkspaceTab = { ...closed, id: group.id === WEB_WORKSPACE_RIBBON_ID ? `website:${randomUUID()}` : randomUUID() };
       group.tabs.push(tab);
       this.activate(group, tab);
       this.emit(group);
+      if (group.id === WEB_WORKSPACE_RIBBON_ID) this.options.onReveal?.(owner, group.id);
     }
+    return this.state(group);
+  }
+
+  setTabPinned(owner: BrowserWindow, id: string, tabId: string, pinned: boolean): WebWorkspaceState {
+    const group = this.tabGroup(owner, id);
+    if (typeof pinned !== "boolean") throw new Error("A tab's pinned state must be a boolean.");
+    const tab = group.tabs.find(candidate => candidate.id === tabId);
+    if (!tab) throw new Error("The website tab is no longer open.");
+    tab.pinned = pinned;
+    this.emit(group);
+    return this.state(group);
+  }
+
+  reorderTabs(owner: BrowserWindow, id: string, tabIds: string[]): WebWorkspaceState {
+    const group = this.tabGroup(owner, id);
+    if (!Array.isArray(tabIds) || tabIds.some(tabId => typeof tabId !== "string") || new Set(tabIds).size !== tabIds.length) throw new Error("Invalid browser tab order.");
+    const positions = new Map(tabIds.map((tabId, index) => [tabId, index]));
+    group.tabs.sort((a, b) => (positions.get(a.id) ?? tabIds.length) - (positions.get(b.id) ?? tabIds.length));
+    this.emit(group);
     return this.state(group);
   }
 
@@ -305,7 +373,9 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     const group = this.group(owner, id);
     if (typeof text !== "string" || text.length > 10_000) throw new Error("The search text is too long.");
     if (!text) return this.stopFind(owner, id);
-    const page = this.ensurePage(group, this.activeTab(group));
+    const tab = this.activeTab(group);
+    if (!tab) throw new Error("Open a browser tab first.");
+    const page = this.ensurePage(group, tab);
     // Electron calls Chromium new_session "findNext": true starts a search,
     // while our public flag means advance an existing search result.
     const requestId = page.contents.findInPage(text, { forward: options.forward !== false, findNext: options.findNext !== true });
@@ -317,7 +387,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
 
   stopFind(owner: BrowserWindow, id: string): WebWorkspaceState {
     const group = this.group(owner, id);
-    this.clearFind(this.activeTab(group).page);
+    this.clearFind(this.activeTab(group)?.page);
     this.emit(group);
     return this.state(group);
   }
@@ -326,6 +396,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     const group = this.group(owner, id);
     if (!Number.isFinite(factor) || factor < WEB_WORKSPACE_ZOOM_MIN || factor > WEB_WORKSPACE_ZOOM_MAX) throw new Error("Website zoom must be between 25% and 300%.");
     const tab = this.activeTab(group);
+    if (!tab) throw new Error("Open a browser tab first.");
     tab.page?.automation?.reclaim();
     tab.zoomFactor = factor;
     this.ensurePage(group, tab).contents.setZoomFactor(factor);
@@ -437,8 +508,8 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     return group;
   }
 
-  private activeTab(group: WorkspaceGroup): WorkspaceTab {
-    return group.tabs.find(tab => tab.id === group.activeTabId)!;
+  private activeTab(group: WorkspaceGroup): WorkspaceTab | undefined {
+    return group.tabs.find(tab => tab.id === group.activeTabId);
   }
 
   private tabState(tab: WorkspaceTab): WebWorkspaceTabState {
@@ -450,6 +521,9 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
       canGoBack: contents?.navigationHistory.canGoBack() ?? false,
       canGoForward: contents?.navigationHistory.canGoForward() ?? false,
       zoomFactor: tab.zoomFactor,
+      ...(tab.pinned ? { pinned: true } : {}),
+      ...(tab.favicon ? { favicon: tab.favicon } : {}),
+      startPage: tab.startPage !== false,
       ...(page?.automation ? { agentControlled: true } : {}),
       ...(page?.findResult ? { findResult: page.findResult } : {}),
       ...(page?.error ? { error: page.error } : {}),
@@ -457,8 +531,9 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
   }
 
   private state(group: WorkspaceGroup): WebWorkspaceState {
+    const active = this.activeTab(group);
     return {
-      ...this.tabState(this.activeTab(group)), id: group.id,
+      ...(active ? this.tabState(active) : { url: "about:blank", title: "", loading: false, canGoBack: false, canGoForward: false }), id: group.id,
       ...(group.tabbed ? { tabs: group.tabs.map(tab => this.tabState(tab)), activeTabId: group.activeTabId, canReopenTab: group.closedTabs.length > 0 } : {}),
     };
   }
@@ -467,8 +542,9 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     if (this.groups.get(group.id) !== group || group.owner.isDestroyed()) return;
     if (group.tabbed) this.options.library?.saveSession(group.id, {
       homeURL: group.homeURL,
-      tabs: group.tabs.map(tab => { const state = this.tabState(tab); return { id: state.id, url: state.url, title: state.title }; }),
+      tabs: group.tabs.map(tab => { const state = this.tabState(tab); return { id: state.id, url: state.url, title: state.title, ...(tab.pinned ? { pinned: true } : {}) }; }),
       activeTabId: group.activeTabId,
+      ...(group.migratedTabGroups ? { migratedTabGroups: group.migratedTabGroups } : {}),
     });
     this.onState(group.owner, this.state(group));
   }
@@ -537,6 +613,10 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
       }
       this.emit(group);
     });
+    page.contents.on("page-favicon-updated", (_event, favicons) => {
+      tab.favicon = favicons.find(value => /^https?:\/\//i.test(value) || /^data:image\//i.test(value));
+      this.emit(group);
+    });
     page.contents.on("did-fail-load", (_event, code, description, url, isMainFrame) => {
       if (!isMainFrame || code === -3 || (url && url !== page.requestedURL)) return;
       page.error = description || "The website could not be loaded.";
@@ -569,7 +649,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
   }
 
   private activate(group: WorkspaceGroup, tab: WorkspaceTab): void {
-    if (group.activeTabId !== tab.id) this.clearFind(this.activeTab(group).page);
+    if (group.activeTabId !== tab.id) this.clearFind(this.activeTab(group)?.page);
     group.activeTabId = tab.id;
     this.ensurePage(group, tab).contents.setZoomFactor(tab.zoomFactor);
     this.layoutGroup(group);
@@ -578,14 +658,15 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
   private removeTab(group: WorkspaceGroup, index: number): void {
     const tab = group.tabs[index];
     const state = this.tabState(tab);
-    group.closedTabs.push({ url: state.url, title: state.title, zoomFactor: tab.zoomFactor });
+    group.closedTabs.push({ url: state.url, title: state.title, zoomFactor: tab.zoomFactor, pinned: tab.pinned });
     if (group.closedTabs.length > 20) group.closedTabs.shift();
     group.tabs.splice(index, 1);
     if (tab.page) this.destroyPage(tab.page);
-    if (!group.tabs.length) group.tabs.push({ id: randomUUID(), url: "about:blank", title: "", zoomFactor: 1 });
+    if (!group.tabs.length && group.id !== WEB_WORKSPACE_RIBBON_ID) group.tabs.push({ id: randomUUID(), url: "about:blank", title: "", zoomFactor: 1 });
     if (group.activeTabId === tab.id) {
-      group.activeTabId = group.tabs[Math.min(index, group.tabs.length - 1)].id;
-      this.activate(group, this.activeTab(group));
+      group.activeTabId = group.tabs[Math.min(index, group.tabs.length - 1)]?.id ?? "";
+      const active = this.activeTab(group);
+      if (active) this.activate(group, active);
     }
     this.emit(group);
   }
@@ -727,7 +808,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
       event.preventDefault();
       const index = group.tabs.findIndex(tab => tab.id === group.activeTabId);
       this.selectTab(page.owner, group.id, group.tabs[(index + (input.shift ? -1 : 1) + group.tabs.length) % group.tabs.length].id);
-      this.activeTab(group).page?.contents.focus();
+      this.activeTab(group)?.page?.contents.focus();
       return;
     }
     if (key === "f5") {
@@ -758,7 +839,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     } else if (key === "w" && !input.shift && group.tabbed) {
       event.preventDefault();
       void this.closeTab(page.owner, group.id, group.activeTabId).then(() => {
-        this.activeTab(group).page?.contents.focus();
+        this.activeTab(group)?.page?.contents.focus();
       }).catch(error => console.warn("[web-workspace] Could not close tab", error));
     } else if (key === "+" || key === "=" || key === "-" || key === "0") {
       event.preventDefault();
@@ -831,8 +912,10 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
       if (target !== "about:blank") {
         try { websiteURL(target); } catch { void this.openExternal(page, contents, target); return { action: "deny" }; }
       }
-      const popup = target === "about:blank" || !page.group.tabbed || page.group.tabs.length >= WEB_WORKSPACE_TAB_LIMIT || contents !== page.contents || details.disposition === "new-window"
+      const ribbon = page.group.id === WEB_WORKSPACE_RIBBON_ID;
+      const popup = (target === "about:blank" && !ribbon) || !page.group.tabbed || (!ribbon && page.group.tabs.length >= WEB_WORKSPACE_TAB_LIMIT) || contents !== page.contents || (!ribbon && details.disposition === "new-window")
         || details.features.split(",").some(feature => /^(popup|width|height|left|top)\s*(=|$)/i.test(feature.trim()));
+      if (!popup && page.group.tabs.length >= WEB_WORKSPACE_TAB_LIMIT) return { action: "deny" };
       const response: Electron.WindowOpenHandlerResponse = {
         action: "allow", outlivesOpener: !popup,
         overrideBrowserWindowOptions: {
@@ -853,7 +936,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
           view.webContents.close();
           return view.webContents;
         }
-        const tab: WorkspaceTab = { id: randomUUID(), url: target, title: "", zoomFactor: 1 };
+        const tab: WorkspaceTab = { id: ribbon ? `website:${randomUUID()}` : randomUUID(), url: target, title: "", zoomFactor: 1, startPage: false };
         page.group.tabs.push(tab);
         // A child keeps user ownership, but cannot escape its opener's live
         // agent restrictions. Tokens expire independently; a later attachment
@@ -871,6 +954,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
         }
         if (!restricted && details.disposition !== "background-tab") this.activate(page.group, tab);
         this.emit(page.group);
+        if (ribbon && !restricted && details.disposition !== "background-tab") this.options.onReveal?.(page.owner, page.group.id);
         return view.webContents;
       };
       return response;

@@ -9,7 +9,6 @@ import { WebWorkspaceDownloadsMenu } from "./WebWorkspaceDownloadsMenu";
 import { BrowserLibrary } from "./BrowserLibrary";
 import { WebWorkspaceAddress } from "./WebWorkspaceAddress";
 import { WebWorkspaceStartPage } from "./WebWorkspaceStartPage";
-import { WebsiteIcon } from "./WebsiteIcon";
 import { composerMenuWidth, FloatingMenuPortal, handleFloatingMenuKeyDown, menuOpeningKey, useFloatingMenuFocus } from "./ComposerFloatingMenu";
 import "./styles/web-workspace.css";
 
@@ -41,7 +40,6 @@ export function WebWorkspacePanel({
   const findInputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
-  const tabListRef = useRef<HTMLDivElement>(null);
   const [page, setPage] = useState<WebWorkspaceState>();
   const [failure, setFailure] = useState<{ id: string; message: string }>();
   const [address, setAddress] = useState("");
@@ -58,7 +56,7 @@ export function WebWorkspacePanel({
   const current = page?.id === site?.id ? page : undefined;
   const error = failure && failure.id === site?.id ? failure.message : current?.error;
   const currentURL = current?.url || site?.url || "";
-  const blank = currentURL === "about:blank";
+  const blank = currentURL === "about:blank" && current?.startPage !== false;
   const zoomFactor = current?.zoomFactor ?? 1;
   const pageTabs = current?.tabs ?? [];
   const hasCurrent = Boolean(current);
@@ -175,10 +173,10 @@ export function WebWorkspacePanel({
     if (findOpen) { findInputRef.current?.focus(); findInputRef.current?.select(); }
   }, [findOpen]);
 
-  useEffect(() => {
-    const selected = tabListRef.current?.querySelector<HTMLElement>('[aria-selected="true"]');
-    selected?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [current?.activeTabId]);
+  useLayoutEffect(() => {
+    // The ribbon can create/select a blank tab before this panel mounts.
+    if (tabs && active && blank && current?.activeTabId) startInputRef.current?.focus();
+  }, [tabs, active, blank, current?.activeTabId]);
 
   const run = useCallback(async (action: WebWorkspaceCommand, url?: string): Promise<void> => {
     await update(async (browser, id) => {
@@ -390,36 +388,6 @@ export function WebWorkspacePanel({
 
   return (
     <div ref={panelRef} className="web-workspace-panel" data-wuu-component="web-workspace" data-website-id={site?.id}>
-      {tabs ? <div className="web-workspace-tabstrip">
-        <div ref={tabListRef} className="web-workspace-tabs" role="tablist" aria-label={t("webWorkspace.tabs")}>
-          {pageTabs.map((tab) => {
-            const selected = tab.id === current?.activeTabId;
-            const title = tab.url === "about:blank" ? t("webWorkspace.newTab") : tab.title || tab.url;
-            return <div key={tab.id} className="web-workspace-tab" data-active={selected || undefined} data-tab-id={tab.id} onAuxClick={(event) => {
-              if (event.button === 1) { event.preventDefault(); void update((browser, id) => browser.closeTab(id, tab.id)); }
-            }}>
-              <button type="button" className="web-workspace-tab-select" role="tab" id={`${instanceID}-tab-${tab.id}`} aria-selected={selected} aria-controls={`${instanceID}-page`} tabIndex={selected ? 0 : -1} title={title} onClick={() => void update((browser, id) => browser.selectTab(id, tab.id))} onKeyDown={(event) => {
-                const index = pageTabs.findIndex((item) => item.id === tab.id);
-                let next: number | undefined;
-                if (event.key === "ArrowLeft") next = (index - 1 + pageTabs.length) % pageTabs.length;
-                if (event.key === "ArrowRight") next = (index + 1) % pageTabs.length;
-                if (event.key === "Home") next = 0;
-                if (event.key === "End") next = pageTabs.length - 1;
-                if (next !== undefined) {
-                  event.preventDefault();
-                  void update((browser, id) => browser.selectTab(id, pageTabs[next].id));
-                  tabListRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
-                } else if (event.key === "Delete") { event.preventDefault(); void update((browser, id) => browser.closeTab(id, tab.id)); }
-              }}>
-                {tab.loading ? <RotateCw className="icon web-workspace-tab-loading" aria-hidden="true" /> : <WebsiteIcon url={tab.url} className="icon" fallback={<Globe className="icon" aria-hidden="true" />} />}
-                <span>{title}</span>
-              </button>
-              <button type="button" className="icon-button web-workspace-tab-close" tabIndex={selected ? 0 : -1} aria-label={t("webWorkspace.closeTab", { title })} title={t("webWorkspace.closeTab", { title })} onClick={() => void update((browser, id) => browser.closeTab(id, tab.id))}><X className="icon" aria-hidden="true" /></button>
-            </div>;
-          })}
-        </div>
-        <button type="button" className="icon-button workspace-browser-nav web-workspace-new-tab" disabled={!api || !current || pageTabs.length >= WEB_WORKSPACE_TAB_LIMIT} aria-label={t("webWorkspace.newTab")} title={t("webWorkspace.newTab")} onClick={() => void addTab()}><Plus className="icon" aria-hidden="true" /></button>
-      </div> : null}
       <div className="workspace-browser-toolbar web-workspace-toolbar" role="toolbar" aria-label={site?.title || t("webWorkspace.address")}>
         <div className="workspace-browser-nav-cluster">
           <button type="button" className="icon-button workspace-browser-nav" aria-label={t("webWorkspace.back")} title={t("webWorkspace.back")} disabled={!api || !current?.canGoBack} onClick={() => void run("back")}><ArrowLeft className="icon" aria-hidden="true" /></button>
@@ -464,7 +432,7 @@ export function WebWorkspacePanel({
         <button type="button" className="icon-button workspace-browser-nav" aria-label={t("webWorkspace.findNext")} title={t("webWorkspace.findNext")} disabled={!findText} onClick={() => find(findText, true, true)}><ChevronDown className="icon" aria-hidden="true" /></button>
         <button type="button" className="icon-button workspace-browser-nav" aria-label={t("webWorkspace.closeFind")} title={t("webWorkspace.closeFind")} onClick={closeFind}><X className="icon" aria-hidden="true" /></button>
       </div> : null}
-      <div className="web-workspace-content" id={`${instanceID}-page`} role={tabs ? "tabpanel" : undefined} aria-labelledby={tabs && current?.activeTabId ? `${instanceID}-tab-${current.activeTabId}` : undefined}>
+      <div className="web-workspace-content" id={`${instanceID}-page`}>
         {occluded && backdrop?.key === snapshotKey ? <img className="web-workspace-backdrop" src={backdrop.image} alt="" aria-hidden="true" /> : null}
         <div ref={hostRef} className="web-workspace-host" data-wuu-native-surface={active && current && !error && !blank ? "" : undefined} />
         {!api || error ? (

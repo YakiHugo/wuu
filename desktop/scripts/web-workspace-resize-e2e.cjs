@@ -95,14 +95,33 @@ async function run(){
   report.reactProbe=await evaluate(()=>({injected:window.__resizeHookInjected===true,totalCommits:window.__resizeHookInjected===true?window.__resizeCommits:null}));report.display=screen.getPrimaryDisplay();report.gpu=app.getGPUFeatureStatus();report.minimum=win.getMinimumSize();
   report.buildHashes=Object.fromEntries(['out/main/index.js','out/preload/index.cjs',...fs.readdirSync(path.join(desktop,'out/renderer/assets')).filter(x=>x.endsWith('.js')&&x.startsWith('index-')).map(x=>'out/renderer/assets/'+x)].map(f=>[f,createHash('sha256').update(fs.readFileSync(path.join(desktop,f))).digest('hex')]));
   report.sourceHashes=Object.fromEntries(['src/renderer/useComposerHeight.ts','src/renderer/WebWorkspace.tsx','src/main/webWorkspaceHost.ts'].map(f=>[f,createHash('sha256').update(fs.readFileSync(path.join(desktop,f))).digest('hex')]));
-  await evaluate(origin=>{localStorage.setItem('wuu.navigation-ribbon.v1',JSON.stringify({websites:['static','scroll','animated'].map(k=>({id:'website:resize-'+k,title:'Resize '+k,url:origin+'/'+k})),order:[]}));window.dispatchEvent(new Event('wuu-navigation-ribbon-change'));},origin);await settle();
+  // Fixture setup only, before any measured motion. Use the active product's
+  // native tab model, while retaining the older branch path for A/B runs.
+  const fixtureTabs = await evaluate(async origin => {
+    const api = window.wuu.webWorkspace, tabs = {};
+    if (api.initializeTabs) {
+      await api.initializeTabs([]);
+      for (const kind of ['static', 'scroll', 'animated']) {
+        const state = await api.createTab('ribbon-browser', origin + '/' + kind);
+        tabs[kind] = { id: state.activeTabId, group: 'ribbon-browser' };
+      }
+    } else {
+      const websites = ['static', 'scroll', 'animated'].map(kind => ({ id: 'website:resize-' + kind, title: 'Resize ' + kind, url: origin + '/' + kind }));
+      localStorage.setItem('wuu.navigation-ribbon.v1', JSON.stringify({ websites, order: [] }));
+      window.dispatchEvent(new Event('wuu-navigation-ribbon-change'));
+      for (const kind of ['static', 'scroll', 'animated']) tabs[kind] = { id: 'website:resize-' + kind, group: 'website:resize-' + kind };
+    }
+    return tabs;
+  }, origin);
+  await until(() => evaluate(tabs => Object.values(tabs).every(tab => document.querySelector(`[data-ribbon-id="${tab.id}"]`)), fixtureTabs), 'resize fixture tabs');
+  await settle();
   for(let repeat=0;repeat<(process.env.WUU_RESIZE_ACCEPTANCE==='1'?0:report.repeats);repeat++)for(const [left,right] of [[false,false],[true,false],[false,true],[true,true]])for(const kind of ['none','static','scroll','animated']){
     if(process.env.WUU_RESIZE_KINDS&&!process.env.WUU_RESIZE_KINDS.split(',').includes(kind))continue;
     if(process.env.WUU_RESIZE_FOCUS==='1'&&(left||right))continue;
     const label=`${repeat}-${left?'left':'no-left'}-${right?'right':'no-right'}-${kind}`;
     win.setBounds({x:30,y:30,width:1440,height:900});await setSidebars(left,right);
     let view,wc;
-    if(kind!=='none'){await click(`.sidebar-ribbon-main button[aria-label="Resize ${kind}"]`);await until(()=>{view=win.contentView.children.find(v=>v.webContents?.getURL()===origin+'/'+kind&&v.getVisible());return view&&!view.webContents.isLoading();},'visible '+kind);wc=view.webContents;if(!wc.debugger.isAttached()){wc.debugger.attach('1.3');await wc.debugger.sendCommand('Performance.enable');}await wc.executeJavaScript('document.querySelector("#draft").value="";window.clicks=0');}
+    if(kind!=='none'){await click(`.sidebar-ribbon-main button[data-ribbon-id="${fixtureTabs[kind].id}"]`);await until(()=>{view=win.contentView.children.find(v=>v.webContents?.getURL()===origin+'/'+kind&&v.getVisible());return view&&!view.webContents.isLoading();},'visible '+kind);wc=view.webContents;if(!wc.debugger.isAttached()){wc.debugger.attach('1.3');await wc.debugger.sendCommand('Performance.enable');}await wc.executeJavaScript('document.querySelector("#draft").value="";window.clicks=0');}
     await settle();await geometry(view);
     const traced=repeat===0&&left===right&&process.env.WUU_RESIZE_TRACE==='1';
     if(traced)await contentTracing.startRecording({included_categories:['devtools.timeline','v8','blink.user_timing','cc','viz','toplevel','disabled-by-default-devtools.timeline','disabled-by-default-devtools.timeline.stack','disabled-by-default-v8.cpu_profiler'],record_mode:'record-until-full',trace_buffer_size_in_kb:131072});
@@ -122,7 +141,7 @@ async function run(){
     if(wc){sample.interactions=await interactions(view,label);if(kind!=='static')assert.ok(sample.interactions.scrollY>0,'Native wheel scrolls');if(kind==='animated')assert.ok(sample.interactions.ticks>30,'Animation remains live');if(repeat===0&&left===right)await capture(label);}
     save();console.log('CASE',label,JSON.stringify({host:sample.host.framesSummary,page:sample.page?.framesSummary,layout:sample.hostMetrics.LayoutDuration,ipc:sample.boundsIPC.length,view:sample.viewCalls.length,commits:sample.host.commits}));
   }
-  if(process.env.WUU_RESIZE_ACCEPTANCE==='1')await require('./web-workspace-resize-acceptance.cjs')({win,output,report,evaluate,until,settle,click,setSidebars,nativeInput,geometry,capture,delay,origin});
+  if(process.env.WUU_RESIZE_ACCEPTANCE==='1')await require('./web-workspace-resize-acceptance.cjs')({win,output,report,evaluate,until,settle,click,setSidebars,nativeInput,geometry,capture,delay,origin,fixtureTabs});
   if(process.env.WUU_RESIZE_FOCUS==='1')await setSidebars(true,true);
   await click('[data-wuu-component="conversations-section"]');await settle();report.recoveredSidebars=await evaluate(()=>({left:!document.querySelector('.app-shell').classList.contains('sidebar-collapsed'),right:document.querySelector('.app-shell').classList.contains('right-panel-open')}));assert.deepEqual(report.recoveredSidebars,{left:true,right:true});
   report.idle=[];for(let i=0;i<5;i++){await delay(500);report.idle.push(app.getAppMetrics().map(p=>({pid:p.pid,type:p.type,cpu:p.cpu.percentCPUUsage,memory:p.memory})));}

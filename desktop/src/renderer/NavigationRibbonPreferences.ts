@@ -4,11 +4,16 @@ export interface RibbonWebsite {
   id: string;
   title: string;
   url: string;
+  pinned?: boolean;
+  loading?: boolean;
+  favicon?: string;
+  startPage?: boolean;
 }
 
 export interface NavigationRibbonPreferences {
   websites: RibbonWebsite[];
   order: string[];
+  browserTabsMigrated?: true;
 }
 
 const storageKey = "wuu.navigation-ribbon.v1";
@@ -47,6 +52,7 @@ function normalizePreferences(value: unknown): NavigationRibbonPreferences {
   }
   return {
     websites,
+    ...(input.browserTabsMigrated === true ? { browserTabsMigrated: true as const } : {}),
     order: Array.isArray(input.order)
       ? [...new Set(input.order.filter((id): id is string => typeof id === "string" && id.length > 0))]
       : [],

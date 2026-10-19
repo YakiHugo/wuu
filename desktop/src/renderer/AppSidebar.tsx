@@ -1,6 +1,6 @@
 import { hostSupports } from "./HostCapabilities";
 import { SidebarAccountMenu } from "./SidebarAccountMenu";
-import { NavigationRibbon } from "./NavigationRibbon";
+import { NavigationRibbon, type RibbonBrowserActions } from "./NavigationRibbon";
 import type { RibbonWebsite } from "./NavigationRibbonPreferences";
 import {
   ChevronRight,
@@ -464,6 +464,11 @@ export function AppSidebar({
   onSelectCatalogSection,
   activeWebsiteId,
   onSelectWebsite,
+  websites,
+  onNewTab,
+  onCloseTab,
+  onPinTab,
+  onReorderTabs,
 }: {
   state: AppState;
   // The sidebar renders scratch conversations through the same WorkspaceList
@@ -546,7 +551,7 @@ export function AppSidebar({
   onSelectCatalogSection?: (section: SkillsCatalogSection) => void;
   activeWebsiteId?: string | null;
   onSelectWebsite?: (website: RibbonWebsite) => void;
-}): JSX.Element {
+} & RibbonBrowserActions): JSX.Element {
   const { t } = useI18n();
   const ribbonRef = useCallback((element: HTMLElement | null) => {
     onRibbonPresenceChange?.(element !== null);
@@ -1786,6 +1791,11 @@ export function AppSidebar({
       <HoverRevealScopeContext.Provider value={null}>
       <NavigationRibbon
         ribbonRef={ribbonRef}
+        websites={websites}
+        onNewTab={onNewTab ? () => activateNative(onNewTab) : undefined}
+        onCloseTab={onCloseTab}
+        onPinTab={onPinTab}
+        onReorderTabs={onReorderTabs}
         activeWebsiteId={activeWebsiteId}
         onSelectWebsite={onSelectWebsite ? (website) => activateNative(() => onSelectWebsite(website)) : undefined}
         items={[

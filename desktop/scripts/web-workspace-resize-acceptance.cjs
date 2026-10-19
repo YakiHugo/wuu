@@ -6,7 +6,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 
 module.exports = async function accept(h) {
-  const { win, output, report, evaluate, until, settle, click, setSidebars, nativeInput, geometry, capture, delay, origin } = h;
+  const { win, output, report, evaluate, until, settle, click, setSidebars, nativeInput, geometry, capture, delay, origin, fixtureTabs } = h;
   const checks = report.acceptance = [];
   await setSidebars(true, true);
   const draft = 'Retained conversation draft wraps at the current width after returning from the website. '.repeat(6);
@@ -16,7 +16,7 @@ module.exports = async function accept(h) {
     input.dispatchEvent(new Event('input', { bubbles: true }));
   }, value);
   await setDraft(draft);
-  await click('.sidebar-ribbon-main button[aria-label="Resize animated"]');
+  await click(`.sidebar-ribbon-main button[data-ribbon-id="${fixtureTabs.animated.id}"]`);
   let view;
   await until(() => {
     view = win.contentView.children.find(v => v.webContents?.getURL() === origin + '/animated' && v.getVisible());
@@ -188,12 +188,12 @@ module.exports = async function accept(h) {
 
   // Public fixed-content website supplements the local fixtures; no account is used.
   win.setBounds({ x: 30, y: 30, width: 1280, height: 800 });
-  await click('.sidebar-ribbon-main button[aria-label="Resize static"]');
+  await click(`.sidebar-ribbon-main button[data-ribbon-id="${fixtureTabs.static.id}"]`);
   await until(() => {
     view = win.contentView.children.find(v => v.webContents?.getURL() === origin + '/static' && v.getVisible());
     return view && !view.webContents.isLoading();
   }, 'public navigation target');
-  await evaluate(() => window.wuu.webWorkspace.command('website:resize-static', 'navigate', 'https://example.com/'));
+  await evaluate(group => window.wuu.webWorkspace.command(group, 'navigate', 'https://example.com/'), fixtureTabs.static.group);
   const publicResult = { name: 'public-example.com', status: 'unavailable' };
   try {
     await until(() => win.contentView.children.some(v => v.webContents?.getURL() === 'https://example.com/' && v.getVisible() && !v.webContents.isLoading()), 'public page', 15000);
@@ -205,7 +205,7 @@ module.exports = async function accept(h) {
   checks.push(publicResult);
   if (process.env.WUU_RESIZE_LOADING === '1') {
     const loading = await require('./web-workspace-loading-probe.cjs')({ view, output, capture, delay,
-      navigate: url => evaluate(url => window.wuu.webWorkspace.command('website:resize-static', 'navigate', url), url),
+      navigate: url => evaluate(({ group, url }) => window.wuu.webWorkspace.command(group, 'navigate', url), { group: fixtureTabs.static.group, url }),
     });
     checks.push({ name: 'notion-loading-diagnostic', samples: loading.samples.length, error: loading.error });
   }
