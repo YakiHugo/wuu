@@ -171,11 +171,15 @@ html:not([data-app-background]) .navigation-ribbon-layout:has(.sidebar-ribbon) :
   top: calc((var(--window-titlebar-height) - var(--control-size-toolbar)) / 2);
   left: var(--window-titlebar-leading-inset);
   z-index: 151;
-  display: inline-flex;
+  display: grid;
   width: var(--control-size-toolbar);
   height: var(--control-size-toolbar);
   padding: 0;
   -webkit-app-region: no-drag;
+}
+
+:root:has(.mac-window-controls) .navigation-ribbon-layout:has(.sidebar-ribbon) > .section-sidebar-toggle {
+  left: calc(var(--sidebar-ribbon-width) + var(--space-2) * 2 + (var(--sidebar-content-icon-size) - var(--control-size-toolbar)) / 2);
 }
 
 .section-sidebar-toggle * {
@@ -380,7 +384,7 @@ html:not([data-app-background]) .navigation-ribbon-layout:has(.sidebar-ribbon) :
   flex-shrink: 0;
   align-items: center;
   margin: 0 0 var(--space-3);
-  padding: 0 var(--sidebar-row-pad-x) var(--space-1);
+  padding: 0 var(--sidebar-row-pad-x);
   color: var(--ink-strong);
   font-size: var(--font-ui);
   font-weight: var(--weight-regular);
