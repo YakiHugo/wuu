@@ -119,7 +119,7 @@ async function runWebsiteAcceptance(h, fixture) {
   }
   async function pageClick(wc, selector, label) {
     const view = win.contentView.children.find(view => view.webContents === wc);
-    assert.ok(view?.getVisible(), 'Native website is actually visible before page input');
+    await until(() => view?.getVisible() && !wc.isDestroyed(), 'Native website is actually visible before page input');
     const p = await wc.executeJavaScript(`(async () => { const node=document.querySelector(${JSON.stringify(selector)}); node.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'}); await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))); const r=node.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`);
     const outer = win.getContentBounds(), inner = view.getBounds(), zoom = wc.getZoomFactor();
     await capture(`before-${label}`);
@@ -130,6 +130,21 @@ async function runWebsiteAcceptance(h, fixture) {
   async function hidden(label) {
     await until(() => views().every(view => !view.getVisible()), `${label}: all native surfaces hidden`);
     return Promise.all(views().map(async view => ({ url: view.webContents.getURL(), visible: view.getVisible(), visibility: await view.webContents.executeJavaScript('document.visibilityState') })));
+  }
+  async function assertMenuBackdrop(label) {
+    await hidden(label);
+    const selector = '.web-workspace-stage:not([hidden]) .web-workspace-backdrop';
+    await waitFor(selector => {
+      const image = document.querySelector(selector);
+      return image?.complete && image.naturalWidth > 100 && image.naturalHeight > 100 && image.getBoundingClientRect().width > 100;
+    }, selector, `${label}: real page snapshot decoded behind menu`);
+    const source = await evaluate(selector => document.querySelector(selector).src, selector);
+    const image = nativeImage.createFromDataURL(source);
+    const bitmap = image.getBitmap(), colors = new Set();
+    for (let i = 0; i + 3 < bitmap.length; i += 4 * 97) colors.add(bitmap.readUInt32LE(i));
+    assert.ok(colors.size > 12, 'Snapshot has actual nonblank page content, not a flat placeholder');
+    report.actions.push({ label: `${label}-snapshot`, atMs: Date.now() - started, image: image.getSize(), sampledColors: colors.size, sha256: createHash('sha256').update(image.toPNG()).digest('hex') });
+    save();
   }
   async function openSite(name, pathname) {
     await click(ribbon(name), `open-${name}`);
@@ -415,7 +430,7 @@ async function runWebsiteAcceptance(h, fixture) {
       await until(async () => (await downloads()).some(item => item.filename === 'fixture.txt' && item.state === 'completed'), 'download completed');
       const completed = (await downloads()).find(item => item.filename === 'fixture.txt');
       assert.deepEqual(fs.readFileSync(completed.savePath), fixture.downloadBytes, 'Downloaded bytes match the synthetic response');
-      await click(menu, 'open-downloads'); await hidden('downloads panel');
+      await click(menu, 'open-downloads'); await assertMenuBackdrop('downloads panel');
       await waitFor(id => document.querySelector(`[data-download-id="${id}"] [data-download-command="reveal"]`), completed.id);
       await capture('completed-download'); xinput(['key', 'Escape']);
       await until(() => nativeView('/alpha')?.getVisible(), 'restore after downloads');
@@ -440,7 +455,7 @@ async function runWebsiteAcceptance(h, fixture) {
     await click('[data-browser-bookmark-current]', 'bookmark-local-page');
     await waitFor(() => document.querySelector('[data-browser-bookmark-current]')?.getAttribute('aria-pressed') === 'true');
     await navigateAddress('/history-target', 'history-page');
-    await click('[data-browser-library-trigger]', 'open-browser-library'); await hidden('browser library');
+    await click('[data-browser-library-trigger]', 'open-browser-library'); await assertMenuBackdrop('browser library');
     await fill('[data-browser-library] input[type=search]', 'history-target');
     await waitFor(url => document.querySelector(`[data-library-url="${url}"]`), origin + '/history-target');
     await capture('searched-browser-history');
@@ -519,9 +534,13 @@ async function runWebsiteAcceptance(h, fixture) {
     const wc = await openSite('Fixture Website', '/extension');
     security(wc);
     assert.ok((await wc.executeJavaScript('document.cookie')).includes('wuu_acceptance=synthetic-session'));
+    await pageClick(wc, '#draft', 'type-retained-extension-draft'); await wc.insertText('Retain this extension draft across Chat');
     await capture('extension-native-website');
     await click(conversations, 'extension-to-chat'); await hidden('extension off-stage');
-    await openSite('Fixture Website', '/extension');
+    assert.ok(!wc.isDestroyed(), 'Hidden plugin page remains alive');
+    const restored = await openSite('Fixture Website', '/extension');
+    assert.equal(restored.id, wc.id, 'Returning activates the exact existing plugin page');
+    assert.equal(await restored.executeJavaScript('document.querySelector("#draft").value'), 'Retain this extension draft across Chat');
     await click(plugins, 'disable-extension-inventory');
     await click(pick('.sidebar-section-item', 'Plugins'), 'plugin-details-for-disable');
     if (await evaluate(() => !!document.querySelector('.catalog-row-open[aria-label*="Acceptance Webpage"]'))) await click('.catalog-row-open[aria-label*="Acceptance Webpage"]', 'open-enabled-fixture');
@@ -529,7 +548,13 @@ async function runWebsiteAcceptance(h, fixture) {
     await waitFor(() => !document.querySelector('.sidebar-ribbon-main button[aria-label="Fixture Website"]'));
     await until(() => !contents('/extension'), 'disabled extension native contents destroyed');
     await capture('extension-disabled-cleanly');
-    return { sharedCookieRetained: true, navigationRemoved: true, nativeContentsDestroyed: true };
+    assert.ok(wc.isDestroyed());
+    await click('button[role="switch"][aria-label="Turn on Acceptance Webpage"]', 're-enable-authored-extension');
+    await waitFor(() => document.querySelector('.sidebar-ribbon-main button[aria-label="Fixture Website"]'), undefined, 'fixture re-enabled', 20000);
+    const replacement = await openSite('Fixture Website', '/extension');
+    assert.notEqual(replacement.id, wc.id, 'Re-enabled generation gets a new page');
+    assert.equal(views().filter(view => view.webContents.getURL() === origin + '/extension').length, 1, 'Exactly one replacement plugin native page');
+    return { sharedCookieRetained: true, hiddenPageRetained: true, retainedDraft: true, oldGenerationDestroyed: true, singleReplacementPage: true };
   });
   if (report.checks.every(check => check.status === 'passed') && report.errors.length === 0) {
     const optional = { name: 'Public Notion landing page', required: false, status: 'unavailable' };

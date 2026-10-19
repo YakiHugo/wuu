@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -379,6 +380,7 @@ const (
 	SettingTypeString  SettingType = "string"
 	SettingTypeNumber  SettingType = "number"
 	SettingTypeEnum    SettingType = "enum"
+	SettingTypeSecret  SettingType = "secret"
 )
 
 type SettingScope string
@@ -398,13 +400,14 @@ const (
 // SettingDefinition is a validated generated-control definition. Settings are
 // stored in Manifest.Settings under their plugin-qualified public ids.
 type SettingDefinition struct {
-	Type        SettingType      `json:"type"`
-	Title       string           `json:"title"`
-	Description string           `json:"description,omitempty"`
-	Default     any              `json:"default"`
-	Enum        []string         `json:"enum,omitempty"`
-	Scope       SettingScope     `json:"scope"`
-	Apply       SettingApplyMode `json:"apply"`
+	Type              SettingType      `json:"type"`
+	Title             string           `json:"title"`
+	Description       string           `json:"description,omitempty"`
+	Default           any              `json:"default"`
+	Enum              []string         `json:"enum,omitempty"`
+	Scope             SettingScope     `json:"scope"`
+	Apply             SettingApplyMode `json:"apply"`
+	CredentialOrigins []string         `json:"credential_origins,omitempty"`
 }
 
 // RuntimeSpec declares a long-lived external plugin process. Installing or
@@ -1026,13 +1029,14 @@ func normalizeTokenMap(field string, values map[string]string, allowed map[strin
 }
 
 type rawSettingDefinition struct {
-	Type        SettingType      `json:"type"`
-	Title       string           `json:"title"`
-	Description string           `json:"description"`
-	Default     json.RawMessage  `json:"default"`
-	Enum        []string         `json:"enum"`
-	Scope       SettingScope     `json:"scope"`
-	Apply       SettingApplyMode `json:"apply"`
+	Type              SettingType      `json:"type"`
+	Title             string           `json:"title"`
+	Description       string           `json:"description"`
+	Default           json.RawMessage  `json:"default"`
+	Enum              []string         `json:"enum"`
+	Scope             SettingScope     `json:"scope"`
+	Apply             SettingApplyMode `json:"apply"`
+	CredentialOrigins []string         `json:"credential_origins,omitempty"`
 }
 
 func normalizeSettings(pluginID string, raw json.RawMessage) (map[string]SettingDefinition, error) {
@@ -1050,7 +1054,7 @@ func normalizeSettings(pluginID string, raw json.RawMessage) (map[string]Setting
 			return nil, fmt.Errorf("contributes.settings contains invalid plugin-local id %q", localID)
 		}
 		field := "contributes.settings." + localID
-		if err := validateObjectFields(field, rawDefinition, "type", "title", "description", "default", "enum", "scope", "apply"); err != nil {
+		if err := validateObjectFields(field, rawDefinition, "type", "title", "description", "default", "enum", "scope", "apply", "credential_origins"); err != nil {
 			return nil, err
 		}
 		var rawSetting rawSettingDefinition
@@ -1076,7 +1080,7 @@ func normalizeSettingDefinition(field string, raw rawSettingDefinition) (Setting
 		return SettingDefinition{}, fmt.Errorf("%s requires title", field)
 	}
 	switch raw.Type {
-	case SettingTypeBoolean, SettingTypeString, SettingTypeNumber, SettingTypeEnum:
+	case SettingTypeBoolean, SettingTypeString, SettingTypeNumber, SettingTypeEnum, SettingTypeSecret:
 	default:
 		return SettingDefinition{}, fmt.Errorf("%s has unsupported type %q", field, raw.Type)
 	}
@@ -1095,7 +1099,7 @@ func normalizeSettingDefinition(field string, raw rawSettingDefinition) (Setting
 		if _, ok := defaultValue.(bool); !ok {
 			return SettingDefinition{}, fmt.Errorf("%s default must be boolean", field)
 		}
-	case SettingTypeString:
+	case SettingTypeString, SettingTypeSecret:
 		if _, ok := defaultValue.(string); !ok {
 			return SettingDefinition{}, fmt.Errorf("%s default must be string", field)
 		}
@@ -1117,12 +1121,29 @@ func normalizeSettingDefinition(field string, raw rawSettingDefinition) (Setting
 			return SettingDefinition{}, fmt.Errorf("%s default %q is not an enum choice", field, value)
 		}
 	}
+	if raw.Type == SettingTypeSecret {
+		if defaultValue != "" || raw.Scope != SettingScopeUser || raw.Apply != SettingApplyLive {
+			return SettingDefinition{}, fmt.Errorf("%s secret requires empty default, user scope and live apply", field)
+		}
+		if len(raw.CredentialOrigins) == 0 || len(raw.CredentialOrigins) > 8 {
+			return SettingDefinition{}, fmt.Errorf("%s secret requires 1 to 8 exact HTTPS credential_origins", field)
+		}
+		for _, origin := range raw.CredentialOrigins {
+			parsed, err := url.Parse(origin)
+			if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || parsed.Opaque != "" || parsed.String() != origin || strings.ToLower(parsed.Host) != parsed.Host {
+				return SettingDefinition{}, fmt.Errorf("%s credential_origins must contain exact HTTPS origins without paths or credentials", field)
+			}
+		}
+		sort.Strings(raw.CredentialOrigins)
+	} else if len(raw.CredentialOrigins) != 0 {
+		return SettingDefinition{}, fmt.Errorf("%s credential_origins requires type secret", field)
+	}
 	if raw.Type != SettingTypeEnum && len(raw.Enum) > 0 {
 		return SettingDefinition{}, fmt.Errorf("%s enum choices require type enum", field)
 	}
 	return SettingDefinition{
 		Type: raw.Type, Title: raw.Title, Description: raw.Description, Default: defaultValue,
-		Enum: raw.Enum, Scope: raw.Scope, Apply: raw.Apply,
+		Enum: raw.Enum, Scope: raw.Scope, Apply: raw.Apply, CredentialOrigins: raw.CredentialOrigins,
 	}, nil
 }
 

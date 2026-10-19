@@ -42,13 +42,16 @@ document.querySelector('#fullscreen').onclick=()=>v.requestFullscreen().catch(e=
 async function runBrowserMediaAcceptance(h, fixture) {
   const { win, report, output, started, save, testNative, openSite, pageClick, navigateAddress, readSite, nativeView, until, evaluate, fill, address, capture, xinput, delay } = h;
   // A synchronous OS dialog suspends Electron's main JS. A bounded helper
-  // waits for the real X11 dialog, screenshots it, and clicks its actual button.
+  // waits for the real X11 dialog, screenshots it, and selects its actual button.
   // The production dialog result is never replaced or automatically granted.
   function observeNativeDecision(method, title, messageFragment, choice, label) {
     const original = dialog[method]; const observations = [];
     dialog[method] = function(...args) {
       const options = args.at(-1);
       if (options.title !== title || !options.message.includes(fixture.origin) || !options.message.includes(messageFragment)) return original.apply(this, args);
+      assert.equal(options.buttons.length, 2, 'Native helper expects two decision buttons');
+      assert.equal(options.defaultId, 0, 'Native helper starts on the safe default');
+      assert.equal(options.cancelId, 0, 'Escape preserves the safe decision');
       const imageFile = `native-dialog-${Date.now()}-${label}.png`;
       const resultFile = path.join(output, imageFile + '.json');
       const record = { title, message: options.message, buttons: options.buttons, requestedChoice: choice, imageFile, resultFile };
@@ -58,16 +61,20 @@ import json, os, subprocess, sys, time
 config=json.loads(sys.argv[1]); result={}
 try:
  ids=subprocess.run(['xdotool','search','--sync','--onlyvisible','--name',config['title']],capture_output=True,text=True,timeout=8,check=True).stdout.split()
- window=ids[-1]; time.sleep(0.15)
+ window=ids[-1]
+ subprocess.run(['xdotool','windowactivate','--sync',window],timeout=3,check=True)
  subprocess.run(['ffmpeg','-y','-hide_banner','-loglevel','error','-f','x11grab','-video_size','1600x1000','-i',os.environ['DISPLAY'],'-frames:v','1',config['image']],capture_output=True,timeout=6,check=True)
- if config['choice']==0:
-  subprocess.run(['xdotool','key','--clearmodifiers','Escape'],timeout=3,check=True)
- else:
-  geometry=subprocess.run(['xdotool','getwindowgeometry','--shell',window],capture_output=True,text=True,timeout=3,check=True).stdout
-  rect=dict(line.split('=',1) for line in geometry.splitlines() if '=' in line)
-  x=int(rect['X'])+int(rect['WIDTH'])*3//4; y=int(rect['Y'])+int(rect['HEIGHT'])-16
-  subprocess.run(['xdotool','mousemove',str(x),str(y),'click','1'],timeout=3,check=True)
-  result['click']={'x':x,'y':y}
+ # Frame decoration offsets made root-coordinate clicks miss the buttons.
+ # Both real dialogs focus button 0; Tab selects button 1 without guessing pixels.
+ keys=['Escape'] if config['choice']==0 else ['Tab','Return']
+ subprocess.run(['xdotool','key','--clearmodifiers',*keys],timeout=3,check=True)
+ result['input']={'window':window,'keys':keys}
+ deadline=time.monotonic()+4
+ while time.monotonic()<deadline:
+  visible=subprocess.run(['xdotool','search','--onlyvisible','--name',config['title']],capture_output=True,text=True,timeout=2).stdout.split()
+  if window not in visible: break
+  time.sleep(0.1)
+ else: raise TimeoutError('Native dialog remained visible after the real input; recovered with safe Escape')
  result['status']='completed'
 except Exception as error:
  result={'status':'failed','error':str(error)}

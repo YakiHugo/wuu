@@ -3852,6 +3852,24 @@ export function App(): JSX.Element {
   }, [activeThreadID]);
 
   useEffect(() => {
+    const api = (window.wuu as typeof window.wuu & { webWorkspace?: WebWorkspaceApi }).webWorkspace;
+    if (!api?.onReveal) return;
+    return api.onReveal((id) => {
+      const website = ribbonPreferences.websites.find((item) => item.id === id);
+      if (website) { showWebsite(website); return; }
+      // The native page belongs to this retained instance. Never open a new
+      // plugin view to approximate its URL or lose its live document state.
+      const panel = [...document.querySelectorAll<HTMLElement>(".web-workspace-panel")]
+        .find((element) => element.dataset.websiteId === id);
+      const instanceID = panel?.closest<HTMLElement>("[data-workbench-view-id]")?.dataset.workbenchViewId;
+      if (!instanceID || !desktopWorkbenchController.getSnapshot().views.some((view) => view.id === instanceID)) return;
+      setActiveWebsiteID(undefined);
+      setAccountOpen(false);
+      desktopWorkbenchController.activateView(instanceID);
+    });
+  }, [ribbonPreferences.websites, showWebsite]);
+
+  useEffect(() => {
     const subscribe = window.wuu.onBrowserDock;
     if (typeof subscribe !== "function") return undefined;
     return subscribe((payload) => {

@@ -1,7 +1,13 @@
-import type * as React from "react";
+import * as React from "react";
 import type { PluginUIWebPageProps } from "../../shared/workbench";
 import type { WebWorkspaceApi } from "../../shared/webWorkspace";
 import { WebWorkspacePanel } from "../WebWorkspace";
+
+/** Only views owning a native page need to survive ordinary tab switches. */
+export const PluginWebPageViewContext = React.createContext<{
+  active: boolean;
+  retain: () => () => void;
+} | undefined>(undefined);
 
 /** Bind the existing website surface to the extension generation's lifetime. */
 export function createPluginWebPage(
@@ -17,8 +23,11 @@ export function createPluginWebPage(
 
   return function PluginWebPage({ url, title }: PluginUIWebPageProps): React.ReactNode {
     const [id] = react.useState(() => `plugin-web-page:${crypto.randomUUID()}`);
-    const active = react.useSyncExternalStore(subscribe, isActive, isActive);
+    const generationActive = react.useSyncExternalStore(subscribe, isActive, isActive);
+    const view = react.useContext(PluginWebPageViewContext);
     const site = react.useMemo(() => ({ id, url, title }), [id, url, title]);
+
+    react.useLayoutEffect(() => view?.retain(), [view?.retain]);
 
     react.useEffect(() => {
       const close = (): void => {
@@ -33,6 +42,9 @@ export function createPluginWebPage(
       };
     }, [id]);
 
-    return active ? react.createElement(WebWorkspacePanel, { site, active }) : null;
+    return generationActive ? react.createElement(WebWorkspacePanel, {
+      site,
+      active: view?.active ?? true,
+    }) : null;
   };
 }

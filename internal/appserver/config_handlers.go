@@ -460,14 +460,15 @@ func (s *Server) extensionInventory(snapshot runtime.ExtensionSnapshot) []Extens
 		for _, id := range settingIDs {
 			definition := item.Settings[id]
 			settings = append(settings, ExtensionSettingDescriptor{
-				ID:          id,
-				Type:        ExtensionSettingType(definition.Type),
-				Title:       definition.Title,
-				Description: definition.Description,
-				Default:     definition.Default,
-				Enum:        append([]string(nil), definition.Enum...),
-				Scope:       ExtensionSettingScope(definition.Scope),
-				Apply:       ExtensionSettingApplyMode(definition.Apply),
+				ID:                id,
+				Type:              ExtensionSettingType(definition.Type),
+				Title:             definition.Title,
+				Description:       definition.Description,
+				Default:           definition.Default,
+				Enum:              append([]string(nil), definition.Enum...),
+				Scope:             ExtensionSettingScope(definition.Scope),
+				Apply:             ExtensionSettingApplyMode(definition.Apply),
+				CredentialOrigins: append([]string(nil), definition.CredentialOrigins...),
 			})
 		}
 		slots := make([]ExtensionSlotContributionDescriptor, 0, len(item.Slots))

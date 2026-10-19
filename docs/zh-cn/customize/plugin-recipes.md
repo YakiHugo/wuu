@@ -112,7 +112,7 @@ export function activate(api: PluginGenerationApi): void {
 }
 ```
 
-对于没有 manifest 的单个本地 TypeScript 文件，可在激活时添加 `api.registerViewPlacement({ id: "website-entry", view: "website", region: "primary" })`，打开同一个 View。其 Ribbon 入口、布局、浏览器会话和清理由宿主管理。网站与 Wuu 其他浏览器页面共用已导入的 Cookie；会话中没有有效登录时，需要重新登录。卸载组件或禁用插件会关闭其页面与弹窗。此配方不会安装任何网站。兼容旧宿主时可检查 `typeof api.ui.WebPage === "function"`。此组件仅支持桌面主工作台窗口，不支持弹出的会话窗口或远程 Web／移动客户端。非桌面客户端显示浏览器不可用状态。
+对于没有 manifest 的单个本地 TypeScript 文件，可在激活时添加 `api.registerViewPlacement({ id: "website-entry", view: "website", region: "primary" })`，打开同一个 View。其 Ribbon 入口、布局、浏览器会话和清理由宿主管理。网站与 Wuu 其他浏览器页面共用已导入的 Cookie；会话中没有有效登录时，需要重新登录。普通的工作台视图切换只会隐藏网页，并保留同一个页面。显式关闭 View、卸载 WebPage 组件、禁用插件或重新加载其 generation 会关闭页面与弹窗。此配方不会安装任何网站。兼容旧宿主时可检查 `typeof api.ui.WebPage === "function"`。此组件仅支持桌面主工作台窗口，不支持弹出的会话窗口或远程 Web／移动客户端。非桌面客户端显示浏览器不可用状态。
 
 ## 连接页面和运行时
 

@@ -8,6 +8,11 @@ on:
       - 'desktop/scripts/workbench-acceptance-e2e.cjs'
       - 'desktop/scripts/web-workspace-acceptance.cjs'
       - 'desktop/scripts/browser-media-acceptance.cjs'
+      - 'desktop/scripts/browser-task-ownership-e2e*'
+      - 'internal/**'
+      - 'scripts/plugin-credentials-e2e/**'
+      - 'plugins/feishu-workspace/**'
+      - 'plugins/notion-workspace/**'
       - 'desktop/scripts/fixtures/conversation-corpus/**'
       - 'desktop/electron.vite.config.ts'
       - 'desktop/package*.json'
@@ -56,6 +61,7 @@ jobs:
           node --check desktop/scripts/browser-media-acceptance.cjs
           make test-policy-check
       - name: Build shipping app serially
+        id: build
         run: |
           mkdir -p desktop/build/bin
           go build -p 2 -ldflags "-X github.com/blueberrycongee/wuu/internal/version.Version=v$(cat VERSION)" -o desktop/build/bin/wuu-core ./cmd/wuu
@@ -77,7 +83,7 @@ jobs:
           set -uo pipefail
           openbox --sm-disable > "$WUU_WORKBENCH_OUTPUT/window-manager.log" 2>&1 &
           wm=$!
-          ffmpeg -hide_banner -loglevel warning -f x11grab -draw_mouse 1 -framerate 20 -video_size 1600x1000 -i "$DISPLAY" -an -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -movflags +faststart "$WUU_WORKBENCH_OUTPUT/workbench-clickthrough.mp4" > "$WUU_WORKBENCH_OUTPUT/ffmpeg.log" 2>&1 &
+          ffmpeg -hide_banner -loglevel warning -f x11grab -draw_mouse 1 -framerate 20 -video_size 1600x1000 -i "$DISPLAY" -an -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -movflags +frag_keyframe+empty_moov+default_base_moof "$WUU_WORKBENCH_OUTPUT/workbench-clickthrough.mp4" > "$WUU_WORKBENCH_OUTPUT/ffmpeg.log" 2>&1 &
           recorder=$!
           cleanup() {
             kill -INT "$recorder" 2>/dev/null || true
@@ -85,7 +91,9 @@ jobs:
             kill "$wm" 2>/dev/null || true
           }
           trap cleanup EXIT
-          desktop/node_modules/.bin/electron --no-sandbox desktop/scripts/workbench-acceptance-e2e.cjs
+          # A synchronous native modal can block the in-process JS watchdog.
+          # Keep an independent process bound, leaving time to finalize video.
+          timeout --signal=TERM --kill-after=10s 8m30s desktop/node_modules/.bin/electron --no-sandbox desktop/scripts/workbench-acceptance-e2e.cjs
           result=$?
           node -e 'const r=require(process.env.WUU_WORKBENCH_OUTPUT+"/report.json"); if(r.status!=="passed")process.exit(1)' || result=1
           cleanup
@@ -93,6 +101,46 @@ jobs:
           ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_name,width,height -of json "$WUU_WORKBENCH_OUTPUT/workbench-clickthrough.mp4" > "$WUU_WORKBENCH_OUTPUT/video.json" || exit 1
           exit "$result"
           CAPTURE
+      - name: Verify browser ownership and adopted plugin views
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 7
+        env:
+          WUU_BROWSER_OWNERSHIP_OUTPUT: ${{ runner.temp }}/wuu-workbench-acceptance/browser-ownership
+        run: |
+          mkdir -p "$WUU_BROWSER_OWNERSHIP_OUTPUT"
+          set -o pipefail
+          timeout --signal=TERM --kill-after=10s 6m xvfb-run --auto-servernum --server-args='-screen 0 1600x1000x24 -nolisten tcp' node desktop/scripts/browser-task-ownership-e2e.cjs 2>&1 | tee "$WUU_BROWSER_OWNERSHIP_OUTPUT/run.log"
+      - name: Verify synthetic credential host boundary
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 3
+        env:
+          WUU_WORKBENCH_OUTPUT: ${{ runner.temp }}/wuu-workbench-acceptance
+          WUU_CREDENTIAL_E2E_OUTPUT: ${{ runner.temp }}/wuu-workbench-acceptance/plugin-credentials
+        run: |
+          mkdir -p "$WUU_WORKBENCH_OUTPUT"
+          set -o pipefail
+          timeout --signal=TERM --kill-after=10s 2m go run ./scripts/plugin-credentials-e2e 2>&1 | tee "$WUU_WORKBENCH_OUTPUT/plugin-credentials.log"
+      - name: Verify Feishu synthetic API journeys
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 2
+        env:
+          WUU_FEISHU_E2E_OUTPUT: ${{ runner.temp }}/wuu-workbench-acceptance/feishu
+        run: |
+          mkdir -p "$WUU_FEISHU_E2E_OUTPUT"
+          set -o pipefail
+          timeout --signal=TERM --kill-after=10s 90s node plugins/feishu-workspace/scripts/api-acceptance.mjs 2>&1 | tee "$WUU_FEISHU_E2E_OUTPUT/run.log"
+      - name: Verify Notion synthetic API journeys
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 2
+        env:
+          WUU_NOTION_E2E_OUTPUT: ${{ runner.temp }}/wuu-workbench-acceptance/notion
+        run: |
+          mkdir -p "$WUU_NOTION_E2E_OUTPUT"
+          set -o pipefail
+          result=0
+          timeout --signal=TERM --kill-after=10s 90s node plugins/notion-workspace/scripts/api-e2e.mjs 2>&1 | tee "$WUU_NOTION_E2E_OUTPUT/run.log" || result=$?
+          if [ -f .tmp/notion-workspace-e2e/report.json ]; then cp .tmp/notion-workspace-e2e/report.json "$WUU_NOTION_E2E_OUTPUT/report.json"; fi
+          exit "$result"
       - name: Summarize checked journeys
         if: always()
         env:

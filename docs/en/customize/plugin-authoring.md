@@ -91,6 +91,35 @@ First-run setup preserves applied plugin choices if it is interrupted before com
 
 UI declarations belong under `contributes.slots`, `surfaces`, `presenters`, `navigation`, `workspaceTools`, or `settingsPages`. They describe placement and discovery, while the desktop module registers rendering. See [desktop UI plugins](desktop-plugins.md) for matching and composition rules.
 
+### Secret settings and authenticated requests
+
+Declare a `secret` setting with `default: ""`, `scope: "user"`, `apply: "live"`,
+and `credential_origins: ["https://api.example.com"]`. Each origin must be an
+exact HTTPS origin without a path, query, fragment or user information. The
+host-generated settings control accepts masked input and provides explicit Save
+and Remove actions. Values go to macOS Keychain or Linux Secret Service, with no
+plaintext-file fallback. Unsupported or locked stores fail visibly. Secret
+setting reads return an empty string; only the host settings UI receives a
+`configured` presence flag. They never enter ordinary settings or tool history.
+
+A runtime declares `requireKernelService("host.credentials.request")` and calls
+`host.call("host.credentials.request", { credential: "token", url, method,
+headers, body }, { signal })`. The key names its own declared secret setting.
+The host adds Bearer authentication only for a declared origin, blocks redirects
+and caller-supplied authentication, cookie, routing or connection headers, and
+returns `{ status, headers, body }`. Response header names are lower case; only
+content type, retry timing and request IDs are exposed. Requests time out after
+20 seconds and request/response bodies are limited to 4 MiB. Tokens are redacted
+from response bodies, headers and transport errors. Never accept credentials as
+tool arguments or copy them to ordinary storage, logs or generated bundles.
+
+The credential is bound to the Wuu home, plugin source identity, local key and
+origin set; project plugins also bind the project root. Changing any of these
+requires a fresh credential. Disabling a plugin prevents new calls but preserves
+its credential until the user removes it. A saved credential does not prove API
+access. Token refresh and service-specific authorization remain plugin concerns.
+A failed or timed-out write may have applied remotely: do not retry it silently.
+
 ## Runtime process and lifecycle
 
 The host starts the manifest's command and exchanges one JSON object per line over stdin/stdout. Reserve stdout for protocol frames and stderr for diagnostics. The manifest transport name `wuu-plugin-v1` and the negotiated capability protocol number are different fields; new service-using runtimes should negotiate `protocol_version: 3`.
@@ -204,6 +233,7 @@ async function readCounter(host: RuntimeHost): Promise<string | null> {
 | `host.background` | Generation-owned calls to a plugin’s own service |
 | `host.process` | Conversation-bound shell processes, output and event delivery |
 | `host.settings.get/list` | Declared setting values |
+| `host.credentials.request` | Origin-bound HTTPS requests using a host-held Bearer credential |
 | `host.session.create/send/list/inspect/cancel/control` | Create and manage sessions through host lifecycle rules |
 | `host.session.history.read/search` | Bounded history access with sequence snapshots and continuation cursors |
 | `host.workspace.status/apply/discard` | Inspect or resolve work from an owned session workspace |

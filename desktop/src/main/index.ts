@@ -357,10 +357,12 @@ const webWorkspaceHost = new WebWorkspaceHost(
   (owner, id) => sendToWindow(owner, "wuu:web-workspace-focus-address", id),
   {
     library: webWorkspaceLibrary, downloads: webWorkspaceDownloads,
+    onReveal: (owner, id) => sendToWindow(owner, "wuu:web-workspace-reveal", id),
     onFocusFind: (owner, id) => sendToWindow(owner, "wuu:web-workspace-focus-find", id),
     onLibraryChange: (owner) => sendToWindow(owner, "wuu:web-workspace-library", webWorkspaceLibrary.getState()),
   },
 );
+browserHostCoordinator.setWorkspaceSource(webWorkspaceHost.browserSource(() => windowRegistry.mainWindow()));
 // A workdir with a live agent tab counts as busy so pool idle-eviction cannot
 // yank the page out mid user-takeover (isBusy only sees pending requests +
 // running turns, not outstanding core→desktop browser work).
@@ -398,7 +400,16 @@ observationCoordinator.setAppearance(resolvedThemeIsDark());
 observationCoordinator.setAutoShow(getActivityPreviewAutoShow());
 browserHostCoordinator.setRendererSink({
   surface: (snapshot) => broadcastToAll("wuu:browser-surface", snapshot),
-  userInput: (payload) => broadcastToAll("wuu:browser-user-input", payload),
+  userInput: (payload) => {
+    if (!payload.workspace) { broadcastToAll("wuu:browser-user-input", payload); return; }
+    // Website chrome is outside the conversation's browser panel. Reclaim the
+    // owning activity here even when its renderer or conversation is hidden.
+    if (!payload.threadID || !payload.activityID || payload.inputGeneration === undefined) return;
+    void appServerClientPool.requestForWorkdir<ActivityActionResult>(payload.workdir, "activity/takeover", {
+      thread_id: payload.threadID, activity_id: payload.activityID, execution_id: payload.executionID,
+    }).then(result => browserHostCoordinator.acknowledgeLocalTakeover(result.activity, payload.inputGeneration!))
+      .catch(error => console.warn("[web-workspace] Could not acknowledge native takeover", error));
+  },
   adopted: (payload) => broadcastToAll("wuu:browser-tab-adopted", payload),
   presented: () => observationCoordinator.refreshBrowserPresentation(),
 });
@@ -407,6 +418,7 @@ observationCoordinator.setBrowserInPanel((activity) =>
   browserHostCoordinator.isInPanel(activity.workdir, activity.target || activity.id),
 );
 observationCoordinator.setBrowserExpandHandler((activity) => {
+  if (browserHostCoordinator.revealWorkspaceTab(activity.workdir, activity.target || activity.id)) return;
   // The workspace panel belongs to the main window. A broadcast also changes
   // unrelated popped-out conversations and lets them compete for the tab.
   const host = windowRegistry.mainWindow();
@@ -2866,6 +2878,7 @@ app.whenReady().then(async () => {
   };
   ipcMain.handle("wuu:web-workspace-open", (event, destination: WebWorkspaceDestination) =>
     webWorkspaceHost.open(webWorkspaceSender(event), destination));
+  ipcMain.handle("wuu:web-workspace-capture", (event, id: string) => webWorkspaceHost.capture(webWorkspaceSender(event), id));
   ipcMain.handle("wuu:web-workspace-bounds", (event, id: string, bounds: WebWorkspaceBounds | null) =>
     webWorkspaceHost.reportBounds(webWorkspaceSender(event), id, bounds));
   ipcMain.handle("wuu:web-workspace-shortcut-target", (event, id: string, active: boolean) =>

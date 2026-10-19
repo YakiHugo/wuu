@@ -384,13 +384,14 @@ type BrowserScreenshotResult struct {
 }
 
 type BrowserOpenTabParams struct {
-	ExecutionID string `json:"execution_id,omitempty"`
-	ThreadID    string `json:"thread_id"`
-	TurnID      string `json:"turn_id,omitempty"`
-	RequestID   string `json:"request_id,omitempty"`
-	Workdir     string `json:"workdir"`
-	TabID       string `json:"tab_id"`
-	InitialURL  string `json:"initial_url,omitempty"`
+	ExecutionID    string `json:"execution_id,omitempty"`
+	ThreadID       string `json:"thread_id"`
+	TurnID         string `json:"turn_id,omitempty"`
+	RequestID      string `json:"request_id,omitempty"`
+	Workdir        string `json:"workdir"`
+	TabID          string `json:"tab_id"`
+	InitialURL     string `json:"initial_url,omitempty"`
+	WorkspaceTabID string `json:"workspace_tab_id,omitempty"`
 }
 
 type BrowserCloseTabParams struct {
@@ -429,10 +430,13 @@ type BrowserRequestCancelledParams struct {
 }
 
 type BrowserListedTab struct {
-	TabID  string `json:"tab_id"`
-	URL    string `json:"url,omitempty"`
-	Title  string `json:"title,omitempty"`
-	Status string `json:"status,omitempty"`
+	TabID       string `json:"tab_id"`
+	URL         string `json:"url,omitempty"`
+	Title       string `json:"title,omitempty"`
+	Status      string `json:"status,omitempty"`
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	Active      bool   `json:"active,omitempty"`
+	Source      string `json:"source,omitempty"`
 }
 
 // BrowserTurnStartedParams announces an immutable execution identity before
@@ -480,8 +484,9 @@ type BrowserFinalizeParams struct {
 }
 
 type BrowserListTabsResult struct {
-	TabIDs []string           `json:"tab_ids"`
-	Tabs   []BrowserListedTab `json:"tabs,omitempty"`
+	WorkspaceTabs []BrowserListedTab `json:"workspace_tabs,omitempty"`
+	TabIDs        []string           `json:"tab_ids"`
+	Tabs          []BrowserListedTab `json:"tabs,omitempty"`
 }
 
 type RuntimeIssue struct {
@@ -749,6 +754,7 @@ const (
 	ExtensionSettingString  ExtensionSettingType = "string"
 	ExtensionSettingNumber  ExtensionSettingType = "number"
 	ExtensionSettingEnum    ExtensionSettingType = "enum"
+	ExtensionSettingSecret  ExtensionSettingType = "secret"
 )
 
 type ExtensionSettingScope string
@@ -766,14 +772,15 @@ const (
 )
 
 type ExtensionSettingDescriptor struct {
-	ID          string                    `json:"id"`
-	Type        ExtensionSettingType      `json:"type"`
-	Title       string                    `json:"title"`
-	Description string                    `json:"description,omitempty"`
-	Default     any                       `json:"default"`
-	Enum        []string                  `json:"enum,omitempty"`
-	Scope       ExtensionSettingScope     `json:"scope"`
-	Apply       ExtensionSettingApplyMode `json:"apply"`
+	ID                string                    `json:"id"`
+	Type              ExtensionSettingType      `json:"type"`
+	Title             string                    `json:"title"`
+	Description       string                    `json:"description,omitempty"`
+	Default           any                       `json:"default"`
+	Enum              []string                  `json:"enum,omitempty"`
+	Scope             ExtensionSettingScope     `json:"scope"`
+	Apply             ExtensionSettingApplyMode `json:"apply"`
+	CredentialOrigins []string                  `json:"credential_origins,omitempty"`
 }
 
 type ExtensionContributions struct {
@@ -1009,10 +1016,11 @@ type PluginSettingSetParams struct {
 }
 
 type PluginSettingResult struct {
-	ID    string           `json:"id"`
-	Key   string           `json:"key"`
-	Scope PluginValueScope `json:"scope"`
-	Value json.RawMessage  `json:"value"`
+	Configured *bool            `json:"configured,omitempty"`
+	ID         string           `json:"id"`
+	Key        string           `json:"key"`
+	Scope      PluginValueScope `json:"scope"`
+	Value      json.RawMessage  `json:"value"`
 }
 
 type PluginDiagnosticsParams struct {

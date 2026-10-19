@@ -91,6 +91,28 @@
 
 UI 声明放在 `contributes.slots`、`surfaces`、`presenters`、`navigation`、`workspaceTools` 或 `settingsPages` 中，描述放置位置和入口，实际渲染仍由桌面模块注册。匹配与组合规则见[桌面 UI 插件](desktop-plugins.md)。
 
+### 秘密设置与认证请求
+
+将凭据声明为 `secret` 设置，要求 `default: ""`、`scope: "user"`、
+`apply: "live"` 和 `credential_origins: ["https://api.example.com"]`。
+每项必须是完整 HTTPS 来源，不含路径、查询、片段或用户信息。宿主设置界面使用
+掩码输入和明确的保存、移除按钮。凭据保存在 macOS 钥匙串或 Linux Secret Service，
+不会回退到明文文件；存储不受支持或被锁定时会明确报错。秘密设置读取始终返回空字符串，
+只有宿主设置界面收到 `configured` 存在标记；凭据不会写入普通设置或工具历史。
+
+运行时声明 `requireKernelService("host.credentials.request")`，再调用
+`host.call("host.credentials.request", { credential: "token", url, method,
+headers, body }, { signal })`。凭据键只能指向本插件声明的秘密设置。宿主仅向声明的
+来源添加 Bearer 认证，拒绝重定向以及调用方提供的认证、Cookie、路由和连接控制头，
+返回 `{ status, headers, body }`。响应头使用小写，仅暴露内容类型、重试间隔和请求 ID。
+请求超时为 20 秒，请求与响应正文各限 4 MiB。响应正文、头及传输错误会隐藏令牌。
+不要把凭据作为工具参数，也不要复制到普通存储、日志或生成的插件包。
+
+凭据绑定 Wuu 数据目录、插件来源身份、本地键和来源集合；项目插件还绑定项目根目录。
+更改这些信息需要重新输入凭据。停用插件会阻止新调用，但保留凭据，直到用户移除。
+凭据已保存不代表 API 权限已验证。令牌刷新和服务专用授权仍由插件负责。
+写入失败或超时可能已经在远端生效，不要静默重试。
+
 ## 运行时进程和生命周期
 
 宿主启动 manifest 中的命令，通过 stdin/stdout 交换每行一个 JSON 对象。stdout 专用于协议帧，诊断信息写入 stderr。manifest 的传输名称 `wuu-plugin-v1` 与协商的能力协议编号是不同字段；使用服务的新运行时应协商 `protocol_version: 3`。
@@ -187,6 +209,7 @@ async function readCounter(host: RuntimeHost): Promise<string | null> {
 | `host.background` | 调用插件自己服务的 generation 所属后台工作 |
 | `host.process` | 绑定会话的 shell 进程、输出读取和事件投递 |
 | `host.settings.get/list` | 声明的设置值 |
+| `host.credentials.request` | 使用宿主持有的 Bearer 凭据向限定 HTTPS 来源发送请求 |
 | `host.session.create/send/list/inspect/cancel/control` | 按宿主生命周期规则创建和管理会话 |
 | `host.session.history.read/search` | 使用序列快照和续读游标访问有限历史 |
 | `host.workspace.status/apply/discard` | 检查或处理所拥有会话工作区中的改动 |

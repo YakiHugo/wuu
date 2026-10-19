@@ -322,10 +322,14 @@ type BrowserBridge interface {
 // BrowserLiveTab is one view the desktop host currently has open for this
 // workspace. URL and Title are empty when the host only reports ids.
 type BrowserLiveTab struct {
-	ID     string
-	URL    string
-	Title  string
-	Status string
+	Attachable  bool
+	WorkspaceID string
+	Active      bool
+	Source      string
+	ID          string
+	URL         string
+	Title       string
+	Status      string
 }
 
 // BrowserTabRecord is the durable per-tab state the tool persists between turns

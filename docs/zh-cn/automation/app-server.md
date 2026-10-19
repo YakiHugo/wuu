@@ -105,6 +105,8 @@ Schema 修正回合，因此单个 `turn/completed` 不代表整次运行结束�
 清理按对话隔离；页面打开的标签页继承来源页的归属。现有标签页属于其他对话时，应拒绝
 请求，不得导航或接管该标签页。
 
+`browser/list_tabs` 还可返回 `workspace_tabs`：用户已打开的网站或插件页面候选项，包含 `tab_id`、`url`、`title`、`workspace_id`、`source` 和 `active`。候选项与当前对话拥有的 `tabs` 分开；列举只提供元数据，不读取正文或取得控制权。工具显式 `attach` 时，在原有活动和执行租约内发送 `browser/open_tab`，令 `tab_id` 与 `workspace_tab_id` 相同且不传 `initial_url`。宿主借用原生页面，拒绝已占用、已关闭或其他窗口的页面；不得按 URL 重建 `workspace:` 标签。`browser/close_tab`（工具 `detach`）、finalize、轮次结束、接管、停止和所属宿主销毁都释放绑定，不关闭用户页面。被释放的绑定 ID 出现在 `closed` 中，原生页面仍存活。借用期间沿用 Agent 权限限制，不扩大截图或媒体权限。
+
 `request_id` 标识进行中的操作。核心停止等待时，`browser/request_cancelled` 通知携带
 该 ID 及相同的 `thread_id`、`workdir`。只取消匹配的操作，在异步工作后和输入派发前
 再次检查。用户接管或停止活动会撤销该对话所有标签页的输入权限；之后归还控制权可

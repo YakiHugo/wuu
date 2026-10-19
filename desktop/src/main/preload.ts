@@ -708,6 +708,12 @@ browserApi.onBrowserDock = (handler) => {
 if (!process.argv.includes("--wuu-browser-disabled")) {
   (api as WuuDesktopApi & { webWorkspace: WebWorkspaceApi }).webWorkspace = {
     open: (destination) => ipcRenderer.invoke("wuu:web-workspace-open", destination),
+    capture: (id) => ipcRenderer.invoke("wuu:web-workspace-capture", id),
+    onReveal: handler => {
+      const listener = (_event: Electron.IpcRendererEvent, id: string) => handler(id);
+      ipcRenderer.on("wuu:web-workspace-reveal", listener);
+      return () => ipcRenderer.removeListener("wuu:web-workspace-reveal", listener);
+    },
     reportBounds: (id, bounds) => ipcRenderer.invoke("wuu:web-workspace-bounds", id, bounds),
     command: (id, command, url) => ipcRenderer.invoke("wuu:web-workspace-command", id, command, url),
     setShortcutTarget: (id, active) => ipcRenderer.invoke("wuu:web-workspace-shortcut-target", id, active),

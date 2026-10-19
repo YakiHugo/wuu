@@ -158,6 +158,7 @@ var KERNEL_SERVICE_NAMES = {
   "host.storage.compare_exchange": "host.storage.compare-exchange",
   "host.settings.get": "host.settings.get",
   "host.settings.list": "host.settings.list",
+  "host.credentials.request": "host.credentials.request",
   "host.session.create": "host.session.create",
   "host.session.send": "host.session.send",
   "host.session.list": "host.session.list",

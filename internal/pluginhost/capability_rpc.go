@@ -179,8 +179,9 @@ const (
 	HostServiceStorageCompareExchange HostServiceMethod = "host.storage.compare_exchange"
 
 	// Settings
-	HostServiceSettingsGet  HostServiceMethod = "host.settings.get"
-	HostServiceSettingsList HostServiceMethod = "host.settings.list"
+	HostServiceSettingsGet        HostServiceMethod = "host.settings.get"
+	HostServiceSettingsList       HostServiceMethod = "host.settings.list"
+	HostServiceCredentialsRequest HostServiceMethod = "host.credentials.request"
 
 	// Sessions. Creation and input delivery are separate so ownership,
 	// visibility, provenance, and idempotency remain explicit.

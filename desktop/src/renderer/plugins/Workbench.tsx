@@ -31,6 +31,7 @@ import { X } from "../WuuIcons";
 import { createPluginTranslator } from "./pluginI18n";
 import { PluginPresentation } from "./PluginPresentation";
 import { PluginCommandActions, usePluginCommandActions } from "./PluginCommandActions";
+import { PluginWebPageViewContext } from "./PluginWebPage";
 
 const LAYOUT_STORAGE_KEY = "wuu.plugin-workbench.layout.v1";
 const MAX_STORAGE_VALUE_LENGTH = 1_048_576;
@@ -493,22 +494,26 @@ export function DesktopWorkbench({
   const portals = viewRegions.flatMap((region) => {
     if (settingsOnly && region !== "settings") return [];
     const visible = visibleWorkbenchView(snapshot, region);
-    if (!visible) return [];
     const views = snapshot.views.filter((view) => view.region === region);
-    return [
-      <WorkbenchRegionPortal
-        key={`${region}:${visible.view.id}:${visible.view.generation}`}
-        region={region}
-      >
-        <WorkbenchView
-          key={`${visible.view.id}:${visible.view.generation}`}
-          controller={controller}
-          definition={visible.definition}
-          view={visible.view}
-          siblingViews={views}
-        />
-      </WorkbenchRegionPortal>,
-    ];
+    return views.flatMap((view) => {
+      const definition = snapshot.viewTypes.find((item) =>
+        item.pluginId === view.pluginId && item.id === view.viewTypeId && item.generation === view.generation);
+      if (!definition) return [];
+      return [
+        <WorkbenchRegionPortal
+          key={`${region}:${view.id}:${view.generation}`}
+          region={region}
+        >
+          <WorkbenchView
+            controller={controller}
+            definition={definition}
+            view={view}
+            siblingViews={views}
+            active={visible?.view.id === view.id}
+          />
+        </WorkbenchRegionPortal>,
+      ];
+    });
   });
 
   if (!settingsOnly) portals.push(createPortal(
@@ -622,6 +627,7 @@ interface WorkbenchViewProps {
   definition: RegisteredViewType;
   view: WorkbenchViewState;
   siblingViews: readonly WorkbenchViewState[];
+  active: boolean;
 }
 
 function viewCommandContext(view: WorkbenchViewState) {
@@ -635,18 +641,39 @@ function viewCommandContext(view: WorkbenchViewState) {
   });
 }
 
-function WorkbenchView({ controller, definition, view, siblingViews }: WorkbenchViewProps): JSX.Element {
+function WorkbenchView({ controller, definition, view, siblingViews, active }: WorkbenchViewProps): React.ReactNode {
+  const [webPageCount, setWebPageCount] = React.useState(0);
+  const retainWebPage = React.useCallback(() => {
+    setWebPageCount((count) => count + 1);
+    return () => setWebPageCount((count) => count - 1);
+  }, []);
+  const webPageView = React.useMemo(() => ({ active, retain: retainWebPage }), [active, retainWebPage]);
   const View = definition.render;
   const commandContext = React.useMemo(() => viewCommandContext(view), [view]);
   const hasTitleActions = usePluginCommandActions(controller.host, commandContext).length > 0;
-  const host = React.useMemo(() => controller.createViewHostAPI(view), [controller, view]);
+  const activation = controller.host.getGenerationActivation(view.pluginId, view.generation);
+  // Inventory refreshes replace view snapshots without changing their lifetime.
+  const host = React.useMemo(
+    () => controller.createViewHostAPI(view),
+    [controller, view.id, view.pluginId, view.generation, activation],
+  );
   const { locale, t } = useI18n();
   const translate = React.useMemo(
     () => createPluginTranslator(controller.host, locale),
     [controller.host, locale],
   );
+  // Ordinary plugin views still unmount when hidden. A native page keeps its
+  // owner mounted until the page, view, or extension generation is removed.
+  if (!active && webPageCount === 0) return null;
   return (
-    <section className={`plugin-workbench-view plugin-workbench-view-${view.region}`} data-plugin-id={view.pluginId}>
+    <section
+      className={`plugin-workbench-view plugin-workbench-view-${view.region}`}
+      data-plugin-id={view.pluginId}
+      data-workbench-view-id={view.id}
+      hidden={!active}
+      inert={!active}
+      style={active ? undefined : { display: "none" }}
+    >
       {view.region !== "primary" || hasTitleActions ? <header className="plugin-workbench-view-header">
         <div role="tablist" aria-label={t("plugins.viewTabs")}>
           {siblingViews.map((sibling) => (
@@ -684,11 +711,13 @@ function WorkbenchView({ controller, definition, view, siblingViews }: Workbench
         key={`${view.pluginId}:${view.generation}:${view.id}`}
         pluginId={view.pluginId}
         generation={view.generation}
-        activation={controller.host.getGenerationActivation(view.pluginId, view.generation)}
+        activation={activation}
         services={controller.services}
         onUseDefault={() => void controller.closeView(view.id)}
       >
-        <View host={host} context={view.context} locale={locale} translate={translate} />
+        <PluginWebPageViewContext.Provider value={webPageView}>
+          <View host={host} context={view.context} locale={locale} translate={translate} />
+        </PluginWebPageViewContext.Provider>
       </PluginErrorBoundary>
     </section>
   );
@@ -858,7 +887,7 @@ export class PluginErrorBoundary extends React.Component<PluginErrorBoundaryProp
 const viewRegions: readonly ViewPlacementRegion[] = ["navigation", "primary", "auxiliary", "inspector", "settings", "overlay"];
 const HIDDEN_REGION_VIEW_ID = "__wuu_hidden_region__";
 
-/** The view DesktopWorkbench actually portals, or undefined when that region is closed. */
+/** The foreground view, or undefined when that region is closed. */
 export function visibleWorkbenchView(
   snapshot: WorkbenchSnapshot,
   region: ViewPlacementRegion,

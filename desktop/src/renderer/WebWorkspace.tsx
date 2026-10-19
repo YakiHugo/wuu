@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { WEB_WORKSPACE_ZOOM_MIN, WEB_WORKSPACE_ZOOM_MAX, WEB_WORKSPACE_TAB_LIMIT, type WebWorkspaceApi, type WebWorkspaceCommand, type WebWorkspaceState } from "../shared/webWorkspace";
-import { ArrowLeft, ArrowRight, ArrowUpRight, ChevronDown, ChevronUp, Ellipsis, Globe, Minus, Plus, RotateCcw, RotateCw, Search, X } from "./WuuIcons";
+import { ArrowLeft, ArrowRight, ArrowUpRight, ChevronDown, ChevronUp, Ellipsis, Globe, Hand, Minus, Plus, RotateCcw, RotateCw, Search, X } from "./WuuIcons";
 import { useI18n } from "./i18n";
 import { normalizeWebsiteURL } from "./NavigationRibbonPreferences";
 import { rawErrorMessage } from "./UserFacingErrors";
@@ -55,6 +55,28 @@ export function WebWorkspacePanel({
   const zoomFactor = current?.zoomFactor ?? 1;
   const pageTabs = current?.tabs ?? [];
   const hasCurrent = Boolean(current);
+  const snapshotKey = `${site?.id ?? ""}/${current?.activeTabId ?? ""}/${currentURL}`;
+  const snapshotKeyRef = useRef(snapshotKey);
+  snapshotKeyRef.current = snapshotKey;
+  const [backdrop, setBackdrop] = useState<{ key: string; image: string }>();
+  const [occluded, setOccluded] = useState(false);
+  const captureBackdrop = useCallback(async (): Promise<void> => {
+    const id = site?.id;
+    if (!api?.capture || !id || !active || !hasCurrent || error || blank) return;
+    const key = snapshotKeyRef.current;
+    try {
+      const image = await api.capture(id);
+      if (image && snapshotKeyRef.current === key) setBackdrop({ key, image });
+    } catch { /* A preview is optional; it never blocks page interaction. */ }
+  }, [api, site?.id, active, hasCurrent, error, blank]);
+
+  useEffect(() => {
+    setBackdrop(undefined);
+  }, [snapshotKey]);
+
+  useEffect(() => {
+    if (!current?.loading) void captureBackdrop();
+  }, [captureBackdrop, current?.loading, snapshotKey]);
 
   const focusAddress = useCallback(() => {
     setMenuOpen(false);
@@ -182,12 +204,27 @@ export function WebWorkspacePanel({
       void api.reportBounds(id, null).catch(() => undefined);
       return;
     }
-    return observeWebWorkspaceBounds(host, (bounds) => {
+    let disposed = false;
+    const report = (bounds: HostRect | null): void => {
       void api.reportBounds(id, bounds).catch((cause: unknown) => {
-        if (currentSiteID.current === id) setFailure({ id, message: rawErrorMessage(cause) });
+        if (!disposed && currentSiteID.current === id) setFailure({ id, message: rawErrorMessage(cause) });
       });
+    };
+    const stop = observeWebWorkspaceBounds(host, (bounds) => {
+      if (disposed) return;
+      setOccluded(bounds === null);
+      if (bounds) { report(bounds); return; }
+      // Keep a still image under renderer menus instead of replacing the whole
+      // site with empty canvas. Capture once per occlusion, never per frame.
+      void captureBackdrop();
+      report(null);
     });
-  }, [api, site?.id, active, Boolean(current), current?.activeTabId, error, blank]);
+    return () => {
+      disposed = true;
+      stop();
+      report(null);
+    };
+  }, [api, site?.id, active, Boolean(current), current?.activeTabId, error, blank, captureBackdrop]);
 
   useEffect(() => {
     if (!api || !site) return;
@@ -218,13 +255,15 @@ export function WebWorkspacePanel({
   useEffect(() => {
     if (!active || !site) return;
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.defaultPrevented) return;
+      const key = event.key.toLowerCase();
+      const modifier = window.wuu.platform === "darwin" ? event.metaKey : event.ctrlKey;
+      const cycleTabs = key === "tab" && event.ctrlKey;
+      if ((!modifier && !cycleTabs) || event.altKey || event.defaultPrevented) return;
       // Retained plugin pages may be inert behind another page. Only the visible
       // focused browser surface owns browser shortcuts.
       if (!hostRef.current || !visibleElementRect(hostRef.current)) return;
       const target = focusedWebWorkspacePanel();
       if (target !== panelRef.current) return;
-      const key = event.key.toLowerCase();
       let action: (() => void) | undefined;
       if (key === "l") action = focusAddress;
       else if (key === "f") action = openFind;
@@ -234,7 +273,7 @@ export function WebWorkspacePanel({
       else if (key === "-") action = () => changeZoom(zoomFactor - 0.1);
       else if (tabs && key === "t") action = () => { if (pageTabs.length >= WEB_WORKSPACE_TAB_LIMIT) return; if (event.shiftKey) void update((browser, id) => browser.reopenTab(id)); else void addTab(); };
       else if (tabs && key === "w" && current?.activeTabId) action = () => { void update((browser, id) => browser.closeTab(id, current.activeTabId!)); };
-      else if (tabs && pageTabs.length && (key === "tab" || /^[1-9]$/.test(key))) {
+      else if (tabs && pageTabs.length && (cycleTabs || /^[1-9]$/.test(key))) {
         const position = pageTabs.findIndex((tab) => tab.id === current?.activeTabId);
         const index = key === "tab" ? (position + (event.shiftKey ? -1 : 1) + pageTabs.length) % pageTabs.length : key === "9" ? pageTabs.length - 1 : Number(key) - 1;
         if (pageTabs[index]) action = () => { void update((browser, id) => browser.selectTab(id, pageTabs[index].id)); };
@@ -321,6 +360,7 @@ export function WebWorkspacePanel({
           {zoomFactor !== 1 ? <button type="button" className="web-workspace-zoom-badge" title={t("webWorkspace.resetZoom")} aria-label={t("webWorkspace.resetZoom")} onClick={() => changeZoom(1)}>{Math.round(zoomFactor * 100)}%</button> : null}
         </form>
         <div className="web-workspace-actions">
+          {current?.agentControlled ? <button type="button" className="icon-button workspace-browser-nav" aria-label={t("webWorkspace.takeOver")} title={t("webWorkspace.takeOver")} onClick={() => void run("takeOver")}><Hand className="icon" aria-hidden="true" /></button> : null}
           <BrowserLibrary api={api} destinationId={site?.id} currentURL={currentURL} currentTitle={current?.title || site?.title || ""} onOpen={(url) => void run("navigate", url)} active={active} />
           <WebWorkspaceDownloadsMenu api={api} active={active} destinationId={site?.id} />
           <button ref={menuButtonRef} type="button" className="icon-button workspace-browser-nav" aria-label={t("webWorkspace.options")} title={t("webWorkspace.options")} aria-expanded={menuOpen} aria-haspopup="dialog" disabled={!api || !site} onClick={() => setMenuOpen((open) => !open)} onKeyDown={(event) => { if (menuOpeningKey(event)) setMenuOpen(true); }}><Ellipsis className="icon" aria-hidden="true" /></button>
@@ -353,6 +393,7 @@ export function WebWorkspacePanel({
         <button type="button" className="icon-button workspace-browser-nav" aria-label={t("webWorkspace.closeFind")} title={t("webWorkspace.closeFind")} onClick={closeFind}><X className="icon" aria-hidden="true" /></button>
       </div> : null}
       <div className="web-workspace-content" id={`${instanceID}-page`} role={tabs ? "tabpanel" : undefined} aria-labelledby={tabs && current?.activeTabId ? `${instanceID}-tab-${current.activeTabId}` : undefined}>
+        {occluded && backdrop?.key === snapshotKey ? <img className="web-workspace-backdrop" src={backdrop.image} alt="" aria-hidden="true" /> : null}
         <div ref={hostRef} className="web-workspace-host" data-wuu-native-surface={active && current && !error && !blank ? "" : undefined} />
         {!api || error ? (
           <div className="web-workspace-message" role={error ? "alert" : "status"}>

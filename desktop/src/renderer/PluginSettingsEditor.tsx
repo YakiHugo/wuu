@@ -82,7 +82,14 @@ export function PluginSettingsEditor({
       {rendererDiagnostics.map((diagnostic, index) => (
         <PluginNotice key={`${diagnostic.message}:${index}`} title={t("skills.pluginContributionIsolated")} detail={diagnostic.message} />
       ))}
-      {settings.map((setting) => (
+      {settings.map((setting) => setting.type === "secret" ? (
+        <PluginSecretControl
+          key={`${fingerprint}:${setting.id}`}
+          pluginId={plugin.id}
+          fingerprint={fingerprint}
+          setting={setting}
+        />
+      ) : (
         <PluginSettingControl
           key={setting.id}
           pluginId={plugin.id}
@@ -160,6 +167,77 @@ function PluginNotice({ title, detail, tone = "warning" }: { title: string; deta
           {title}
         </span>
         {detail ? <span className="settings-row-label-description">{detail}</span> : null}
+      </div>
+    </div>
+  );
+}
+
+function PluginSecretControl({ pluginId, fingerprint, setting }: {
+  pluginId: string;
+  fingerprint: string;
+  setting: ExtensionSettingDescriptor;
+}): JSX.Element {
+  const { t } = useI18n();
+  const controlId = useId();
+  const [draft, setDraft] = useState("");
+  const [configured, setConfigured] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const params = { id: pluginId, fingerprint, key: setting.id };
+
+  useEffect(() => {
+    let cancelled = false;
+    setDraft("");
+    setLoading(true);
+    void window.wuu.getPluginSetting(params).then((result) => {
+      if (!cancelled) setConfigured(result.configured === true);
+    }).catch((failure: unknown) => {
+      if (!cancelled) setError(errorMessage(failure, t("skills.pluginSettingLoadFailed")));
+    }).finally(() => {
+      if (!cancelled) setLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [pluginId, fingerprint, setting.id]);
+
+  async function save(value: string): Promise<void> {
+    if (loading || saving) return;
+    setSaving(true);
+    setError("");
+    // Never retain a submitted token for display, retry or ordinary settings.
+    setDraft("");
+    try {
+      const result = await window.wuu.setPluginSetting({ ...params, value });
+      setConfigured(result.configured === true);
+    } catch (failure) {
+      setError(errorMessage(failure, t("skills.pluginSettingSaveFailed")));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const statusId = `${controlId}-status`;
+  return (
+    <div className="settings-row settings-row-block" data-wuu-component="settings-row" data-setting-key={setting.id} data-setting-type="secret">
+      <div className="plugin-setting-heading settings-row-label">
+        <label className="settings-row-label-title" htmlFor={controlId}>{setting.title}</label>
+        {setting.description ? <span className="settings-row-label-description">{setting.description}</span> : null}
+        <span className="settings-row-label-description">{t("skills.pluginSecretStorage")}</span>
+        <span className="settings-row-label-description">{t("skills.pluginSecretOrigins", { origins: (setting.credential_origins ?? []).join(", ") })}</span>
+      </div>
+      <div className="plugin-setting-control settings-row-control settings-row-control-block">
+        <input id={controlId} className="settings-input" type="password" autoComplete="new-password" autoCapitalize="none" spellCheck={false} maxLength={16 * 1024}
+          value={draft} disabled={loading || saving} aria-describedby={statusId}
+          placeholder={configured ? t("skills.pluginSecretReplace") : t("skills.pluginSecretEnter")}
+          onChange={(event) => setDraft(event.currentTarget.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && draft) { event.preventDefault(); void save(draft); }
+          }} />
+        <button type="button" className="settings-button" disabled={loading || saving || !draft} onClick={() => void save(draft)}>{t("common.save")}</button>
+        <button type="button" className="settings-button settings-button-ghost" disabled={loading || saving || !configured} onClick={() => void save("")}>{t("common.remove")}</button>
+      </div>
+      <div id={statusId} className={`plugin-setting-status${error ? " is-error" : ""}`} aria-live="polite">
+        {error || (saving ? t("skills.pluginSettingSaving") : loading ? "" : configured ? t("skills.pluginSecretConfigured") : t("skills.pluginSecretMissing"))}
       </div>
     </div>
   );

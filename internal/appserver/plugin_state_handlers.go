@@ -2,13 +2,16 @@ package appserver
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/blueberrycongee/wuu/internal/extensions"
 	pluginpkg "github.com/blueberrycongee/wuu/internal/plugin"
+	"github.com/blueberrycongee/wuu/internal/plugincredentials"
 	"github.com/blueberrycongee/wuu/internal/pluginhost"
 	"github.com/blueberrycongee/wuu/internal/pluginsettings"
 	"github.com/blueberrycongee/wuu/internal/runtime"
@@ -22,6 +25,9 @@ func (s *Server) handlePluginSettingGet(req Request) error {
 	plugin, definition, key, err := s.activePluginSetting(params.ID, params.Fingerprint, params.Key)
 	if err != nil {
 		return s.writeResponse(req.ID, nil, err)
+	}
+	if definition.Type == pluginpkg.SettingTypeSecret {
+		return s.pluginSecretSetting(req, plugin, definition, key, nil)
 	}
 	scope := PluginValueScope(definition.Scope)
 	document, err := pluginsettings.Read(s.rt.WuuHome, s.rt.RootDir, plugin.SubjectID, pluginsettings.Scope(scope))
@@ -49,6 +55,11 @@ func (s *Server) handlePluginSettingSet(req Request) error {
 	}
 	if err := validatePluginSettingValue(definition, params.Value); err != nil {
 		return s.writeResponse(req.ID, nil, err)
+	}
+	if definition.Type == pluginpkg.SettingTypeSecret {
+		var value string
+		_ = json.Unmarshal(params.Value, &value)
+		return s.pluginSecretSetting(req, plugin, definition, key, &value)
 	}
 	scope := PluginValueScope(definition.Scope)
 	document, err := pluginsettings.Update(s.rt.WuuHome, s.rt.RootDir, plugin.SubjectID, pluginsettings.Scope(scope), plugin.Fingerprint, func(values map[string]json.RawMessage) error {
@@ -276,7 +287,7 @@ func validatePluginSettingValue(definition pluginpkg.SettingDefinition, raw json
 	switch definition.Type {
 	case pluginpkg.SettingTypeBoolean:
 		_, valid = value.(bool)
-	case pluginpkg.SettingTypeString:
+	case pluginpkg.SettingTypeString, pluginpkg.SettingTypeSecret:
 		_, valid = value.(string)
 	case pluginpkg.SettingTypeNumber:
 		_, valid = value.(json.Number)
@@ -290,4 +301,29 @@ func validatePluginSettingValue(definition pluginpkg.SettingDefinition, raw json
 		return fmt.Errorf("plugin setting value does not match declared type %q", definition.Type)
 	}
 	return nil
+}
+
+// Secret settings share the existing fingerprint-gated UI route but never enter
+// pluginsettings files, broadcasts or read responses. Empty input removes a token.
+func (s *Server) pluginSecretSetting(req Request, plugin pluginpkg.Plugin, definition pluginpkg.SettingDefinition, key string, value *string) error {
+	binding, err := plugincredentials.BindingFor(s.rt.WuuHome, s.rt.RootDir, plugin.SubjectID, key, definition.CredentialOrigins)
+	if err != nil {
+		return s.writeResponse(req.ID, nil, err)
+	}
+	store, err := plugincredentials.Open()
+	if err != nil {
+		return s.writeResponse(req.ID, nil, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if value != nil {
+		if err := plugincredentials.Set(ctx, store, binding, *value); err != nil {
+			return s.writeResponse(req.ID, nil, err)
+		}
+	}
+	configured, err := plugincredentials.Configured(ctx, store, binding)
+	if err != nil {
+		return s.writeResponse(req.ID, nil, err)
+	}
+	return s.writeResponse(req.ID, PluginSettingResult{ID: plugin.SubjectID, Key: key, Scope: PluginValueScopeUser, Value: json.RawMessage(`""`), Configured: &configured}, nil)
 }

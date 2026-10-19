@@ -1220,13 +1220,15 @@ export interface CSSSnippet {
  * plugin manifest but typed for the TypeScript workbench API.
  */
 export interface PluginSettingDefinition {
-  type: "boolean" | "string" | "number" | "enum";
+  type: "boolean" | "string" | "number" | "enum" | "secret";
   title: string;
   description?: string;
   default: unknown;
   enum?: string[];
   scope: "user" | "workspace";
   apply: "live" | "restart";
+  /** Exact HTTPS origins allowed to receive this secret as a Bearer token. Required for secret settings. */
+  credential_origins?: string[];
 }
 
 /**

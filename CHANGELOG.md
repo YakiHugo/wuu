@@ -10,6 +10,9 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Added
 
+- Optional Feishu and Notion workspace extensions combine native website views with bounded document API tools and host-managed credentials in the OS secure store.
+- An optional ChatGPT website extension joins the reorderable workbench ribbon.
+
 - Expand the experimental website workbench with tabs, page search and zoom, download controls, bookmarks, recent history, and lazy restoration of tab addresses.
 
 - Experimental workbench website destinations share the desktop browser profile, retain navigation state, and can be added, edited, removed, and reordered alongside conversations and extension pages.

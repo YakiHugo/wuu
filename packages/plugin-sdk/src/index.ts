@@ -435,13 +435,15 @@ export interface CSSSnippet {
 }
 
 export interface PluginSettingDefinition {
-  type: "boolean" | "string" | "number" | "enum";
+  type: "boolean" | "string" | "number" | "enum" | "secret";
   title: string;
   description?: string;
   default: unknown;
   enum?: string[];
   scope: "user" | "workspace";
   apply: "live" | "restart";
+  /** Exact HTTPS origins allowed to receive this secret as a Bearer token. Required for secret settings. */
+  credential_origins?: string[];
 }
 
 export interface PluginStorageAPI {
@@ -621,6 +623,7 @@ export const HOST_SERVICE_METHODS = [
   "host.storage.compare_exchange",
   "host.settings.get",
   "host.settings.list",
+  "host.credentials.request",
   "host.session.create",
   "host.session.send",
   "host.session.list",
@@ -657,6 +660,7 @@ export const KERNEL_SERVICE_NAMES = {
   "host.storage.compare_exchange": "host.storage.compare-exchange",
   "host.settings.get": "host.settings.get",
   "host.settings.list": "host.settings.list",
+  "host.credentials.request": "host.credentials.request",
   "host.session.create": "host.session.create",
   "host.session.send": "host.session.send",
   "host.session.list": "host.session.list",
@@ -1107,7 +1111,27 @@ export interface ToolExecuteResult {
   result: ToolResult;
 }
 
+/** Host-only Bearer authentication. Secret setting values never enter the plugin process.
+ * Only declared exact HTTPS origins are allowed; redirects are rejected. Requests time out
+ * after 20 seconds, request/response bodies are capped at 4 MiB, and errors are sanitized.
+ * A transport failure after a write begins does not establish whether it was applied.
+ */
+export interface CredentialRequestParams {
+  credential: string;
+  url: string;
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD";
+  headers?: Record<string, string>;
+  body?: string;
+}
+export interface CredentialRequestResult {
+  status: number;
+  /** Lower-case content-type, retry-after and request-id headers only. */
+  headers: Record<string, string>;
+  body: string;
+}
+
 export interface HostServiceContracts {
+  "host.credentials.request": { params: CredentialRequestParams; result: CredentialRequestResult };
   "host.storage.get": { params: { scope: "user" | "workspace"; key: string }; result: { value: string | null } };
   "host.storage.set": { params: { scope: "user" | "workspace"; key: string; value: string }; result: Record<string, never> };
   "host.storage.delete": { params: { scope: "user" | "workspace"; key: string }; result: Record<string, never> };

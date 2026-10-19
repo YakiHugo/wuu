@@ -54,16 +54,16 @@ func newPluginHostServices(item pluginpkg.Plugin, projectRoot, wuuHome string, t
 }
 
 func (s *pluginHostServices) close() {
+	// Cancel in-flight I/O before waiting for invoke's read lock.
+	if s.lockCancel != nil {
+		s.lockCancel()
+	}
 	s.mu.Lock()
 	s.open = false
 	s.active = false
 	locks := s.fileLocks
 	s.fileLocks = make(map[string]func())
-	cancel := s.lockCancel
 	s.mu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
 	for _, release := range locks {
 		release()
 	}
@@ -232,6 +232,8 @@ func (s *pluginHostServices) invoke(ctx context.Context, method pluginhost.HostS
 			return nil, err
 		}
 		return marshalServiceResult(result)
+	case pluginhost.HostServiceCredentialsRequest:
+		return s.credentialRequest(ctx, raw)
 	case pluginhost.HostServiceSettingsGet:
 		return s.settingsGet(raw)
 	case pluginhost.HostServiceSettingsList:
@@ -327,6 +329,9 @@ func (s *pluginHostServices) ownedSetting(key string) (string, pluginpkg.Setting
 }
 
 func (s *pluginHostServices) settingValue(key string, definition pluginpkg.SettingDefinition) (json.RawMessage, error) {
+	if definition.Type == pluginpkg.SettingTypeSecret {
+		return json.RawMessage(`""`), nil
+	}
 	scope := pluginsettings.Scope(definition.Scope)
 	// Settings are intentionally read-only on this channel. Persisted values
 	// survive plugin upgrades, so a document fingerprint may differ from this
@@ -459,7 +464,7 @@ func (k *kernelHostServices) KernelServiceRegistrations() []pluginhost.ServiceRe
 		pluginhost.HostServiceSessionHistoryRead, pluginhost.HostServiceSessionHistorySearch,
 		pluginhost.HostServiceWorkspaceStatus, pluginhost.HostServiceWorkspaceApply,
 		pluginhost.HostServiceWorkspaceDiscard,
-		pluginhost.HostServiceSessionControl,
+		pluginhost.HostServiceSessionControl, pluginhost.HostServiceCredentialsRequest,
 	}
 	registrations := make([]pluginhost.ServiceRegistration, 0, len(descriptors)+8)
 	for index, descriptor := range descriptors {

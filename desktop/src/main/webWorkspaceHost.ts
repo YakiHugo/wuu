@@ -2,13 +2,13 @@ import { BrowserWindow, Menu, clipboard, dialog, shell, type DownloadItem, type 
 import { randomUUID } from "node:crypto";
 import { WEB_WORKSPACE_ZOOM_MIN, WEB_WORKSPACE_ZOOM_MAX, WEB_WORKSPACE_TAB_LIMIT } from "../shared/webWorkspace";
 import type { WebWorkspaceBounds, WebWorkspaceCommand, WebWorkspaceDestination, WebWorkspaceFindOptions, WebWorkspaceFindResult, WebWorkspaceState, WebWorkspaceTabState } from "../shared/webWorkspace";
-import { BROWSER_PARTITION, type BrowserPermissionRequestDetails, type BrowserSessionPermissionDelegate } from "./browserHostWindows";
+import { BROWSER_PARTITION, BROWSER_WORKSPACE_TAB_PREFIX, type BrowserWorkspaceSource, type BrowserWorkspaceAttachment, type BrowserViewHandle, type BrowserParentWindowHandle, type BrowserPermissionRequestDetails, type BrowserSessionPermissionDelegate } from "./browserHostWindows";
 import { createBrowserView } from "./browserView";
 import type { WebWorkspaceLibrary } from "./webWorkspaceLibrary";
 import type { WebWorkspaceDownloads } from "./webWorkspaceDownloads";
 
-// Website pages share the browser profile, never an agent tab, debugger, or
-// automation turn. Restored tabs create their native views only when selected.
+// Website pages keep their native ownership. Explicit, turn-scoped automation
+// borrows a live view; restored tabs create native views only when selected.
 type WorkspaceTab = { id: string; url: string; title: string; zoomFactor: number; page?: WorkspacePage };
 type WorkspaceGroup = {
   id: string;
@@ -35,6 +35,7 @@ type WorkspacePage = {
   findRequestId?: number;
   pendingClose?: { promise: Promise<void>; resolve: () => void };
   popups: Set<BrowserWindow>;
+  automation?: { reclaim(): void; layout(): void; agentInput(): boolean; external: boolean };
 };
 type PermissionOwner = { page: WorkspacePage; grants: Set<string>; navigationGeneration: number };
 
@@ -70,12 +71,56 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     private readonly onState: (owner: BrowserWindow, state: WebWorkspaceState) => void,
     private readonly onFocusAddress: (owner: BrowserWindow, id: string) => void,
     private readonly options: {
+      onReveal?: (owner: BrowserWindow, id: string) => void;
       onFocusFind?: (owner: BrowserWindow, id: string) => void;
       onLibraryChange?: (owner: BrowserWindow) => void;
       library?: WebWorkspaceLibrary;
       downloads?: WebWorkspaceDownloads;
     } = {},
   ) {}
+
+  /** Only live website pages from the nominated application window are discoverable. */
+  browserSource(owner: () => BrowserWindow | null): BrowserWorkspaceSource {
+    return {
+      list: () => [...this.pages.values()]
+        .filter(page => page.owner === owner() && !page.contents.isDestroyed() && !page.automation && !page.pendingClose)
+        .map(page => ({ tab_id: BROWSER_WORKSPACE_TAB_PREFIX + page.tab.id, url: page.contents.getURL(), title: page.contents.getTitle(),
+          workspace_id: page.group.id, active: page.group.activeTabId === page.tab.id, source: page.group.tabbed ? "website" : "plugin" })),
+      attach: (tabID, reclaim, layout, agentInput): BrowserWorkspaceAttachment => {
+        const page = [...this.pages.values()].find(page => BROWSER_WORKSPACE_TAB_PREFIX + page.tab.id === tabID && page.owner === owner());
+        if (!page || page.contents.isDestroyed() || page.pendingClose) throw new Error("Workspace tab is no longer available");
+        if (page.automation) throw new Error("Workspace tab is already attached to another task");
+        if (page.contents.debugger.isAttached()) throw new Error("Workspace tab already has a debugger attached");
+        const automation = { reclaim, layout, agentInput, external: false };
+        page.automation = automation;
+        const visible = () => Boolean(page.bounds && !page.owner.isDestroyed() && page.owner.isVisible() && !page.owner.isMinimized());
+        this.emit(page.group);
+        return {
+          view: page.view as unknown as BrowserViewHandle,
+          parent: page.owner as unknown as BrowserParentWindowHandle,
+          visible,
+          setExternalPresentation: external => { automation.external = external; },
+          restore: () => this.layout(page),
+          reveal: () => {
+            if (this.groups.get(page.group.id) !== page.group || page.contents.isDestroyed()) return;
+            this.activate(page.group, page.tab);
+            this.emit(page.group);
+            this.options.onReveal?.(page.owner, page.group.id);
+          },
+          release: () => {
+            if (page.automation !== automation) return;
+            page.automation = undefined;
+            if (!page.contents.isDestroyed()) {
+              page.contents.setBackgroundThrottling(true);
+              page.contents.setZoomFactor(page.tab.zoomFactor);
+              this.layout(page);
+            }
+            this.emit(page.group);
+          },
+        };
+      },
+    };
+  }
 
   open(owner: BrowserWindow, destination: WebWorkspaceDestination): WebWorkspaceState {
     if (typeof destination?.id !== "string" || !destination.id.trim() || destination.id.length > 256) throw new Error("A website destination ID is required.");
@@ -110,6 +155,20 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     this.ensurePage(group, this.activeTab(group));
     this.emit(group);
     return this.state(group);
+  }
+
+  /** One bounded, in-memory backdrop for chrome overlays; no capture subscription. */
+  async capture(owner: BrowserWindow, id: string): Promise<string | null> {
+    const group = this.group(owner, id);
+    const page = this.activeTab(group).page;
+    if (!page || !page.bounds || page.automation?.external || page.contents.isDestroyed() || !owner.isVisible() || owner.isMinimized()) return null;
+    const generation = page.navigationGeneration;
+    const image = await page.contents.capturePage(undefined, { stayHidden: true });
+    if (this.groups.get(id) !== group || this.activeTab(group).page !== page || page.contents.isDestroyed() || page.navigationGeneration !== generation || image.isEmpty()) return null;
+    const size = image.getSize();
+    const scale = Math.min(1, 1280 / Math.max(size.width, size.height));
+    const jpeg = image.resize({ width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)) }).toJPEG(65);
+    return jpeg.length <= 1024 * 1024 ? `data:image/jpeg;base64,${jpeg.toString("base64")}` : null;
   }
 
   reportBounds(owner: BrowserWindow, id: string, bounds: WebWorkspaceBounds | null): void {
@@ -155,6 +214,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     const group = this.group(owner, id);
     const page = this.ensurePage(group, this.activeTab(group));
     const contents = page.contents;
+    if (command !== "focus") page.automation?.reclaim();
     switch (command) {
       case "navigate": this.navigate(page, websiteURL(url ?? "")); break;
       case "back": if (contents.navigationHistory.canGoBack()) contents.navigationHistory.goBack(); break;
@@ -171,6 +231,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
         break;
       }
       case "stop": contents.stop(); break;
+      case "takeOver": break;
       case "focus": if (page.bounds) contents.focus(); break;
       default: throw new Error("Unsupported website command.");
     }
@@ -202,6 +263,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     const index = group.tabs.findIndex(tab => tab.id === tabId);
     if (index < 0) throw new Error("The website tab is no longer open.");
     const page = group.tabs[index].page;
+    page?.automation?.reclaim();
     if (!page || page.contents.isDestroyed()) this.removeTab(group, index);
     else {
       if (!page.pendingClose) {
@@ -256,6 +318,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     const group = this.group(owner, id);
     if (!Number.isFinite(factor) || factor < WEB_WORKSPACE_ZOOM_MIN || factor > WEB_WORKSPACE_ZOOM_MAX) throw new Error("Website zoom must be between 25% and 300%.");
     const tab = this.activeTab(group);
+    tab.page?.automation?.reclaim();
     tab.zoomFactor = factor;
     this.ensurePage(group, tab).contents.setZoomFactor(factor);
     this.emit(group);
@@ -279,7 +342,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
 
   handleDownload(contents: WebContents, item: DownloadItem): void {
     const owned = this.contentsOwners.get(contents.id);
-    if (owned && this.options.downloads) this.options.downloads.start(owned.page.owner, owned.page.group.id, item);
+    if (owned && !owned.page.automation && this.options.downloads) this.options.downloads.start(owned.page.owner, owned.page.group.id, item);
     else item.cancel();
   }
   ownsWebContents(id: number): boolean {
@@ -289,7 +352,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
   checkPermission(contents: WebContents, permission: string, requestingOrigin: string): boolean {
     const origin = requestOrigin(requestingOrigin);
     const topOrigin = requestOrigin(contents.getURL());
-    return Boolean(origin && topOrigin && TAB_PERMISSIONS.has(permission)
+    return Boolean(origin && topOrigin && !this.contentsOwners.get(contents.id)?.page.automation && TAB_PERMISSIONS.has(permission)
       && this.contentsOwners.get(contents.id)?.grants.has(`${topOrigin}\n${origin}\n${permission}`));
   }
 
@@ -301,7 +364,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
   ): void {
     const owned = this.contentsOwners.get(contents.id);
     const origin = requestOrigin(details.requestingUrl);
-    if (!owned || !origin || permission === "notifications" || contents.isDestroyed() || this.permissionPrompts.has(contents.id)) {
+    if (!owned || owned.page.automation || !origin || permission === "notifications" || contents.isDestroyed() || this.permissionPrompts.has(contents.id)) {
       callback(false);
       return;
     }
@@ -329,7 +392,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
       ].join("\n"),
       buttons: ["Deny", "Allow"], defaultId: 0, cancelId: 0, noLink: true,
     }).then(({ response }) => {
-      const allowed = response === 1 && !contents.isDestroyed()
+      const allowed = response === 1 && !owned.page.automation && !contents.isDestroyed()
         && this.contentsOwners.get(contents.id) === owned && owned.navigationGeneration === navigationGeneration
         && requestOrigin(contents.getURL()) === pageOrigin;
       if (allowed && TAB_PERMISSIONS.has(permission)) owned.grants.add(`${pageOrigin}\n${origin}\n${permission}`);
@@ -362,6 +425,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
       canGoBack: contents?.navigationHistory.canGoBack() ?? false,
       canGoForward: contents?.navigationHistory.canGoForward() ?? false,
       zoomFactor: tab.zoomFactor,
+      ...(page?.automation ? { agentControlled: true } : {}),
       ...(page?.findResult ? { findResult: page.findResult } : {}),
       ...(page?.error ? { error: page.error } : {}),
     };
@@ -495,6 +559,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
   }
 
   private navigate(page: WorkspacePage, url: string): void {
+    page.automation?.reclaim();
     page.error = undefined;
     page.requestedURL = url;
     const generation = ++page.navigationGeneration;
@@ -506,6 +571,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
   }
 
   private destroyPage(page: WorkspacePage): void {
+    page.automation?.reclaim();
     this.pages.delete(page.id);
     page.tab.page = undefined;
     for (const popup of page.popups) if (!popup.isDestroyed()) popup.destroy();
@@ -529,13 +595,14 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     for (const tab of group.tabs) {
       if (!tab.page) continue;
       tab.page.bounds = tab.id === group.activeTabId ? group.bounds : null;
+      tab.page.automation?.layout();
       this.layout(tab.page);
     }
   }
 
   private layout(page: WorkspacePage): void {
     const { owner, view, bounds } = page;
-    if (owner.isDestroyed() || page.contents.isDestroyed()) return;
+    if (owner.isDestroyed() || page.contents.isDestroyed() || page.automation?.external) return;
     if (!bounds || owner.isMinimized() || !owner.isVisible()) {
       if (page.contents.isFocused()) owner.webContents.focus();
       view.setVisible(false);
@@ -574,6 +641,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
   }
 
   private handleInput(page: WorkspacePage, event: Electron.Event, input: Electron.Input): void {
+    if (page.automation?.agentInput()) return;
     if (input.type !== "keyDown" || input.alt || !page.bounds) return;
     const modifier = process.platform === "darwin" ? input.meta : input.control;
     const key = input.key.toLowerCase();
@@ -680,7 +748,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     contents.on("will-redirect", guardNavigation);
     contents.setWindowOpenHandler(details => {
       const parent = BrowserWindow.fromWebContents(contents) ?? page.owner;
-      if (parent.isDestroyed() || !parent.isVisible() || parent.isMinimized() || (contents === page.contents && !page.bounds)) return { action: "deny" };
+      if (parent.isDestroyed() || (!page.automation && (!parent.isVisible() || parent.isMinimized() || (contents === page.contents && !page.bounds)))) return { action: "deny" };
       const target = details.url || "about:blank";
       if (target !== "about:blank") {
         try { websiteURL(target); } catch { void this.openExternal(page, contents, target); return { action: "deny" }; }
@@ -691,6 +759,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
         action: "allow", outlivesOpener: !popup,
         overrideBrowserWindowOptions: {
           parent: page.owner, width: 1000, height: 750, autoHideMenuBar: true,
+          ...(page.automation ? { show: false } : {}),
           frame: true, alwaysOnTop: false, fullscreen: false,
           webPreferences: {
             partition: BROWSER_PARTITION, preload: "", contextIsolation: true,
@@ -718,7 +787,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
             if (error.code !== "ERR_ABORTED" && this.pages.has(child.id)) { child.error = error.message; this.emit(page.group); }
           });
         }
-        if (details.disposition !== "background-tab") this.activate(page.group, tab);
+        if (!page.automation && details.disposition !== "background-tab") this.activate(page.group, tab);
         this.emit(page.group);
         return view.webContents;
       };
@@ -735,6 +804,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     });
   }
   private async openExternal(page: WorkspacePage, contents: WebContents, value: string): Promise<void> {
+    if (page.automation) return;
     // Never hand local files, executable URLs, or browser-internal schemes to
     // the OS. Custom application links still require an explicit user choice.
     let url: URL;
@@ -751,7 +821,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
         message: `This website wants to open a ${url.protocol.slice(0, -1)} link.`,
         detail: value, buttons: ["Cancel", "Open"], defaultId: 0, cancelId: 0, noLink: true,
       });
-      if (response === 1 && !contents.isDestroyed() && this.pages.get(page.id) === page
+      if (response === 1 && !page.automation && !contents.isDestroyed() && this.pages.get(page.id) === page
         && requestOrigin(contents.getURL()) === origin) await shell.openExternal(value);
     } catch (error) {
       console.warn("[web-workspace] Could not open external link", error);

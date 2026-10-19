@@ -7,11 +7,12 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, nativeImage, type WebContentsView, type WebContentsViewConstructorOptions } from "electron";
+import { app, BrowserWindow, nativeImage, webContents, session, type WebContentsView, type WebContentsViewConstructorOptions } from "electron";
+import { WebWorkspaceHost } from "../src/main/webWorkspaceHost";
 import { createBrowserView } from "../src/main/browserView";
 import { AppServerClientPool } from "../src/main/appServerClients";
 import {
-  BrowserHostCoordinator, defaultBrowserHostDeps,
+  BrowserHostCoordinator, defaultBrowserHostDeps, installBrowserSessionHandlers, BROWSER_PARTITION,
   type BrowserHostWindowHandle, type BrowserViewHandle,
 } from "../src/main/browserHostWindows";
 import type { WindowRegistry } from "../src/main/windowRegistry";
@@ -68,7 +69,7 @@ const activeTurnIDs = new Map<string, string>();
 const activeExecutionIDs = new Map<string, string>();
 const controlledResponses = new Map<string, ServerResponse>();
 const controlledWaiters = new Map<string, ReturnType<typeof deferred>>();
-const controlledMarkers = new Set(["OWNERSHIP_HIDDEN", "OWNERSHIP_CAPTURE_CANCEL", "OWNERSHIP_C", "OWNERSHIP_C_CONTINUE", "OWNERSHIP_LIFECYCLE", "OWNERSHIP_KEEP", "OWNERSHIP_DISPOSE", "OWNERSHIP_SIBLING", "OWNERSHIP_FOREIGN", "OWNERSHIP_RETAINED_AGAIN"]);
+const controlledMarkers = new Set(["OWNERSHIP_WORKSPACE", "OWNERSHIP_HIDDEN", "OWNERSHIP_CAPTURE_CANCEL", "OWNERSHIP_C", "OWNERSHIP_C_CONTINUE", "OWNERSHIP_LIFECYCLE", "OWNERSHIP_KEEP", "OWNERSHIP_DISPOSE", "OWNERSHIP_SIBLING", "OWNERSHIP_FOREIGN", "OWNERSHIP_RETAINED_AGAIN"]);
 function controlledWaiter(marker: string) {
   let waiter = controlledWaiters.get(marker);
   if (!waiter) { waiter = deferred(); controlledWaiters.set(marker, waiter); }
@@ -212,7 +213,7 @@ const server = createServer((req, res) => {
     const step = turns.get(marker) ?? 0;
     turns.set(marker, step + 1);
     if (step === 0) {
-      respond(res, marker === "OWNERSHIP_C_CONTINUE" ? { action: "tabs" }
+      respond(res, ["OWNERSHIP_C_CONTINUE", "OWNERSHIP_WORKSPACE"].includes(marker) ? { action: "tabs" }
         : { action: "navigate", url: `${baseURL}/${["OWNERSHIP_POPUP", "OWNERSHIP_LIFECYCLE", "OWNERSHIP_KEEP"].includes(marker) ? "popup-opener" : marker}` });
       return;
     }
@@ -963,6 +964,155 @@ app.whenReady().then(async () => {
   const lateCompletedInput = await request(c, "browser/cdp", { tab_id: cTab, method: "click", params: { x: 140, y: 120 } })
     .then(() => "delivered", error => String(error));
   check("completion revokes the fresh execution too", lateCompletedInput !== "delivered", lateCompletedInput);
+  // Borrow real ribbon/plugin native views through the same Go tool and
+  // reverse-RPC route. No external accounts or duplicate navigation are used.
+  const websiteReveals: string[] = [];
+  const websites = new WebWorkspaceHost(() => undefined, () => undefined, { onReveal: (_owner, id) => websiteReveals.push(id) });
+  const workspaceSource = websites.browserSource(() => main);
+  host.setWorkspaceSource(workspaceSource);
+  host.setRendererSink({
+    surface() {}, presented() {}, adopted() {},
+    userInput(payload) {
+      if (!payload.workspace || !payload.activityID || payload.inputGeneration === undefined) return;
+      void pool!.requestForWorkdir<{ activity: ActivitySession }>(payload.workdir, "activity/takeover", {
+        thread_id: payload.threadID, activity_id: payload.activityID, execution_id: payload.executionID,
+      }).then(result => host!.acknowledgeLocalTakeover(result.activity, payload.inputGeneration!));
+    },
+  });
+  installBrowserSessionHandlers(session.fromPartition(BROWSER_PARTITION), host, websites);
+  const ribbon = websites.open(main, { id: "acceptance-ribbon", url: `${baseURL}/workspace-ribbon`, tabs: true });
+  websites.reportBounds(main, ribbon.id, { x: 0, y: 40, width: 800, height: 550 });
+  const plugin = websites.open(main, { id: "plugin:feishu-workspace:page", url: `${baseURL}/workspace-plugin` });
+  const otherWindow = new BrowserWindow({ show: false });
+  websites.open(otherWindow, { id: "other-window", url: `${baseURL}/workspace-private` });
+  const ribbonTab = workspaceSource.list().find(tab => tab.workspace_id === ribbon.id)!;
+  const pluginTab = workspaceSource.list().find(tab => tab.workspace_id === plugin.id)!;
+  assert(ribbonTab && pluginTab);
+  const ribbonContents = (main.contentView.children.find(view => {
+    const contents = (view as WebContentsView).webContents;
+    return contents && websites.ownsWebContents(contents.id);
+  }) as WebContentsView | undefined)?.webContents;
+  assert(ribbonContents);
+  if (ribbonContents.isLoading()) await bounded("ribbon website loads", new Promise<void>(resolve => ribbonContents.once("did-stop-loading", resolve)));
+  const nativeRibbonID = ribbonContents.id;
+  await ribbonContents.executeJavaScript("window.workspaceNonce='original-live-document'; document.cookie='workspace_fixture=retained'; undefined");
+  websites.setZoom(main, ribbon.id, 1.25);
+  const initialListeners = ribbonContents.listenerCount("before-input-event");
+  const workspace = await start("OWNERSHIP_WORKSPACE");
+  await bounded("workspace discovery through real Go tool", controlledWaiter("OWNERSHIP_WORKSPACE").promise);
+  const discoveryText = lastToolText(providerRequests.at(-1) as { messages?: { role: string; content?: unknown }[] });
+  check("tabs exposes live ribbon and plugin candidates without private windows", discoveryText.includes(ribbonTab.tab_id) && discoveryText.includes(pluginTab.tab_id) && !discoveryText.includes("workspace-private"), discoveryText);
+  check("discovery does not attach debuggers or read page content", !ribbonContents.debugger.isAttached() && !discoveryText.includes("original-live-document"));
+  const nativePresentationsBeforeAttach = nativePresentations.length;
+  await controlledTool("OWNERSHIP_WORKSPACE", { action: "attach", tab_id: ribbonTab.tab_id });
+  check("explicit attach borrows the original ribbon contents", host.ownsWebContents(nativeRibbonID) && host.tabSurfaceMeta(workdir, ribbonTab.tab_id)?.url === `${baseURL}/workspace-ribbon` && ribbonContents.id === nativeRibbonID);
+  check("attachment preserves URL, cookies, selection and document state", await ribbonContents.executeJavaScript("window.workspaceNonce==='original-live-document' && document.cookie.includes('workspace_fixture=retained')") === true && websites.open(main, { id: ribbon.id, url: `${baseURL}/workspace-ribbon`, tabs: true }).activeTabId === ribbon.activeTabId);
+  check("attachment does not show or focus a native window", nativePresentations.length === nativePresentationsBeforeAttach && websiteReveals.length === 0);
+  check("visible borrowed page remains in its website panel", host.isInPanel(workdir, ribbonTab.tab_id) && main.contentView.children.some(view => (view as WebContentsView).webContents?.id === nativeRibbonID));
+  await controlledTool("OWNERSHIP_WORKSPACE", { action: "observe", tab_id: ribbonTab.tab_id });
+  const workspaceObservation = lastToolText(providerRequests.at(-1) as { messages?: { role: string; content?: unknown }[] });
+  const workspaceNode = /\[(\d+)\][^\n]*Target/.exec(workspaceObservation)?.[1];
+  assert(workspaceNode, workspaceObservation);
+  await controlledTool("OWNERSHIP_WORKSPACE", { action: "click", tab_id: ribbonTab.tab_id, node_id: Number(workspaceNode) });
+  check("ordinary Browser Use input changes the same user page", await ribbonContents.executeJavaScript("window.clicks") === 1);
+  await controlledTool("OWNERSHIP_WORKSPACE", { action: "detach", tab_id: ribbonTab.tab_id });
+  check("detach keeps native page and zoom while removing debugger and listeners", !ribbonContents.isDestroyed() && !ribbonContents.debugger.isAttached() && ribbonContents.listenerCount("before-input-event") === initialListeners && ribbonContents.getZoomFactor() === 1.25 && !host.ownsWebContents(nativeRibbonID));
+  const viewsBeforeDetachedRead = webContents.getAllWebContents().length;
+  await controlledTool("OWNERSHIP_WORKSPACE", { action: "observe", tab_id: ribbonTab.tab_id });
+  check("detached workspace read fails without recreating or adopting a page", webContents.getAllWebContents().length === viewsBeforeDetachedRead && !ribbonContents.debugger.isAttached());
+  await controlledTool("OWNERSHIP_WORKSPACE", { action: "attach", tab_id: ribbonTab.tab_id });
+  const competitor = await pool.request<{ thread: Thread }>("thread/start", { engine: "wuu", provider: "fixture", model: "fixture", permission_mode: "unconfined" });
+  host.handleServerEvent({ kind: "notification", workdir, message: { method: "browser/turn_started", params: { workdir, thread_id: competitor.thread.id, turn_id: "foreign", execution_id: "foreign" } } } as ServerEvent);
+  const foreignAttach = await request(competitor.thread.id, "browser/open_tab", { tab_id: ribbonTab.tab_id, workspace_tab_id: ribbonTab.tab_id, turn_id: "foreign", execution_id: "foreign" }).then(() => "attached", error => String(error));
+  check("another thread cannot attach the same borrowed page", foreignAttach !== "attached", foreignAttach);
+  websites.reportBounds(main, ribbon.id, null);
+  const previewWindow = new BrowserWindow({ show: false });
+  const restoredBounds = host.mountTabOnWindow(workdir, ribbonTab.tab_id, previewWindow as unknown as BrowserHostWindowHandle, { x: 0, y: 0, width: 400, height: 275 }, 0.5);
+  check("PiP mounts the adopted live contents instead of a duplicate", Boolean(restoredBounds) && previewWindow.contentView.children.some(view => (view as WebContentsView).webContents?.id === nativeRibbonID));
+  check("PiP Expand targets the original website destination", host.revealWorkspaceTab(workdir, ribbonTab.tab_id) && websiteReveals.at(-1) === ribbon.id);
+  await controlledTool("OWNERSHIP_WORKSPACE", { action: "detach", tab_id: ribbonTab.tab_id });
+  check("releasing PiP restores native website ownership and geometry", main.contentView.children.some(view => (view as WebContentsView).webContents?.id === nativeRibbonID) && !ribbonContents.debugger.isAttached() && ribbonContents.getZoomFactor() === 1.25);
+  previewWindow.destroy();
+  websites.reportBounds(main, ribbon.id, null);
+  websites.reportBounds(main, plugin.id, { x: 0, y: 40, width: 800, height: 550 });
+  const pluginContents = webContents.getAllWebContents().find(contents => contents.getURL() === `${baseURL}/workspace-plugin`);
+  assert(pluginContents);
+  if (pluginContents.isLoading()) await bounded("plugin website loads", new Promise<void>(resolve => pluginContents.once("did-stop-loading", resolve)));
+  const nativePluginID = pluginContents.id;
+  await pluginContents.executeJavaScript("window.workspaceNonce='original-plugin-document'; undefined");
+  await controlledTool("OWNERSHIP_WORKSPACE", { action: "attach", tab_id: pluginTab.tab_id });
+  check("plugin WebPage attaches through the same browser mechanism", host.tabSurfaceMeta(workdir, pluginTab.tab_id)?.url === `${baseURL}/workspace-plugin` && host.isInPanel(workdir, pluginTab.tab_id));
+  // The renderer retention journey checks the Chat click itself. Its native
+  // contract is a null bounds update, never page destruction or navigation.
+  websites.reportBounds(main, plugin.id, null);
+  await controlledTool("OWNERSHIP_WORKSPACE", { action: "observe", tab_id: pluginTab.tab_id });
+  const pluginObservation = lastToolText(providerRequests.at(-1) as { messages?: { role: string; content?: unknown }[] });
+  const pluginNode = /\[(\d+)\][^\n]*Target/.exec(pluginObservation)?.[1];
+  assert(pluginNode, pluginObservation);
+  await controlledTool("OWNERSHIP_WORKSPACE", { action: "click", tab_id: pluginTab.tab_id, node_id: Number(pluginNode) });
+  check("Browser Use continues on the same hidden plugin document", !host.isInPanel(workdir, pluginTab.tab_id) && pluginContents.id === nativePluginID && await pluginContents.executeJavaScript("window.clicks===1 && window.workspaceNonce==='original-plugin-document'") === true);
+  const pluginPreview = new BrowserWindow({ show: false });
+  const pluginPreviewBounds = host.mountTabOnWindow(workdir, pluginTab.tab_id, pluginPreview as unknown as BrowserHostWindowHandle, { x: 0, y: 0, width: 400, height: 275 }, 0.5);
+  check("plugin PiP uses the original live page", Boolean(pluginPreviewBounds) && pluginPreview.contentView.children.some(view => (view as WebContentsView).webContents?.id === nativePluginID));
+  check("plugin PiP Expand identifies its original retained view", host.revealWorkspaceTab(workdir, pluginTab.tab_id) && websiteReveals.at(-1) === plugin.id);
+  websites.reportBounds(main, plugin.id, { x: 0, y: 40, width: 800, height: 550 });
+  check("revealing the plugin restores its existing contents from PiP", host.isInPanel(workdir, pluginTab.tab_id) && main.contentView.children.some(view => (view as WebContentsView).webContents?.id === nativePluginID) && pluginContents.id === nativePluginID);
+  writeFileSync(join(output, "adopted-plugin-page.png"), (await pluginContents.capturePage(undefined, { stayHidden: true })).toPNG());
+  pluginPreview.destroy();
+  await finishControlled("OWNERSHIP_WORKSPACE", workspace);
+  check("turn completion releases plugin binding and preserves plugin page", !host.tabSurfaceMeta(workdir, pluginTab.tab_id) && workspaceSource.list().some(tab => tab.tab_id === pluginTab.tab_id));
+
+  const takeoverWorkspace = await start("OWNERSHIP_WORKSPACE");
+  await bounded("workspace takeover execution", controlledWaiter("OWNERSHIP_WORKSPACE").promise);
+  await controlledTool("OWNERSHIP_WORKSPACE", { action: "attach", tab_id: ribbonTab.tab_id });
+  const readForTakeover = await request(takeoverWorkspace, "browser/cdp", { tab_id: ribbonTab.tab_id, method: "observe", params: {} }) as { result: { nodes: { node_id: number; name: string }[] } };
+  const takeoverNode = readForTakeover.result.nodes.find(node => node.name === "Target")!;
+  const workspaceGate = { entered: deferred(), resume: deferred() };
+  const sendWorkspace = ribbonContents.debugger.sendCommand.bind(ribbonContents.debugger);
+  ribbonContents.debugger.sendCommand = async (method, params, sessionID) => {
+    const result = await sendWorkspace(method, params, sessionID);
+    if (method === "DOM.getBoxModel") { workspaceGate.entered.resolve(); await workspaceGate.resume.promise; }
+    return result;
+  };
+  const lateWorkspaceInput = request(takeoverWorkspace, "browser/cdp", { tab_id: ribbonTab.tab_id, method: "click", params: { node_id: takeoverNode.node_id } }).then(() => "delivered", error => String(error));
+  await bounded("workspace input awaits geometry", workspaceGate.entered.promise);
+  websites.command(main, ribbon.id, "takeOver");
+  workspaceGate.resume.resolve();
+  const workspaceInterrupted = await lateWorkspaceInput;
+  ribbonContents.debugger.sendCommand = sendWorkspace;
+  check("native website takeover fences pending browser input immediately", workspaceInterrupted !== "delivered" && await ribbonContents.executeJavaScript("window.clicks") === 1 && !ribbonContents.debugger.isAttached(), workspaceInterrupted);
+  await bounded("native workspace takeover interrupts the owning turn", completed.get(takeoverWorkspace)!.promise);
+  check("native takeover reaches the real core activity", terminalEvents.get(takeoverWorkspace)?.status === "interrupted");
+  controlledResponses.get("OWNERSHIP_WORKSPACE")?.end();
+  controlledResponses.delete("OWNERSHIP_WORKSPACE");
+
+  const stoppedWorkspace = await start("OWNERSHIP_WORKSPACE");
+  await bounded("workspace stop execution", controlledWaiter("OWNERSHIP_WORKSPACE").promise);
+  await controlledTool("OWNERSHIP_WORKSPACE", { action: "attach", tab_id: ribbonTab.tab_id });
+  await pool.request("activity/stop", controlParams(stoppedWorkspace));
+  await bounded("workspace stop reaches terminal", completed.get(stoppedWorkspace)!.promise);
+  check("Stop returns the original live page and detaches automation", !ribbonContents.isDestroyed() && !ribbonContents.debugger.isAttached() && !host.tabSurfaceMeta(workdir, ribbonTab.tab_id));
+  controlledResponses.get("OWNERSHIP_WORKSPACE")?.end();
+  controlledResponses.delete("OWNERSHIP_WORKSPACE");
+
+  const unloadedWorkspace = await start("OWNERSHIP_WORKSPACE");
+  await bounded("workspace plugin unload execution", controlledWaiter("OWNERSHIP_WORKSPACE").promise);
+  await controlledTool("OWNERSHIP_WORKSPACE", { action: "attach", tab_id: pluginTab.tab_id });
+  websites.close(main, plugin.id);
+  check("plugin page unload invalidates the borrowed binding", !host.tabSurfaceMeta(workdir, pluginTab.tab_id) && !workspaceSource.list().some(tab => tab.tab_id === pluginTab.tab_id));
+  await bounded("plugin unload interrupts its owning turn", completed.get(unloadedWorkspace)!.promise);
+  controlledResponses.get("OWNERSHIP_WORKSPACE")?.end();
+  controlledResponses.delete("OWNERSHIP_WORKSPACE");
+
+  const teardownWorkspace = await start("OWNERSHIP_WORKSPACE");
+  await bounded("workspace teardown execution", controlledWaiter("OWNERSHIP_WORKSPACE").promise);
+  await controlledTool("OWNERSHIP_WORKSPACE", { action: "attach", tab_id: ribbonTab.tab_id });
+  host.onClientTorndown(workdir);
+  check("core teardown releases borrowed pages without closing user tabs", !ribbonContents.isDestroyed() && !ribbonContents.debugger.isAttached() && !host.ownsWebContents(nativeRibbonID));
+  await finishControlled("OWNERSHIP_WORKSPACE", teardownWorkspace);
+  websites.destroyAll();
+  otherWindow.destroy();
+
   const disposal = await start("OWNERSHIP_DISPOSE");
   await bounded("disposal turn opens a live page", controlledWaiter("OWNERSHIP_DISPOSE").promise);
   const disposalTab = openedForThread(disposal)[0];

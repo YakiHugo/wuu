@@ -253,6 +253,7 @@ export type BrowserOpenTabParams = {
   workdir: string;
   tab_id: string;
   initial_url?: string;
+  workspace_tab_id?: string;
 };
 
 export type BrowserCloseTabParams = {
@@ -293,11 +294,15 @@ export type BrowserListedTab = {
   url?: string;
   title?: string;
   status?: BrowserTabStatus;
+  workspace_id?: string;
+  active?: boolean;
+  source?: "website" | "plugin";
 };
 
 export type BrowserListTabsResult = {
   tab_ids: string[];
   tabs?: BrowserListedTab[];
+  workspace_tabs?: BrowserListedTab[];
 };
 
 export type BrowserTabStatus = "temporary" | "persistent" | "handoff" | "deliverable";
@@ -478,7 +483,7 @@ export interface ExtensionThemeDescriptor {
   syntax?: Record<string, string>;
 }
 
-export type ExtensionSettingType = "boolean" | "string" | "number" | "enum";
+export type ExtensionSettingType = "boolean" | "string" | "number" | "enum" | "secret";
 export type ExtensionSettingScope = "user" | "workspace";
 export type ExtensionSettingApplyMode = "live" | "restart";
 
@@ -491,6 +496,7 @@ export interface ExtensionSettingDescriptor {
   enum?: string[];
   scope: ExtensionSettingScope;
   apply: ExtensionSettingApplyMode;
+  credential_origins?: string[];
 }
 
 export type ExtensionContributions = {
@@ -725,6 +731,8 @@ export interface PluginIdentityParams { id: string; fingerprint: string; }
 export interface PluginSettingGetParams extends PluginIdentityParams { key: string; }
 export interface PluginSettingSetParams extends PluginSettingGetParams { value: boolean | string | number; }
 export interface PluginSettingResult {
+  /** Secret values are always blank; this only indicates presence in the OS credential store. */
+  configured?: boolean;
   id: string;
   key: string;
   scope: PluginValueScope;

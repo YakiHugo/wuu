@@ -39,6 +39,7 @@ const (
 	KernelStorageCompareExchangeService = "host.storage.compare-exchange"
 	KernelSettingsGetService            = "host.settings.get"
 	KernelSettingsListService           = "host.settings.list"
+	KernelCredentialsRequestService     = "host.credentials.request"
 	KernelSessionCreateService          = "host.session.create"
 	KernelSessionSendService            = "host.session.send"
 	KernelSessionListService            = "host.session.list"
@@ -85,7 +86,7 @@ func KernelServiceDescriptors() []ServiceDescriptor {
 		KernelSessionCancelService, KernelSessionInspectService,
 		KernelSessionHistoryReadService, KernelSessionHistorySearchService,
 		KernelWorkspaceStatusService, KernelWorkspaceApplyService, KernelWorkspaceDiscardService,
-		KernelSessionControlService,
+		KernelSessionControlService, KernelCredentialsRequestService,
 	}
 	descriptors := make([]ServiceDescriptor, 0, len(names))
 	for _, name := range names {
