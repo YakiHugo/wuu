@@ -641,11 +641,19 @@ db.commit()
       assert.equal(collapsed.x, before.x); assert.equal(collapsed.y, before.y);
       assert.ok(await point(conversations, false), 'Ribbon remains interactive when context is collapsed');
       moveNativePointer(collapsed.x, collapsed.y);
-      // Explicit collapse keeps the persistent toggle quiet. Only the exposed
-      // content edge owns hover preview; the toggle can still dock that preview.
-      await delay(400);
-      assert.ok(await evaluate(() => document.querySelector('.app-shell').classList.contains('sidebar-collapsed')
-        && !document.querySelector('.app-shell').classList.contains('sidebar-drawer-open')), 'Hovering the persistent toggle preserves explicit collapse');
+      await waitFor(selector => document.querySelector(selector).matches(':hover'), leftToggle);
+      // Observe beyond the drawer's 240ms reveal delay: the persistent toggle
+      // may retain an existing preview, but must never activate one itself.
+      const toggleStayedClosed = await evaluate(async () => {
+        const shell = document.querySelector('.app-shell');
+        const deadline = performance.now() + 400;
+        do {
+          if (!shell.classList.contains('sidebar-collapsed') || shell.classList.contains('sidebar-drawer-open')) return false;
+          await new Promise(requestAnimationFrame);
+        } while (performance.now() < deadline);
+        return true;
+      });
+      assert.ok(toggleStayedClosed, 'Hovering the persistent toggle keeps the secondary pane collapsed');
       await capture(`${section}-collapsed-toggle-hover`);
       const edge = await point('.app-shell > .sidebar-hover-zone', false);
       moveNativePointer(edge.x, edge.y);
@@ -681,7 +689,7 @@ db.commit()
       key('Left');
       await waitFor(({ selector, width }) => Number(document.querySelector(selector).getAttribute('aria-valuenow')) === width, { selector: resize, width });
       await capture(`${section}-keyboard-resized`);
-      runs.push({ section, before, collapsed, edge, hovered, focusAnchor, focusTarget, width, grown });
+      runs.push({ section, before, collapsed, toggleStayedClosed, edge, hovered, focusAnchor, focusTarget, width, grown });
     }
     await goConversations(); return runs;
   });
