@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { UILayerTarget } from "./ui/layers/UILayerHost";
 import type { WebWorkspaceApi } from "../shared/webWorkspace";
+import { startFocusModality } from "./FocusModality";
 
 let popup: Window | null = null;
 
@@ -26,6 +27,7 @@ export function NativeBrowserPopover({ children, onDismiss, focus = true }: {
     style.textContent = 'html,body{background:transparent!important;margin:0!important;overflow:hidden!important}body{height:100vh}';
     doc.head.append(style);
     doc.body.dataset.browserPopover = "";
+    const stopFocusModality = startFocusModality(doc);
     let disposed = false, last = "", first = true;
     const report = (): void => {
       if (disposed || !doc.body.firstElementChild) return;
@@ -62,6 +64,7 @@ export function NativeBrowserPopover({ children, onDismiss, focus = true }: {
     window.addEventListener("resize", report);
     return () => {
       disposed = true; mutation.disconnect(); resize.disconnect(); unsubscribe();
+      stopFocusModality();
       child.removeEventListener("keydown", escape); window.removeEventListener("resize", report);
       void api.reportPopover(token, null);
     };

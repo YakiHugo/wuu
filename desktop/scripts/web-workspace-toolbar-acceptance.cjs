@@ -83,6 +83,9 @@ module.exports = async function acceptToolbar(h) {
     await until(() => evaluate(() => document.querySelector('[data-web-workspace-downloads-trigger]').getAttribute('aria-expanded') === 'false'), 'native close button');
     await nativeClick('[data-browser-library-trigger]');
     await until(() => evaluate(() => document.activeElement?.matches('input[type="search"]'), undefined, popupContents()), 'library search focus');
+    await nativeInput(['key','Tab']);
+    await until(() => evaluate(() => getComputedStyle(document.activeElement).outlineStyle !== 'none', undefined, popupContents()), 'popup keyboard focus is visible');
+    await nativeInput(['key','shift+Tab']);
     await nativeInput(['key','ctrl+a']); await nativeInput(['type', 'animated']);
     await until(() => evaluate(() => document.querySelector('input[type="search"]').value === 'animated' && document.querySelectorAll('[data-library-entry]').length === 1, undefined, popupContents()), 'native library search');
     await nativeClick('[data-library-clear-history]', popupContents());
@@ -117,5 +120,28 @@ module.exports = async function acceptToolbar(h) {
   await nativeClick('[data-address-suggestion-url]', popupContents());
   await until(() => evaluate(() => document.querySelector('.web-workspace-address input').getAttribute('aria-expanded') === 'false'), 'pointer selects suggestion');
   await until(() => view.webContents.getURL().endsWith('/static') && !view.webContents.isLoading(), 'pointer suggestion navigates');
+  const toolbarEvents=[], originalVisible=view.setVisible;
+  view.setVisible=function(visible){toolbarEvents.push(visible);return originalVisible.call(this,visible)};
+  try {
+    for(let repeat=0;repeat<3;repeat++) {
+      const before=await evaluate(()=>document.querySelector('[data-browser-bookmark-current]').getAttribute('aria-pressed'));
+      await nativeClick('[data-browser-bookmark-current]');
+      await until(()=>evaluate(value=>document.querySelector('[data-browser-bookmark-current]').getAttribute('aria-pressed')!==value,before),'bookmark toggles');
+      await nativeClick('.web-workspace-actions button[aria-haspopup="menu"]');
+      await until(()=>evaluate(()=>document.querySelector('.web-workspace-actions button[aria-haspopup="menu"]').getAttribute('aria-expanded')==='true'),'native options open');
+      await nativeInput(['key','Escape']);
+      await until(()=>evaluate(()=>document.querySelector('.web-workspace-actions button[aria-haspopup="menu"]').getAttribute('aria-expanded')==='false'),'native options close');
+    }
+    assert.equal(toolbarEvents.includes(false),false,'Bookmark and options retain native page');
+  } finally {view.setVisible=originalVisible;}
+  await nativeClick('[data-web-workspace-downloads-trigger]');
+  await nativeInput(['key','ctrl+l']);
+  await until(()=>evaluate(()=>document.activeElement?.matches('.web-workspace-address input') && document.querySelector('[data-web-workspace-downloads-trigger]').getAttribute('aria-expanded')==='false'),'address shortcut from popup');
+  await nativeClick('[data-browser-library-trigger]');
+  const closingContents = view.webContents;
+  await nativeInput(['key','ctrl+w']);
+  await until(()=>closingContents.isDestroyed(),'close-tab shortcut from popup');
+  assert.equal(win.isDestroyed(),false,'Close-tab must retain the shell window');
+  report.interactions.push({bookmarkOptionsRepeats:3,toolbarEvents,addressShortcut:true,closeTabShortcut:true});
   fs.writeFileSync(path.join(output, 'interactions.json'), JSON.stringify(report.interactions,null,2));
 };
