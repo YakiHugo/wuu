@@ -5,8 +5,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
+const { spawnSync } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
-const { app, webContents } = require('electron');
+const { app, webContents, nativeImage } = require('electron');
 const desktop = path.resolve(__dirname, '..');
 const output = process.env.WUU_CAPSULE_OUTPUT || path.join(desktop, 'out/e2e/context-chat-capsule');
 const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'wuu-capsule-'));
@@ -19,6 +20,7 @@ process.env.WUU_DESKTOP_CORE ||= path.join(desktop, 'build/bin/wuu-core');
 delete process.env.ELECTRON_RENDERER_URL;
 for (const name of Object.keys(process.env)) if (/(?:API_KEY|ACCESS_TOKEN|AUTH_TOKEN|SECRET|PASSWORD)$/.test(name)) delete process.env[name];
 const requests = [], checks = [], errors = [], screenshots = [];
+let diagnostics;
 let main, phase = 'startup';
 const server = http.createServer((req, res) => {
   if (req.method === 'GET' && req.url.startsWith('/page')) {
@@ -39,17 +41,41 @@ const server = http.createServer((req, res) => {
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const evaluate = (target, fn, value) => target.executeJavaScript(`(${fn})(${JSON.stringify(value)})`, true);
 async function until(fn, label = phase) { const deadline = Date.now() + 30000; while (Date.now() < deadline) { const value = await fn(); if (value) return value; await delay(30); } throw new Error(`Timed out: ${label}`); }
-async function shot(name) { fs.writeFileSync(path.join(output, `${name}.png`), (await main.capturePage()).toPNG()); screenshots.push(`${name}.png`); }
-const capsule = () => webContents.getAllWebContents().find(contents => contents.getURL().endsWith('/chrome-overlay.html?surface=capsule'));
+async function shot(name) {
+  // BrowserWindow.capturePage omits WebContentsView children. Capture the real
+  // X11 compositor so the fixture website and privileged capsule are visible.
+  const bounds = main.getBounds();
+  const capture = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'x11grab', '-video_size', `${bounds.width}x${bounds.height}`,
+    '-i', `${process.env.DISPLAY}+${bounds.x},${bounds.y}`, '-frames:v', '1', '-f', 'image2pipe', '-vcodec', 'png', 'pipe:1'], { timeout: 12000, maxBuffer: 24 * 1024 * 1024 });
+  assert.equal(capture.status, 0, String(capture.stderr || capture.error));
+  assert.ok(!nativeImage.createFromBuffer(capture.stdout).isEmpty());
+  fs.writeFileSync(path.join(output, `${name}.png`), capture.stdout); screenshots.push(`${name}.png`);
+}
+const capsuleView = () => main.contentView.children.find(view => view.webContents && !view.webContents.isDestroyed()
+  && view.webContents.getURL().endsWith('/chrome-overlay.html?surface=capsule'));
+function movePointer(x, y) {
+  const moved = spawnSync('xdotool', ['mousemove', '--sync', String(Math.round(x)), String(Math.round(y))], { encoding: 'utf8', timeout: 5000 });
+  assert.equal(moved.status, 0, moved.stderr || String(moved.error));
+}
 async function hoverCapsule() {
-  const target = await until(capsule);
-  target.sendInputEvent({ type: 'mouseMove', x: -10, y: -10 });
-  target.sendInputEvent({ type: 'mouseMove', x: 24, y: 24 });
-  await until(() => evaluate(target, () => document.querySelector('.context-chat-capsule input')));
+  const view = await until(() => { const value = capsuleView(); return value?.getVisible() ? value : null; }, 'Native capsule completes its paint handshake');
+  const target = view.webContents;
+  await until(() => evaluate(target, () => {
+    const ball = document.querySelector('.context-chat-capsule-ball'), bounds = ball?.getBoundingClientRect();
+    return Boolean(ball && bounds.width > 0 && bounds.height > 0);
+  }), 'Native capsule ball is rendered');
+  const origin = main.getContentBounds(), bounds = view.getBounds();
+  movePointer(origin.x + bounds.x - 30, origin.y + bounds.y + 24);
+  await until(() => evaluate(target, () => !document.querySelector('[data-context-capsule]')?.matches(':hover')), 'Pointer leaves capsule before hover');
+  const point = await evaluate(target, () => { const rect = document.querySelector('.context-chat-capsule-ball').getBoundingClientRect(); return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }; });
+  const zoom = target.getZoomFactor(), current = view.getBounds();
+  movePointer(origin.x + current.x + point.x * zoom, origin.y + current.y + point.y * zoom);
+  // DOM nodes are not serializable IPC results. Return a boolean explicitly.
+  await until(() => evaluate(target, () => Boolean(document.querySelector('.context-chat-capsule input'))), 'Hover expands the native capsule input');
   return target;
 }
-function report(passed) { fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify({ passed, phase, checks, errors, screenshots,
-  boundary: 'Shipping Electron main/preload/renderer and Go core; disposable profile and local synthetic HTTP model provider. Native input events exercise the isolated capsule surface. Screenshots are cloud-rendered evidence, not Mac acceptance.', requests: requests.length }, null, 2));
+function report(passed) { fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify({ passed, phase, checks, errors, screenshots, diagnostics,
+  boundary: 'Shipping Electron main/preload/renderer and Go core; disposable profile and local synthetic HTTP model provider. Real X11 pointer input exercises the isolated capsule surface. Screenshots capture the composed native window; they are cloud evidence, not Mac acceptance.', requests: requests.length }, null, 2));
   fs.writeFileSync(path.join(output, 'provider-requests.json'), JSON.stringify(requests, null, 2)); }
 const timeout = setTimeout(() => fail(new Error('Capsule acceptance timed out')), 150000);
 app.on('browser-window-created', (_event, window) => { main ||= window; });
@@ -69,6 +95,7 @@ async function run(port) {
   await until(() => main); main.setSize(1280, 900); main.show(); main.focus();
   await until(() => evaluate(main.webContents, () => Boolean(document.querySelector('[data-context-capsule]'))));
   await shot('01-internal-ball'); checks.push('Internal Wuu view has compact capsule without opening a new conversation.');
+  phase = 'hidden-page context boundary';
   const plugin = await evaluate(main.webContents, url => window.wuu.webWorkspace.open({ id: 'capsule-plugin-fixture', url }), `http://127.0.0.1:${port}/page`);
   assert.equal(typeof plugin.activeTabId, 'string', 'Non-tabbed plugin pages expose their stable browser target.');
   const hiddenRead = await evaluate(main.webContents, async id => {
@@ -77,13 +104,16 @@ async function run(port) {
   assert.equal(hiddenRead, false, 'Hidden pages cannot be included by the capsule.');
   await evaluate(main.webContents, () => window.wuu.webWorkspace.close('capsule-plugin-fixture'));
   checks.push('Plugin website snapshots expose a stable page ID and hidden page context is denied.');
+  phase = 'native website and capsule readiness';
   const state = await evaluate(main.webContents, url => window.wuu.webWorkspace.createTab('ribbon-browser', url), `http://127.0.0.1:${port}/page?token=secret-url#secret-fragment`);
   const tabId = state.activeTabId;
   await until(() => evaluate(main.webContents, id => Boolean(document.querySelector(`[data-ribbon-id="${id}"]`)), tabId));
   await evaluate(main.webContents, id => document.querySelector(`[data-ribbon-id="${id}"]`).click(), tabId);
   const page = await until(() => webContents.getAllWebContents().find(contents => contents.getURL().startsWith(`http://127.0.0.1:${port}/page`)));
   await until(() => evaluate(page, () => Boolean(document.querySelector('#page-input'))));
+  await until(() => main.contentView.children.some(view => view.webContents === page && view.getVisible()), 'Fixture page has visible native ownership');
   await evaluate(page, () => document.querySelector('#page-input').focus()); page.focus();
+  await until(() => page.isFocused(), 'Fixture page owns keyboard focus before hover');
   const focusedBefore = page.isFocused();
   const native = await hoverCapsule();
   assert.equal(page.isFocused(), focusedBefore, 'hover must not steal keyboard focus');
@@ -121,4 +151,13 @@ async function run(port) {
   await shot('05-open-chat'); checks.push('Open chat navigates explicitly to the conversation.');
   phase = 'complete'; report(true); clearTimeout(timeout); server.close(); app.quit();
 }
-async function fail(error) { errors.push(error.stack || String(error)); console.error(error); if (main && !main.isDestroyed()) try { await shot('failure'); } catch {} report(false); clearTimeout(timeout); server.close(); app.exit(1); }
+async function fail(error) {
+  errors.push(error.stack || String(error)); console.error(error);
+  if (main && !main.isDestroyed()) {
+    diagnostics = { ownerVisible: main.isVisible(), ownerFocused: main.isFocused(), views: main.contentView.children.filter(view => view.webContents && !view.webContents.isDestroyed())
+      .map(view => ({ url: view.webContents.getURL(), visible: view.getVisible(), focused: view.webContents.isFocused(), bounds: view.getBounds() })) };
+    try { diagnostics.capsule = await evaluate(capsuleView().webContents, () => ({ html: document.querySelector('#root')?.innerHTML.slice(0, 4000), focused: document.hasFocus(), active: document.activeElement?.outerHTML.slice(0, 300) })); } catch {}
+    try { await shot('failure'); } catch (captureError) { errors.push(`Failure screenshot: ${captureError}`); }
+  }
+  report(false); clearTimeout(timeout); server.close(); app.exit(1);
+}

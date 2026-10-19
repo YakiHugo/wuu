@@ -77,7 +77,7 @@ document.querySelector('#camera').onclick=async()=>{document.querySelector('#per
 }
 
 async function runWebsiteAcceptance(h, fixture) {
-  const { win, report, output, started, save, evaluate, waitFor, settle, delay, point, fill, key, pick, test, goConversations, goSettings, appearance, plugins, conversations } = h;
+  const { win, report, output, started, save, evaluate, waitFor, settle, delay, point, fill: fillShell, key, pick, test, goConversations, goSettings, appearance, plugins, conversations } = h;
   const origin = fixture.origin;
   const addTabButton = '.sidebar-ribbon-add';
   const webTabs = '[data-wuu-component="website-navigation-item"]';
@@ -97,8 +97,55 @@ async function runWebsiteAcceptance(h, fixture) {
   const chromeView = kind => win.contentView.children.find(view => view.webContents && !view.webContents.isDestroyed() && view.webContents.getURL() === `wuu-chrome://ui/chrome-overlay.html?surface=${kind}`);
   const evaluateContents = (wc, fn, value) => wc.executeJavaScript(`(${fn})(${JSON.stringify(value)})`);
   const evaluateRibbon = (fn, value) => chromeView('ribbon')?.getVisible() ? evaluateContents(chromeView('ribbon').webContents, fn, value) : evaluate(fn, value);
+  // Toolbar popovers reuse React in a clipped native child below a View.
+  // Walk the native hierarchy rather than querying its shell placeholder.
+  function nativeLayers(parent = win.contentView, x = 0, y = 0, top) {
+    return parent.children.flatMap(view => {
+      if (!view.getVisible()) return [];
+      const b = view.getBounds(), layer = { view, x: x + b.x, y: y + b.y, top: top || view };
+      return [...(view.webContents && !view.webContents.isDestroyed() ? [layer] : []), ...nativeLayers(view, layer.x, layer.y, layer.top)];
+    });
+  }
+  async function nativePopover() {
+    for (const layer of nativeLayers()) {
+      const wc = layer.view.webContents;
+      if (wc.getURL() !== 'about:blank') continue;
+      if (await wc.executeJavaScript('document.body?.hasAttribute("data-browser-popover")').catch(() => false)) return layer;
+    }
+  }
+  async function evaluatePopover(fn, value) {
+    const layer = await nativePopover();
+    return layer ? evaluateContents(layer.view.webContents, fn, value) : undefined;
+  }
+  const waitPopover = (fn, value, label = String(fn)) => until(() => evaluatePopover(`async argument => Boolean(await (${fn})(argument))`, value), label);
+  async function fill(target, value) {
+    const query = typeof target === 'string' ? target : target.selector;
+    if (!await evaluatePopover(selector => Boolean(document.querySelector(selector)), query)) return fillShell(target, value);
+    await click(target, 'focus-native-popover-input', false);
+    await waitPopover(selector => document.activeElement?.matches(selector), query);
+    xinput(['key', '--clearmodifiers', 'ctrl+a']);
+    await waitPopover(selector => { const input = document.querySelector(selector); return input.selectionStart === 0 && input.selectionEnd === input.value.length; }, query);
+    if (value) xinput(['type', '--clearmodifiers', '--delay', '8', value]); else xinput(['key', 'BackSpace']);
+    await waitPopover(({ selector, value }) => document.querySelector(selector)?.value === value, { selector: query, value });
+  }
   async function chromePoint(target) {
     const query = typeof target === 'string' ? { selector: target } : target;
+    const popover = await nativePopover();
+    if (popover) {
+      const p = await evaluateContents(popover.view.webContents, ({ selector, text }) => {
+        const node = [...document.querySelectorAll(selector)].find(node => (text === undefined || (node.getAttribute('aria-label') || node.textContent || '').trim() === text) && node.getBoundingClientRect().width > 0);
+        if (!node) return null;
+        const r = node.getBoundingClientRect(), x = r.x + r.width / 2, y = r.y + r.height / 2;
+        if (!node.contains(document.elementFromPoint(x, y)) || node.disabled) throw new Error('Native popover target is occluded or disabled: ' + selector);
+        return { x, y };
+      }, query);
+      if (p) {
+        const z = popover.view.webContents.getZoomFactor(), ownerZoom = win.webContents.getZoomFactor();
+        const screen = { x: popover.x + p.x * z, y: popover.y + p.y * z }, clip = popover.top.getBounds();
+        assert.ok(screen.x >= clip.x && screen.x < clip.x + clip.width && screen.y >= clip.y && screen.y < clip.y + clip.height, 'Native popover control is inside its clipping viewport');
+        return { x: screen.x / ownerZoom, y: screen.y / ownerZoom, nativeChrome: 'popover' };
+      }
+    }
     for (const kind of ['account', 'ribbon']) {
       const view = chromeView(kind);
       if (!view?.getVisible()) continue;
@@ -144,6 +191,7 @@ async function runWebsiteAcceptance(h, fixture) {
     report.screenshots.push({ file: name, source: 'x11-whole-native-window', sha256: createHash('sha256').update(taken.stdout).digest('hex'), atMs: Date.now() - started, image: image.getSize(), window: bounds,
       nativeFocus: { ownerFocused: win.isFocused(), ownerFullscreen: win.isFullScreen(), focusedContentsID: webContents.getFocusedWebContents()?.id ?? null },
       nativeViews: win.contentView.children.filter(view => view.webContents && !view.webContents.isDestroyed()).map(view => ({ id: view.webContents.id, url: view.webContents.getURL(), visible: view.getVisible(), focused: view.webContents.isFocused(), bounds: view.getBounds(), zoom: view.webContents.getZoomFactor() })),
+      visibleNativeLayers: nativeLayers().map(({ view, x, y, top }) => ({ id: view.webContents.id, url: view.webContents.getURL(), focused: view.webContents.isFocused(), x, y, bounds: view.getBounds(), clip: top.getBounds() })),
       activeElement: await evaluate(() => document.activeElement?.outerHTML.slice(0, 240)) });
     save(); await delay(160);
   }
@@ -440,31 +488,19 @@ async function runWebsiteAcceptance(h, fixture) {
     xinput(['key', '--clearmodifiers', 'Return']);
     await until(() => nativeView('/alpha')?.getVisible() && !nativeView('/alpha').webContents.isLoading(), 'Editable URL submits after toolbar drag');
   }
-  async function assertMenuBackdrop(label, qualitySource) {
-    await hidden(label);
-    const selector = '.web-workspace-stage:not([hidden]) .web-workspace-backdrop';
-    await waitFor(selector => {
-      const image = document.querySelector(selector);
-      return image?.complete && image.naturalWidth > 100 && image.naturalHeight > 100 && image.getBoundingClientRect().width > 100;
-    }, selector, `${label}: real page snapshot decoded behind menu`);
-    const source = await evaluate(selector => document.querySelector(selector).src, selector);
-    const image = nativeImage.createFromDataURL(source);
-    const bitmap = image.getBitmap(), colors = new Set();
-    for (let i = 0; i + 3 < bitmap.length; i += 4 * 97) colors.add(bitmap.readUInt32LE(i));
-    assert.ok(colors.size > 12, 'Snapshot has actual nonblank page content, not a flat placeholder');
-    let quality;
-    if (qualitySource) {
-      const live = await qualitySource.capturePage(undefined, { stayHidden: true });
-      const scales = live.getScaleFactors(), highestScale = Math.max(1, ...scales);
-      const original = live.toPNG({ scaleFactor: highestScale });
-      assert.ok(source.startsWith('data:image/png;base64,'), 'The authored page backdrop uses lossless PNG');
-      const backdrop = Buffer.from(source.slice(source.indexOf(',') + 1), 'base64');
-      const pixels = buffer => ({ width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) });
-      quality = { nativeScaleFactors: scales, encodedScale: highestScale, nativePixels: pixels(original), backdropPixels: pixels(backdrop), bytes: backdrop.length };
-      assert.deepEqual(quality.backdropPixels, quality.nativePixels, 'Profile backdrop preserves the native capture pixel resolution without1280-edge downsampling');
-    }
-    report.actions.push({ label: `${label}-snapshot`, atMs: Date.now() - started, image: image.getSize(), sampledColors: colors.size, quality, sha256: createHash('sha256').update(image.toPNG()).digest('hex') });
-    save();
+  async function assertLivePopover(label) {
+    await until(() => nativePopover(), `${label}: native popover is visible`);
+    const layer = await nativePopover(), view = views().find(view => view.getVisible());
+    assert.ok(view, `${label}: the underlying native website remains visible`);
+    const wc = view.webContents, bounds = view.getBounds();
+    const before = await wc.executeJavaScript('({frames:window.fixtureFrames,animation:getComputedStyle(document.querySelector("#live-marker")).transform})');
+    await delay(160);
+    const after = await wc.executeJavaScript('({frames:window.fixtureFrames,animation:getComputedStyle(document.querySelector("#live-marker")).transform})');
+    assert.ok(view.getVisible() && after.frames > before.frames, `${label}: live guest frames continue`);
+    assert.notEqual(after.animation, before.animation, `${label}: visible page animation continues`);
+    assert.deepEqual(view.getBounds(), bounds, `${label}: native page viewport is unchanged`);
+    assert.ok(win.contentView.children.indexOf(layer.top) > win.contentView.children.indexOf(view), `${label}: native popover is above the page`);
+    report.actions.push({ label: `${label}-live-popover`, contentsID: layer.view.webContents.id, pageID: wc.id, bounds, clip: layer.top.getBounds(), atMs: Date.now() - started }); save();
   }
   async function profileMenu(label, wc) {
     if (label === 'narrow-new-tab') await hoverTab((await readSite()).activeTabId);
@@ -903,11 +939,11 @@ async function runWebsiteAcceptance(h, fixture) {
         if (width === 440) {
           for (const [name, trigger, panel] of [['library', '[data-browser-library-trigger]', '[data-browser-library]'], ['downloads', '[data-web-workspace-downloads-trigger]', '[data-web-workspace-downloads]']]) {
             await click(`.web-workspace-toolbar ${trigger}`, `narrow-toolbar-${name}`, false);
-            await waitFor(selector => document.querySelector(selector), panel);
-            await assertMenuBackdrop(`narrow-toolbar-${name}`);
+            await waitPopover(selector => document.querySelector(selector), panel);
+            await assertLivePopover(`narrow-toolbar-${name}`);
             await capture(`narrow-toolbar-${name}`);
             xinput(['key', '--clearmodifiers', 'Escape']);
-            await waitFor(selector => !document.querySelector(selector), panel);
+            await until(async () => !await nativePopover(), `Native ${name} closes on Escape`);
             await until(() => view.getVisible(), 'Closing narrow toolbar menus restores the same native webpage');
           }
         }
@@ -1044,8 +1080,8 @@ async function runWebsiteAcceptance(h, fixture) {
       await until(async () => (await downloads()).some(item => item.filename === 'fixture.txt' && item.state === 'completed'), 'download completed');
       const completed = (await downloads()).find(item => item.filename === 'fixture.txt');
       assert.deepEqual(fs.readFileSync(completed.savePath), fixture.downloadBytes, 'Downloaded bytes match the synthetic response');
-      await click(menu, 'open-downloads'); await assertMenuBackdrop('downloads panel');
-      await waitFor(id => document.querySelector(`[data-download-id="${id}"] [data-download-command="reveal"]`), completed.id);
+      await click(menu, 'open-downloads'); await assertLivePopover('downloads panel');
+      await waitPopover(id => document.querySelector(`[data-download-id="${id}"] [data-download-command="reveal"]`), completed.id);
       await capture('completed-download'); xinput(['key', 'Escape']);
       await until(() => nativeView('/alpha')?.getVisible(), 'restore after downloads');
       await pageClick(wc, '#slow-download', 'start-cancellable-download');
@@ -1080,34 +1116,33 @@ async function runWebsiteAcceptance(h, fixture) {
     const gaze = await mascotGaze();
     await fill(startInput, 'fixture');
     const suggestion = url => `[data-address-suggestion-url="${url}"]`;
-    await waitFor(({ alpha, history }) => document.querySelector(`[data-address-suggestion-url="${alpha}"]`)?.dataset.addressSuggestionSource === 'bookmark'
+    await waitPopover(({ alpha, history }) => document.querySelector(`[data-address-suggestion-url="${alpha}"]`)?.dataset.addressSuggestionSource === 'bookmark'
       && document.querySelector(`[data-address-suggestion-url="${history}"]`)?.dataset.addressSuggestionSource === 'history', { alpha: origin + '/alpha', history: origin + '/history-target' });
     await capture('central-history-and-bookmark-suggestions');
     xinput(['key', '--clearmodifiers', 'Escape']);
-    await waitFor(selector => !document.querySelector('[data-web-workspace-address-suggestions]') && document.activeElement?.matches(selector) && document.activeElement.value === 'fixture', startInput);
+    await until(async () => !await nativePopover(), 'Central suggestions close on Escape');
+    await waitFor(selector => document.activeElement?.matches(selector) && document.activeElement.value === 'fixture', startInput);
     await fill(startInput, 'alpha');
-    await waitFor(selector => document.querySelector(selector), suggestion(origin + '/alpha'));
+    await waitPopover(selector => document.querySelector(selector), suggestion(origin + '/alpha'));
     xinput(['key', '--clearmodifiers', 'Down']);
-    await waitFor(url => document.querySelector(`[data-address-suggestion-url="${url}"]`)?.getAttribute('aria-selected') === 'true', origin + '/alpha');
+    await waitPopover(url => document.querySelector(`[data-address-suggestion-url="${url}"]`)?.getAttribute('aria-selected') === 'true', origin + '/alpha');
     xinput(['key', '--clearmodifiers', 'Return']);
     await until(() => nativeView('/alpha')?.getVisible() && !nativeView('/alpha').webContents.isLoading(), 'Keyboard selection opens the saved bookmark');
     gaze.unmount = await mascotUnmount();
     // The page now owns native focus. A renderer-only sendInputEvent can edit
     // its DOM address field without moving OS focus from the WebContentsView.
     // Exercise the real user's click and typing before judging autocomplete.
-    await click(address, 'focus-toolbar-history-suggestions');
-    await until(() => win.webContents.isFocused(), 'Native toolbar click transfers keyboard focus to the shell');
-    xinput(['key', '--clearmodifiers', 'ctrl+a']);
-    xinput(['type', '--clearmodifiers', '--delay', '0', 'history-target']);
+    await typeAddress('history-target', 'focus-toolbar-history-suggestions');
     await waitFor(selector => document.activeElement?.matches(selector) && document.activeElement.value === 'history-target', address);
-    await waitFor(selector => document.querySelector(selector), suggestion(origin + '/history-target'));
-    await assertMenuBackdrop('toolbar-address-suggestions');
+    await waitPopover(selector => document.querySelector(selector), suggestion(origin + '/history-target'));
+    await assertLivePopover('toolbar-address-suggestions');
     await capture('toolbar-history-suggestion-over-page');
     xinput(['key', '--clearmodifiers', 'Escape']);
-    await waitFor(selector => !document.querySelector('[data-web-workspace-address-suggestions]') && document.activeElement?.matches(selector) && document.activeElement.value === 'history-target', address);
+    await until(async () => !await nativePopover(), 'Toolbar suggestions close on Escape');
+    await waitFor(selector => document.activeElement?.matches(selector) && document.activeElement.value === 'history-target', address);
     await until(() => nativeView('/alpha')?.getVisible(), 'Escape restores native page while retaining address draft');
     xinput(['key', '--clearmodifiers', 'Down']);
-    await waitFor(selector => document.querySelector(selector), suggestion(origin + '/history-target'));
+    await waitPopover(selector => document.querySelector(selector), suggestion(origin + '/history-target'));
     await click(suggestion(origin + '/history-target'), 'choose-history-with-pointer');
     await until(() => nativeView('/history-target')?.getVisible() && !nativeView('/history-target').webContents.isLoading(), 'Pointer selection opens stored history URL');
     const selectedPage = nativeView('/history-target').webContents;
@@ -1117,9 +1152,9 @@ async function runWebsiteAcceptance(h, fixture) {
     await closeActiveTab('close-suggestion-journey-tab');
     assert.equal((await readSite()).tabs.length, tabsBeforeStart, 'Closing suggestion journey removes exactly its one tab');
     await openSite('Fixture Alpha', '/history-target');
-    await click('[data-browser-library-trigger]', 'open-browser-library'); await assertMenuBackdrop('browser library');
+    await click('[data-browser-library-trigger]', 'open-browser-library'); await assertLivePopover('browser library');
     await fill('[data-browser-library] input[type=search]', 'history-target');
-    await waitFor(url => document.querySelector(`[data-library-url="${url}"]`), origin + '/history-target');
+    await waitPopover(url => document.querySelector(`[data-library-url="${url}"]`), origin + '/history-target');
     await capture('searched-browser-history');
     await click('[data-library-section="bookmarks"]', 'show-bookmarks');
     await fill('[data-browser-library] input[type=search]', 'alpha');

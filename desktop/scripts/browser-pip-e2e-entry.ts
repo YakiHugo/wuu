@@ -131,6 +131,19 @@ async function verifyBrowserExtensions(): Promise<void> {
     const storageToken = await page.webContents.executeJavaScript("document.documentElement.dataset.extensionStorage");
     await isolated.loadURL(url);
     assert.equal(await isolated.webContents.executeJavaScript("document.documentElement.dataset.extensionFixture ?? null"), null);
+    // Match the Linux package acceptance contract: the real fixture renderers
+    // must retain Chromium's process restrictions, not merely sandbox:true.
+    const rendererSandbox = process.platform === "linux" ? [page, isolated].map(window => {
+      const pid = window.webContents.getOSProcessId();
+      const args = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0");
+      const status = readFileSync(`/proc/${pid}/status`, "utf8");
+      assert.ok(!args.some(arg => /^--(?:no-sandbox|disable-setuid-sandbox)(?:=|$)/.test(arg)), "Extension fixture renderer disabled sandboxing");
+      const noNewPrivileges = /^NoNewPrivs:\s+1$/m.test(status);
+      const seccompFiltering = /^Seccomp:\s+2$/m.test(status);
+      assert.ok(noNewPrivileges && seccompFiltering, "Extension fixture renderer lacks Linux sandbox restrictions");
+      return { pid, noNewPrivileges, seccompFiltering };
+    }) : undefined;
+    if (rendererSandbox) checks.push("Both real Linux renderers retain Chromium sandbox process restrictions");
     checks.push("Real Chromium executes the content script only in the browser session");
     writeVersion("2.0.0", ["storage", "tabs"]);
     let escalationReviewed = false;
@@ -230,7 +243,7 @@ async function verifyBrowserExtensions(): Promise<void> {
     assert.equal(await versionOnPage(), "2.0.0");
     browserSession.extensions.removeExtension(direct.id);
     checks.push("Keyed legacy collisions are rejected before consent and preserve the original running extension");
-    writeFileSync(join(artifacts, "extension-lifecycle.json"), JSON.stringify({ electron: process.versions.electron, checks, id }, null, 2));
+    writeFileSync(join(artifacts, "extension-lifecycle.json"), JSON.stringify({ electron: process.versions.electron, checks, id, rendererSandbox }, null, 2));
     console.log(`PASS: ${checks.length} real browser extension lifecycle checks`);
   } finally {
     page.destroy();
