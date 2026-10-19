@@ -12,6 +12,7 @@ import {
   Plus,
   Search,
   Settings,
+  Sparkles,
   Project,
 } from "./WuuIcons";
 import {
@@ -102,7 +103,8 @@ import {
   desktopWorkbenchController,
 } from "./plugins/DesktopPluginRuntime";
 import type { PluginHost } from "./plugins/PluginHost";
-import type { WorkbenchController } from "./plugins/Workbench";
+import { visibleWorkbenchView, type WorkbenchController } from "./plugins/Workbench";
+import type { SkillsCatalogSection } from "./SkillsCatalog";
 import { primaryViewNavigation } from "./plugins/PrimaryViewNavigation";
 import { PluginSlot } from "./plugins/PluginSlot";
 import { Tooltip } from "./Tooltip";
@@ -451,8 +453,10 @@ export function AppSidebar({
   workbenchController = desktopWorkbenchController,
   sidebarVisible = true,
   sidebarCollapsed = false,
-  onToggleSidebar,
-  onPreviewSidebar,
+  onShowConversations,
+  catalogActive,
+  catalogSection = "plugins",
+  onSelectCatalogSection,
 }: {
   state: AppState;
   // The sidebar renders scratch conversations through the same WorkspaceList
@@ -526,8 +530,10 @@ export function AppSidebar({
   workbenchController?: WorkbenchController;
   sidebarVisible?: boolean;
   sidebarCollapsed?: boolean;
-  onToggleSidebar?: () => void;
-  onPreviewSidebar?: () => void;
+  onShowConversations?: () => void;
+  catalogActive?: boolean;
+  catalogSection?: SkillsCatalogSection;
+  onSelectCatalogSection?: (section: SkillsCatalogSection) => void;
 }): JSX.Element {
   const { t } = useI18n();
   const [attentionStickyIDsState, setAttentionStickyIDsState] = useState<Set<string>>(() => new Set());
@@ -601,13 +607,13 @@ export function AppSidebar({
     workbenchController.getSnapshot,
     workbenchController.getSnapshot,
   );
-  const activePluginMainView = workbenchSnapshot.views.find(
-    (view) => view.id === workbenchSnapshot.activeViewByRegion.primary,
-  );
-  const activeThreadID = activePluginMainView ? undefined : nativeActiveThreadID;
-  const pluginCatalogActive = !activePluginMainView && state.sessionTabs.some(
+  const activePluginMain = visibleWorkbenchView(workbenchSnapshot, "primary");
+  const activePluginMainView = activePluginMain?.view;
+  const pluginCatalogActive = !activePluginMainView && (catalogActive ?? state.sessionTabs.some(
     (tab) => tab.id === state.activeSessionTabID && tab.kind === "skills",
-  );
+  ));
+  const conversationsActive = !activePluginMainView && !pluginCatalogActive;
+  const activeThreadID = conversationsActive ? nativeActiveThreadID : undefined;
   const pluginNavigationEntries = useMemo(
     () => primaryViewNavigation(declaredPluginNavigationEntries, workbenchSnapshot),
     [declaredPluginNavigationEntries, workbenchSnapshot],
@@ -1766,14 +1772,12 @@ export function AppSidebar({
         <div className="sidebar-ribbon-main scrollbar-hidden">
           <Tooltip content={t("sidebar.conversations")}>
             <button
-              className="sidebar-ribbon-button sidebar-toggle-button sidebar-collapse-toggle"
+              className="sidebar-ribbon-button"
               type="button"
-              aria-label={t(sidebarCollapsed ? "app.expandLeftSidebar" : "app.collapseLeftSidebar")}
-              aria-pressed={!sidebarCollapsed}
-              data-wuu-component="sidebar-toggle"
-              onClick={onToggleSidebar}
-              onPointerEnter={onPreviewSidebar}
-              onPointerLeave={onPointerLeave}
+              aria-label={t("sidebar.conversations")}
+              aria-current={conversationsActive ? "page" : undefined}
+              data-wuu-component="conversations-section"
+              onClick={() => activateNative(() => onShowConversations?.())}
             >
               <MessagesSquare aria-hidden="true" />
             </button>
@@ -1834,6 +1838,42 @@ export function AppSidebar({
       </HoverRevealScopeContext.Provider>
       <div className="sidebar-content" inert={!sidebarVisible}>
         <div className="traffic-spacer" />
+        {pluginCatalogActive ? (
+          <nav className="sidebar-section-navigation" aria-label={t("skills.catalogLabel")}>
+            <h2 className="sidebar-section-title">{t("skills.title")}</h2>
+            {(["plugins", "skills"] as const).map((section) => (
+              <button
+                key={section}
+                className="sidebar-section-item"
+                type="button"
+                aria-current={catalogSection === section ? "page" : undefined}
+                onClick={() => onSelectCatalogSection?.(section)}
+              >
+                {section === "plugins" ? <PluginBlocksIcon aria-hidden="true" /> : <Sparkles aria-hidden="true" />}
+                <span>{t(section === "plugins" ? "skills.tabPlugins" : "skills.tabSkills")}</span>
+              </button>
+            ))}
+          </nav>
+        ) : activePluginMain ? (
+          <nav className="sidebar-section-navigation" aria-label={activePluginMain.definition.title}>
+            <h2 className="sidebar-section-title">{state.initialized?.extension_inventory?.find((record) =>
+              record.provenance.plugin_id === activePluginMain.view.pluginId)?.name ?? activePluginMain.definition.title}</h2>
+            {pluginNavigationEntries.filter((entry) => entry.pluginId === activePluginMain.view.pluginId).map((entry) => (
+              <button
+                key={`${entry.pluginId}:${entry.id}`}
+                className="sidebar-section-item"
+                type="button"
+                data-wuu-component="plugin-context-navigation-item"
+                aria-current={activePluginMain.view.id === entry.instanceId ? "page" : undefined}
+                onClick={() => openPluginNavigation(entry.pluginId, entry.view, entry.instanceId)}
+              >
+                <PluginIcon icon={entry.icon} pluginId={entry.pluginId} fingerprint={entry.generation} />
+                <span>{entry.title}</span>
+              </button>
+            ))}
+          </nav>
+        ) : null}
+        <div className="sidebar-conversation-section" style={{ display: conversationsActive ? "contents" : "none" }} inert={!conversationsActive}>
         <SidebarBrand
           unreadViewOpen={unreadViewOpen}
           attentionCount={attentionCount}
@@ -2342,6 +2382,7 @@ export function AppSidebar({
             groupNameDialog?.action === "rename" && groupName.trim() === groupNameDialog.group.name.trim()
           )}
         />
+        </div>
       </div>
     </>
   );

@@ -233,7 +233,7 @@ import { JumpToLatestPill } from "./JumpToLatestPill";
 import { BrowserPiPHostReporter } from "./BrowserPiPHostReporter";
 import { ConversationStatusCluster } from "./ConversationStatusCluster";
 import { externalAgentActivityStore } from "./ExternalAgentActivityStore";
-import { SkillsCatalog } from "./SkillsCatalog";
+import { SkillsCatalog, type SkillsCatalogSection } from "./SkillsCatalog";
 import { userVisibleThreads } from "./SkillsAssistant";
 import { isForegroundControlled, useBrowserVisibility } from "./BrowserVisibility";
 import { useSideThreadController } from "./SideThreadController";
@@ -712,6 +712,10 @@ export function App(): JSX.Element {
     models: [],
   });
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
+  const [nativeSection, setNativeSection] = useState<"conversations" | "catalog">("conversations");
+  const [catalogSection, setCatalogSection] = useState<SkillsCatalogSection>("plugins");
+  const [catalogVisited, setCatalogVisited] = useState(false);
+  const showingPrimaryPluginView = usePrimaryPluginViewCover();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
   const [onboardingComplete, setOnboardingComplete] = useState(
@@ -823,6 +827,7 @@ export function App(): JSX.Element {
   ]);
   const revealConversationFromFocusedWorkspace = useCallback((): void => {
     desktopWorkbenchController.deactivateRegion("primary");
+    setNativeSection("conversations");
     if (!rightPanelGlobalized) {
       return;
     }
@@ -1204,9 +1209,6 @@ export function App(): JSX.Element {
   const cachedConversationPaneThreadsRef = useRef(new Map<string, Thread>());
   const draftSessionTabCounterRef = useRef(0);
   const currentSessionTab = activeSessionTab(state);
-
-  const currentSkillsTabID =
-    currentSessionTab?.kind === "skills" ? currentSessionTab.id : undefined;
 
   useEffect(() => {
     const handleBeforeUnload = (event: BeforeUnloadEvent): void => {
@@ -1703,7 +1705,10 @@ export function App(): JSX.Element {
       setEnvironmentDialog(null);
       setPendingFork(undefined);
     },
-    onSelectThread: (result, query) => openSearchResult(result, query),
+    onSelectThread: (result, query) => {
+      closePrimaryPluginView();
+      return openSearchResult(result, query);
+    },
   });
 
   // Cmd/Ctrl+P toggles the conversation search overlay. Mirrors the
@@ -1743,7 +1748,7 @@ export function App(): JSX.Element {
   // ad-hoc modals/portals (e.g. participant panels) are not yet
   // enumerated here; extend this predicate as more full-window overlays land.
   const browserOverlaySuppressed =
-    settingsOpen || accountOpen ||
+    settingsOpen || accountOpen || nativeSection === "catalog" || showingPrimaryPluginView ||
     environmentDialog !== null ||
     Boolean(pendingFork) ||
     conversationSearch.open;
@@ -2261,7 +2266,7 @@ export function App(): JSX.Element {
   );
   const showingSkillsCatalog = Boolean(
     state.initialized &&
-    currentSessionTab?.kind === "skills",
+    (nativeSection === "catalog" || currentSessionTab?.kind === "skills"),
   );
   const showingManagementCatalog = showingSkillsCatalog;
   const activeTitle = showingSkillsCatalog
@@ -2451,7 +2456,6 @@ export function App(): JSX.Element {
     }
     return queries;
   }, [turns]);
-  const showingPrimaryPluginView = usePrimaryPluginViewCover();
   const previewTargetThread = threadForPane(state, state.activePane);
   const previewTargetContext = workspacePanelContext(state.activeContext, previewTargetThread);
   const activePreviewFile = activeWorkspaceViewTab?.kind === "file" &&
@@ -2480,6 +2484,8 @@ export function App(): JSX.Element {
     // Text is input-local until idle. Publish it before the new surface paints.
     setPrompt(currentPrimaryComposerDraft().prompt);
   }, [documentComposerVisible, setPrompt, currentPrimaryComposerDraft]);
+  const conversationVisible = !showingManagementCatalog && !showingPrimaryPluginView &&
+    !settingsOpen && !accountOpen && !workspaceToolsCoverConversation;
   const mainConversationDockVisible =
     Boolean(state.initialized) &&
     !splitConversation &&
@@ -2492,12 +2498,12 @@ export function App(): JSX.Element {
     // Closing them on navigation also releases viewer resources.
     const isStaleTurnTab = (tab: WorkspaceViewTab): boolean => {
       if (tab.kind === "artifact") {
-        return showingManagementCatalog || emptyConversation
+        return emptyConversation
           || ![state.thread, state.secondaryThread].some((thread) =>
             thread?.id === tab.threadID && thread.cwd === tab.cwd);
       }
       return tab.kind === "diff" &&
-        (!activeThreadID || tab.threadID !== activeThreadID || showingManagementCatalog || emptyConversation);
+        (!activeThreadID || tab.threadID !== activeThreadID || emptyConversation);
     };
     if (!workspaceViewTabs.some(isStaleTurnTab)) {
       return;
@@ -2512,7 +2518,6 @@ export function App(): JSX.Element {
     activeThreadID,
     closeWorkspaceViewTabsWhere,
     emptyConversation,
-    showingManagementCatalog,
     workspaceActiveViewTabID,
     workspaceViewTabs,
     state.thread,
@@ -2561,21 +2566,6 @@ export function App(): JSX.Element {
     settleLayout: settleConversationLayout,
     finishViewSwitch,
   });
-  const activeManagementTabID = showingManagementCatalog
-    ? currentSessionTab?.id
-    : undefined;
-  useLayoutEffect(() => {
-    if (!activeManagementTabID) {
-      return;
-    }
-    // Catalogs reuse the conversation scroll viewport. Reset it when entering
-    // a catalog tab so the previous conversation's offset cannot hide the
-    // catalog title above the visible area.
-    const scrollRegion = conversationScrollRef.current;
-    if (scrollRegion) {
-      scrollRegion.scrollTop = 0;
-    }
-  }, [activeManagementTabID, conversationScrollRef]);
   const focusMainComposer = useCallback(
     (
       target: ComposerVariant,
@@ -2586,7 +2576,7 @@ export function App(): JSX.Element {
       // focus is outside the user gesture and would leave a caret without a
       // software keyboard. Actual taps focus natively, so only desktop keeps the
       // programmatic restore path.
-      if (isTouchWebShell()) {
+      if (isTouchWebShell() || !conversationVisible) {
         return false;
       }
       // Empty and populated sessions share the same bottom composer.
@@ -2608,7 +2598,7 @@ export function App(): JSX.Element {
       }
       return true;
     },
-    [conversationPaneRef],
+    [conversationPaneRef, conversationVisible],
   );
   const requestMainComposerFocus = useCallback(
     (
@@ -3159,6 +3149,7 @@ export function App(): JSX.Element {
   // the active thread) reaches here. Mid-stream turns stay deferred until
   // the visible answer is ready, matching the tab/sidebar unread boundary.
   useEffect(() => {
+    if (!conversationVisible) return;
     const tab = state.sessionTabs.find(
       (candidate) => candidate.id === state.activeSessionTabID,
     );
@@ -3169,7 +3160,7 @@ export function App(): JSX.Element {
       const next = markThreadTurnsViewed(current, thread.id);
       return next === current ? current : next;
     });
-  }, [state.activeSessionTabID, state.thread, state.threads]);
+  }, [conversationVisible, state.activeSessionTabID, state.thread, state.threads]);
 
   function openSideThreadPanel(prompt?: string, commandID = sideCommandID): void {
     if (!activeThreadID || !commandID || !sideCommands.some((command) => `${command.pluginId}.${command.pluginCommandId}` === commandID)) {
@@ -3941,6 +3932,24 @@ export function App(): JSX.Element {
 
   function closePrimaryPluginView(): void {
     desktopWorkbenchController.deactivateRegion("primary");
+    setNativeSection("conversations");
+  }
+
+  function showConversations(): void {
+    revealConversationFromFocusedWorkspace();
+    if (currentSessionTab?.kind === "skills") {
+      const conversationTab = state.sessionTabs.find((tab) => tab.kind !== "skills");
+      if (conversationTab) void selectSessionTab(conversationTab.id);
+      else void startNewThread();
+    }
+  }
+
+  function openSkillsTab(): void {
+    if (!appStateRef.current.activeContext) return;
+    desktopWorkbenchController.deactivateRegion("primary");
+    setCatalogVisited(true);
+    setNativeSection("catalog");
+    if (rightPanelGlobalized) setRightPanelOpenWithMotion(false);
   }
 
   // The active draft starts a project or an ordinary conversation; the entry
@@ -4121,6 +4130,7 @@ export function App(): JSX.Element {
     if (!context) {
       return;
     }
+    closePrimaryPluginView();
     revealConversationFromFocusedWorkspace();
     void startNewThread().then(() => {
       setComposerImages([]);
@@ -4280,7 +4290,6 @@ export function App(): JSX.Element {
   });
 
   const {
-    openSkillsTab,
     dismissContextCompositionEntry,
     dismissInstructionFilesEntry,
     openInstructions,
@@ -5281,7 +5290,10 @@ export function App(): JSX.Element {
         icon={CircleAlert}
         isError
         persistent
-        action={{ label: t("composer.openFailedDraft"), onClick: () => { void selectSessionTab(failedDraftTabID); } }}
+        action={{ label: t("composer.openFailedDraft"), onClick: () => {
+          revealConversationFromFocusedWorkspace();
+          void selectSessionTab(failedDraftTabID);
+        } }}
         dismissAriaLabel={t("composer.discardFailedDraft")}
         onDismiss={() => {
           setFailedDraftTabIDs((ids) => ids.filter((id) => id !== failedDraftTabID));
@@ -5344,12 +5356,13 @@ export function App(): JSX.Element {
       else if (settingsOpen) { event.preventDefault(); setSettingsOpen(false); }
       else if (sidebarDrawerVisible) { event.preventDefault(); closeSidebarDrawer(); }
       else if (rightPanelOpen) { event.preventDefault(); setRightPanelOpenWithMotion(false); }
+      else if (nativeSection === "catalog" && !showingPrimaryPluginView) { event.preventDefault(); setNativeSection("conversations"); }
     };
     window.addEventListener("wuu:workbench-back", back);
     return () => window.removeEventListener("wuu:workbench-back", back);
-  }, [accountOpen, settingsOpen, sidebarDrawerVisible, closeSidebarDrawer, rightPanelOpen, setRightPanelOpenWithMotion]);
+  }, [accountOpen, settingsOpen, sidebarDrawerVisible, closeSidebarDrawer, rightPanelOpen, setRightPanelOpenWithMotion, nativeSection, showingPrimaryPluginView]);
 
-  useAppContextDraftTarget(submissionTargetPending || !state.initialized || showingManagementCatalog ? undefined : JSON.stringify([
+  useAppContextDraftTarget(submissionTargetPending || !state.initialized || showingManagementCatalog || showingPrimaryPluginView ? undefined : JSON.stringify([
     state.activeContext ? runtimeContextKey(state.activeContext) : undefined, state.activeSessionTabID, state.activePane, state.thread?.id, state.secondaryThread?.id,
   ]), (image, context) => {
     // A workspace panel may cover split panes without changing their draft
@@ -5531,6 +5544,7 @@ export function App(): JSX.Element {
           data-wuu-sidebar-mode={sidebarDrawerVisible ? "drawer" : sidebarDrawerMode ? "collapsed" : "docked"}
         >
           <BrowserPiPHostReporter />
+          <div className="workbench-window-chrome" aria-hidden="true" />
           {!poppedOutMode ? (
             <>
           <div
@@ -5564,8 +5578,10 @@ export function App(): JSX.Element {
           ) : null}
           <HoverRevealScopeContext.Provider value={sidebarHoverScope}>
             <AppSidebar
-              onToggleSidebar={toggleSidebar}
-              onPreviewSidebar={scheduleSidebarDrawerOpen}
+              onShowConversations={showConversations}
+              catalogActive={showingSkillsCatalog}
+              catalogSection={catalogSection}
+              onSelectCatalogSection={setCatalogSection}
               sidebarCollapsed={sidebarCollapsed}
               sidebarVisible={!sidebarDrawerMode || sidebarDrawerVisible}
               state={state}
@@ -5725,10 +5741,7 @@ export function App(): JSX.Element {
         onClearQuery={clearConversationSearchQuery}
         onKeyDown={handleConversationSearchKeyDown}
         onSelectIndex={setConversationSearchSelectedIndex}
-        onSelectResult={(result) => {
-          closePrimaryPluginView();
-          return selectConversationSearchResult(result);
-        }}
+        onSelectResult={selectConversationSearchResult}
       />
             </>
           ) : null}
@@ -5737,6 +5750,7 @@ export function App(): JSX.Element {
         inert={workspaceToolsCoverConversation}
         data-wuu-component="conversation-pane"
         data-primary-plugin-view={showingPrimaryPluginView ? "" : undefined}
+        data-native-section={showingManagementCatalog ? "catalog" : "conversations"}
         className={`conversation-pane${environmentPanelVisible ? " environment-panel-visible" : ""}${
           environmentPanelReserved ? " environment-panel-reserved" : ""
         }`}
@@ -5819,31 +5833,38 @@ export function App(): JSX.Element {
           switchLoadingVisible={pendingViewSwitch?.visible === true}
         />
 
+        {state.initialized && (catalogVisited || showingSkillsCatalog) ? (
+          <div
+            className="catalog-section-pane skills-scroll-region"
+            hidden={!showingManagementCatalog || showingPrimaryPluginView}
+            inert={!showingManagementCatalog || showingPrimaryPluginView}
+          >
+            <SkillsCatalog
+              section={catalogSection}
+              onSectionChange={setCatalogSection}
+              activeContext={state.activeContext}
+              extensionInventory={state.initialized.extension_inventory}
+              onTrySkill={trySkillFromCatalog}
+              onRefreshCatalog={refreshExtensionCatalog}
+              onUpdateExtensionPackage={updateExtensionPackage}
+              onInstallPluginPackage={installPluginPackage}
+              onRemovePluginPackage={removePluginPackage}
+            />
+          </div>
+        ) : null}
         {state.initialized ? (
           <div
             data-pip-anchor-host="conversation"
-            data-scroll-fade={!emptyConversation && !splitConversation && !showingManagementCatalog ? "" : undefined}
+            data-scroll-fade={!emptyConversation && !splitConversation ? "" : undefined}
             className={`scroll-region${emptyConversation ? " empty-scroll-region" : ""}${
               splitConversation ? " split-scroll-region" : ""
-            }${showingManagementCatalog ? " skills-scroll-region" : ""}`}
-            inert={showingPrimaryPluginView || viewSwitchPending}
+            }`}
+            inert={!conversationVisible || viewSwitchPending}
             style={conversationRestoring ? { visibility: "hidden" } : undefined}
             onScroll={(event) => handleConversationScroll(event.currentTarget)}
             ref={conversationScrollRef}
           >
             <div ref={scrollContentRef} className="scroll-region-content">
-              {showingSkillsCatalog ? (
-              <SkillsCatalog
-                activeContext={state.activeContext}
-                extensionInventory={state.initialized?.extension_inventory}
-                onTrySkill={trySkillFromCatalog}
-                onRefreshCatalog={refreshExtensionCatalog}
-                onUpdateExtensionPackage={updateExtensionPackage}
-                onInstallPluginPackage={installPluginPackage}
-                onRemovePluginPackage={removePluginPackage}
-              />
-            ) : (
-              <>
                 {splitConversation && state.thread && state.secondaryThread ? (
                   <ConversationSplitLayoutRenderer
                     state={state}
@@ -5965,8 +5986,6 @@ export function App(): JSX.Element {
                 onCancelUserQuestion={cancelUserQuestion}
               />
             )}
-              </>
-            )}
             </div>
           </div>
         ) : (
@@ -5975,7 +5994,7 @@ export function App(): JSX.Element {
           />
         )}
 
-        {mainConversationDockVisible ? renderComposer("dock") : null}
+        {state.initialized && !splitConversation && !workspaceToolsCoverConversation && !showingPrimaryPluginView ? renderComposer("dock") : null}
 
 
         <ConversationStatusCluster
@@ -6190,6 +6209,21 @@ export function App(): JSX.Element {
       />
       {/* macOS applies app regions in DOM order, so a later drag titlebar would
         * cover this no-drag control. Keep it as the shell's last child. */}
+      {!poppedOutMode ? (
+        <button
+          className="icon-button side-panel-toggle-button sidebar-toggle-button sidebar-collapse-toggle section-sidebar-toggle"
+          data-wuu-component="sidebar-toggle"
+          type="button"
+          aria-label={t(!sidebarCollapsed || sidebarDrawerVisible ? "app.collapseLeftSidebar" : "app.expandLeftSidebar")}
+          aria-expanded={!sidebarCollapsed || sidebarDrawerVisible}
+          aria-pressed={!sidebarCollapsed || sidebarDrawerVisible}
+          onClick={toggleSidebar}
+          onPointerEnter={scheduleSidebarDrawerOpen}
+          onPointerLeave={(event) => scheduleSidebarDrawerCloseFromPointerLeave(event.nativeEvent)}
+        >
+          <SidePanelToggleIcon side="left" open={!sidebarCollapsed || sidebarDrawerVisible} />
+        </button>
+      ) : null}
       {!poppedOutMode ? (
         <button
           className="icon-button side-panel-toggle-button shell-right-sidebar-toggle"

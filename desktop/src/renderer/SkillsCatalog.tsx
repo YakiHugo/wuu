@@ -74,7 +74,11 @@ function showExtensionMutationError(error: unknown, fallback: string): void {
   showErrorToast(error, fallback);
 }
 
+export type SkillsCatalogSection = "plugins" | "skills";
+
 export function SkillsCatalog({
+  section,
+  onSectionChange,
   activeContext,
   extensionInventory = [],
   onTrySkill,
@@ -83,6 +87,8 @@ export function SkillsCatalog({
   onInstallPluginPackage,
   onRemovePluginPackage,
 }: {
+  section?: SkillsCatalogSection;
+  onSectionChange?: (section: SkillsCatalogSection) => void;
   activeContext?: RuntimeContext;
   extensionInventory?: ExtensionInventoryRecord[];
   onTrySkill?: (skill: SkillSummary) => void;
@@ -100,7 +106,11 @@ export function SkillsCatalog({
   const [filter, setFilter] = useState("");
   const [previewSkill, setPreviewSkill] = useState<SkillSummary | null>(null);
   const [selectedPluginID, setSelectedPluginID] = useState("");
-  const [chosenTab, setActiveTab] = useState<"plugins" | "skills">("plugins");
+  const [chosenTab, setActiveTab] = useState<SkillsCatalogSection>("plugins");
+  useEffect(() => {
+    setSelectedPluginID("");
+    setPreviewSkill(null);
+  }, [section]);
   const [packageMutation, setPackageMutation] = useState("");
   // State alone cannot stop a second click that lands before the re-render.
   const mutationInFlight = useRef(false);
@@ -371,7 +381,7 @@ export function SkillsCatalog({
     { key: "enabled", title: t("skills.groupEnabled"), records: quietPlugins.filter(listedOn) },
     { key: "disabled", title: t("skills.groupDisabled"), records: quietPlugins.filter((record) => !listedOn(record)) },
   ].filter((group) => group.records.length > 0);
-  const activeTab = plugins.length === 0 ? "skills" : chosenTab;
+  const activeTab = section ?? (plugins.length === 0 ? "skills" : chosenTab);
   const pluginSkills = (record: ExtensionInventoryRecord) =>
     state.skills.filter((skill) => pluginSkillID(skill.source) === record.provenance.plugin_id);
 
@@ -473,7 +483,7 @@ export function SkillsCatalog({
             className="catalog-tab"
             data-tab={tab}
             aria-selected={activeTab === tab}
-            onClick={() => setActiveTab(tab)}
+            onClick={() => (onSectionChange ?? setActiveTab)(tab)}
           >
             {tab === "plugins" ? t("skills.tabPlugins") : t("skills.tabSkills")}
             <span className="catalog-tab-count">{tab === "plugins" ? visiblePlugins.length : visibleSkills.length}</span>
