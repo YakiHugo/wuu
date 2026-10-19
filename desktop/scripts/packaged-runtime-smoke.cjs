@@ -30,7 +30,8 @@ function verifyResources(resources) {
     assert.ok(!entries.some(file => file === `node_modules/${name}` || file.startsWith(`node_modules/${name}/`)), `Renderer-only raw package remains: ${name}`);
     assert.ok(!fs.existsSync(path.join(resources, "app.asar.unpacked/node_modules", name)), `Unpacked renderer-only raw package remains: ${name}`);
   }
-  const notice = asar.extractFile(archive, "out/renderer/THIRD-PARTY-LICENSES.txt").toString("utf8");
+  // ASAR 3.x resolves directories using the host separator, unlike our inventory.
+  const notice = asar.extractFile(archive, path.normalize("out/renderer/THIRD-PARTY-LICENSES.txt")).toString("utf8");
   for (const name of ["monaco-editor", "pdfjs-dist", "pele", "blobatar"]) {
     assert.ok(notice.includes(`${name}@`), `Missing bundled renderer license section: ${name}`);
   }
@@ -38,13 +39,13 @@ function verifyResources(resources) {
   for (const name of ["editor.worker", "ts.worker", "pdf.worker"]) {
     const files = entries.filter(file => file.startsWith("out/renderer/assets/") && path.basename(file).startsWith(name) && /\.(?:m?js)$/.test(file));
     assert.ok(files.length, `Missing bundled ${name}`);
-    for (const file of files) assert.ok(asar.extractFile(archive, file).length > 0, `Empty worker: ${file}`);
+    for (const file of files) assert.ok(asar.extractFile(archive, path.normalize(file)).length > 0, `Empty worker: ${file}`);
     workers[name] = files;
   }
   const bindings = entries.filter(file => /node_modules\/node-pty\/.*\.node$/.test(file));
   assert.ok(bindings.length, "Missing packaged native PTY binding");
   for (const file of bindings) {
-    assert.ok(asar.statFile(archive, file).unpacked, `Native binding must be unpacked: ${file}`);
+    assert.ok(asar.statFile(archive, path.normalize(file)).unpacked, `Native binding must be unpacked: ${file}`);
     assert.ok(fs.statSync(path.join(`${archive}.unpacked`, file)).size > 0, `Missing unpacked native binding: ${file}`);
   }
   const core = path.join(resources, "bin", fs.existsSync(path.join(resources, "bin/wuu-core.exe")) ? "wuu-core.exe" : "wuu-core");

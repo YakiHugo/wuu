@@ -106,6 +106,42 @@ test("signed app checkpoint verifies runtime payloads and includes the update fe
     mkdirSync(join(dir, "bin"));
     writeFileSync(join(dir, "bin/wuu-core"), "fixture core");
     await require("@electron/asar").createPackageWithOptions(source, join(dir, "app.asar"), { unpack: "**/*.node" });
+    // Exercise the real ASAR lookup implementation with Windows path semantics,
+    // even on Linux/macOS CI. Slash-only nested reads fail in asar 3.4.1.
+    const { createRequire } = require("node:module");
+    const { runInNewContext } = require("node:vm");
+    const nativePath = require("node:path");
+    const asar = require("@electron/asar");
+    const filesystemModule = require.resolve("@electron/asar/lib/filesystem.js");
+    const filesystemExports = {};
+    const filesystemRequire = createRequire(filesystemModule);
+    runInNewContext(readFileSync(filesystemModule, "utf8"), {
+      exports: filesystemExports,
+      require: name => name === "path" ? nativePath.win32 : filesystemRequire(name),
+      Buffer, process,
+    });
+    const windowsFilesystem = new filesystemExports.Filesystem(dir);
+    windowsFilesystem.setHeader(asar.getRawHeader(join(dir, "app.asar")).header, 0);
+    const windowsAsar = { ...asar };
+    for (const method of ["extractFile", "statFile"]) {
+      windowsAsar[method] = (archive, file) => {
+        windowsFilesystem.getFile(file);
+        return asar[method](archive, nativePath.normalize(file.replaceAll("\\", "/")));
+      };
+    }
+    const smokeModule = { exports: {} };
+    runInNewContext(readFileSync(join(__dirname, "packaged-runtime-smoke.cjs"), "utf8"), {
+      module: smokeModule,
+      require: name => name === "@electron/asar" ? windowsAsar
+        : name === "node:path" ? { ...nativePath, normalize: nativePath.win32.normalize } : require(name),
+      Buffer, process,
+    });
+    assert.doesNotThrow(() => smokeModule.exports.verifyResources(dir));
+    const rendererFiles = windowsFilesystem.getHeader().files.out.files.renderer.files;
+    const notice = rendererFiles["THIRD-PARTY-LICENSES.txt"];
+    delete rendererFiles["THIRD-PARTY-LICENSES.txt"];
+    assert.throws(() => smokeModule.exports.verifyResources(dir), /THIRD-PARTY-LICENSES/);
+    rendererFiles["THIRD-PARTY-LICENSES.txt"] = notice;
     const runHook = () => execFileSync(process.execPath, ["-e", `
       const fs = require("node:fs");
       const path = require("node:path");
