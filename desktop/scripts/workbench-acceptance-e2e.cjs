@@ -99,7 +99,7 @@ let win;
 app.on('browser-window-created', (_event, window) => {
   win ||= window;
   window.webContents.on('console-message', event => {
-    if (event.level === 'error' && !/Autofill/.test(event.message)) report.errors.push({ kind: 'console', message: event.message });
+    if (event.level === 'error' && !/Autofill/.test(event.message)) report.errors.push({ kind: 'console', message: event.message, sourceId: event.sourceId, lineNumber: event.lineNumber, url: window.webContents.getURL(), atMs: Date.now() - started });
   });
   window.webContents.on('render-process-gone', (_event, details) => report.errors.push({ kind: 'renderer', ...details }));
 });
@@ -115,7 +115,9 @@ async function evaluate(fn, arg) {
 async function waitFor(fn, arg, label = String(fn), timeout = 12000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
-    const value = await evaluate(fn, arg);
+    // DOM elements and React-attached nodes are not structured-cloneable.
+    // Predicates cross the Electron bridge only as booleans.
+    const value = await evaluate(`async argument => Boolean(await (${fn})(argument))`, arg);
     if (value) return value;
     await delay(40);
   }
@@ -181,18 +183,31 @@ async function capture(label) {
 async function click(target, label, evidence = true) {
   const p = await point(target);
   if (evidence) await capture(`before-${label}`);
-  win.webContents.sendInputEvent({ type: 'mouseMove', x: p.x, y: p.y });
-  win.webContents.sendInputEvent({ type: 'mouseDown', button: 'left', clickCount: 1, x: p.x, y: p.y });
-  win.webContents.sendInputEvent({ type: 'mouseUp', button: 'left', clickCount: 1, x: p.x, y: p.y });
+  // sendInputEvent uses device-independent window pixels; DOM hit testing
+  // uses CSS pixels. Page zoom changes their ratio (display DPR is separate).
+  const zoom = win.webContents.getZoomFactor();
+  const inputPoint = { x: Math.round(p.x * zoom), y: Math.round(p.y * zoom) };
+  win.webContents.sendInputEvent({ type: 'mouseMove', ...inputPoint });
+  win.webContents.sendInputEvent({ type: 'mouseDown', button: 'left', clickCount: 1, ...inputPoint });
+  win.webContents.sendInputEvent({ type: 'mouseUp', button: 'left', clickCount: 1, ...inputPoint });
   report.actions.push({ label, atMs: Date.now() - started, point: p });
   await settle();
   if (evidence) await capture(`after-${label}`);
 }
 async function fill(target, text) {
   await click(target, 'focus-input', false);
-  key('A', [process.platform === 'darwin' ? 'meta' : 'control']);
-  if (text) await win.webContents.insertText(text); else key('Backspace');
   const selector = typeof target === 'string' ? target : target.selector;
+  await waitFor(selector => document.activeElement?.matches(selector), selector);
+  const current = await evaluate(selector => document.querySelector(selector).value, selector);
+  if (current === text) return;
+  if (current) {
+    key('A', [process.platform === 'darwin' ? 'meta' : 'control']);
+    key('Backspace');
+    // Native key delivery and insertText are separate IPC paths. Acknowledge
+    // deletion before inserting, otherwise "15" can become "1515" under load.
+    await waitFor(selector => document.querySelector(selector).value === '', selector);
+  }
+  if (text) await win.webContents.insertText(text);
   await waitFor(({ selector, text }) => [...document.querySelectorAll(selector)].some(n => n === document.activeElement && n.value === text), { selector, text });
 }
 async function test(name, fn) {
@@ -313,6 +328,13 @@ db.commit()
   assert.ok(win, 'Production main created its window');
   win.setPosition(30, 30); win.setContentSize(1280, 900); win.show(); win.focus();
   win.webContents.setBackgroundThrottling(false);
+  // Do not attach CDP or execute JavaScript in Electron's provisional blank
+  // document: its sandbox startup data is not initialized during navigation.
+  const rendererURL = pathToFileURL(path.join(desktop, 'out/renderer/index.html')).href;
+  const loadDeadline = Date.now() + 30000;
+  while ((win.webContents.getURL() !== rendererURL || win.webContents.isLoadingMainFrame()) && Date.now() < loadDeadline) await delay(40);
+  assert.equal(win.webContents.getURL(), rendererURL, 'Shipping renderer loaded');
+  assert.ok(!win.webContents.isLoadingMainFrame(), 'Initial renderer navigation finished');
   win.webContents.debugger.attach('1.3');
   await win.webContents.debugger.sendCommand('Runtime.enable');
   win.webContents.debugger.on('message', (_event, method, params) => {
@@ -500,9 +522,13 @@ db.commit()
       const hovered = await point(leftToggle, false);
       assert.equal(hovered.x, before.x); assert.equal(hovered.y, before.y);
       const focusTarget = section === 'settings' ? '.settings-search input' : '.conversation-search-trigger';
-      await click(focusTarget, 'focus-drawer-content', false);
+      // Focus the control without activating its action (clicking Search
+      // would correctly move focus into a separate modal instead).
+      await evaluate(selector => document.querySelector(selector).focus(), focusTarget);
+      await waitFor(selector => document.activeElement === document.querySelector(selector), focusTarget);
       win.webContents.sendInputEvent({ type: 'mouseMove', x: 800, y: 500 });
       await settle();
+      await delay(400);
       assert.ok(await evaluate(selector => document.activeElement === document.querySelector(selector) && !document.activeElement.closest('[inert]'), focusTarget), 'Focused drawer contents remain reachable after pointer leaves');
       await click(leftToggle, `dock-${section}`);
       await waitFor(() => !document.querySelector('.app-shell').classList.contains('sidebar-collapsed'));
