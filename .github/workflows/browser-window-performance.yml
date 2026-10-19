@@ -97,14 +97,13 @@ jobs:
         run: |
           cat > "$RUNNER_TEMP/run-browser-performance.sh" <<'BENCHMARK'
           set -euo pipefail
+          electron=("$GITHUB_WORKSPACE/desktop/node_modules/.bin/electron")
           if [ "$RUNNER_OS" = Linux ]; then
             openbox --sm-disable > "$WUU_BROWSER_PERF_EVIDENCE/window-manager.log" 2>&1 &
             wm=$!
             trap 'kill "$wm" 2>/dev/null || true' EXIT
             export WUU_BROWSER_PERF_POINTER=1
-            flags=(--no-sandbox --ozone-platform=x11)
-          else
-            flags=()
+            electron+=(--no-sandbox --ozone-platform=x11)
           fi
           repetition=0
           for order in 'baseline candidate' 'candidate baseline'; do
@@ -116,7 +115,7 @@ jobs:
               mkdir -p "$output"
               # Both variants use the identical current harness and Electron binary.
               WUU_BROWSER_PERF_ROOT="$tree" WUU_BROWSER_PERF_OUTPUT="$output" \
-                "$GITHUB_WORKSPACE/desktop/node_modules/.bin/electron" "${flags[@]}" \
+                "${electron[@]}" \
                 "$GITHUB_WORKSPACE/desktop/scripts/browser-window-perf-e2e.cjs" 2>&1 | tee "$output/run.log"
             done
           done
