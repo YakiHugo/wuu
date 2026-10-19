@@ -2,7 +2,7 @@
    Light-theme values; the dark theme overrides these in base.css theme blocks. */
 :root {
   /* A quiet opaque rail separates navigation without outweighing the canvas. */
-  --sidebar-material-fill: var(--surface-1);
+  --sidebar-material-fill: #f7f7f7;
   /* Rail/content boundary: a crisp dark hairline instead of the old white
    * edge + white inset pair, which were invisible against the white content
    * column and left the boundary to be read from the gray brightness step.
