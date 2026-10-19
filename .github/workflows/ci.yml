@@ -473,9 +473,35 @@ jobs:
         timeout-minutes: 3
         shell: bash
         run: |
+          node --test desktop/scripts/header-hit-ownership.test.cjs
           mkdir -p desktop/out/e2e/settings-titlebar
           set -o pipefail
           xvfb-run --auto-servernum desktop/node_modules/.bin/electron --no-sandbox desktop/scripts/settings-sidebar-hit-e2e.cjs 2>&1 | tee desktop/out/e2e/settings-titlebar/run.log
+
+      - name: Guard Mac-renderer-simulation narrow header controls
+        if: ${{ matrix.suite == 'shell' && (!cancelled() && steps.build-renderer.outcome == 'success') }}
+        timeout-minutes: 3
+        shell: bash
+        env:
+          WUU_TITLEBAR_FIXTURE_PLATFORM: darwin
+          WUU_TITLEBAR_FOCUSED_CONTROLS: "1"
+          WUU_TITLEBAR_OUTPUT: desktop/out/e2e/settings-titlebar-mac-simulation
+        run: |
+          mkdir -p "$WUU_TITLEBAR_OUTPUT"
+          set -o pipefail
+          xvfb-run --auto-servernum desktop/node_modules/.bin/electron desktop/scripts/settings-sidebar-hit-e2e.cjs 2>&1 | tee "$WUU_TITLEBAR_OUTPUT/run.log"
+
+      - name: Upload Mac-renderer-simulation evidence
+        if: ${{ matrix.suite == 'shell' && (always()) }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: titlebar-mac-renderer-simulation-evidence
+          path: |
+            desktop/out/e2e/settings-titlebar-mac-simulation/*.png
+            desktop/out/e2e/settings-titlebar-mac-simulation/*.json
+            desktop/out/e2e/settings-titlebar-mac-simulation/*.log
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Upload titlebar alignment evidence
         if: ${{ matrix.suite == 'shell' && (always()) }}

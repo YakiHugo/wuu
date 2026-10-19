@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const { ownsHeaderSample } = require("./header-hit-ownership.cjs");
 const { app, BrowserWindow } = require("electron");
 
 const desktopRoot = path.resolve(__dirname, "..");
@@ -10,6 +11,8 @@ const preload = path.join(__dirname, "resize-e2e-preload.cjs");
 const evidenceDir = path.resolve(process.env.WUU_TITLEBAR_OUTPUT || path.join(desktopRoot, "out", "e2e", "settings-titlebar"));
 const userData = path.join(evidenceDir, "settings-sidebar-hit-user-data");
 const fixturePlatform = process.env.WUU_TITLEBAR_FIXTURE_PLATFORM || process.platform;
+const focusedControls = process.env.WUU_TITLEBAR_FOCUSED_CONTROLS === "1";
+if (focusedControls) app.enableSandbox();
 assert.ok(["darwin", "linux", "win32"].includes(fixturePlatform), "Unsupported fixture platform");
 // This flag enables self-contained caption capabilities in the existing preload,
 // including when Electron sandboxing forbids dynamic local module requires.
@@ -40,7 +43,7 @@ async function run() {
       contextIsolation: true,
       nodeIntegration: false,
       preload,
-      sandbox: false,
+      sandbox: focusedControls,
       backgroundThrottling: false
     }
   });
@@ -59,6 +62,13 @@ async function run() {
   assert.equal(macControlsPresent, fixturePlatform === "darwin",
     "Fixture caption capabilities must activate the requested platform branch; dataset.platform alone is insufficient");
   await verifyNarrowSidebarControls(win);
+  if (focusedControls) {
+    saveResults();
+    console.log(`PASS: focused ${fixturePlatform} renderer controls; native OS behavior is not exercised. Evidence: ${evidenceDir}`);
+    win.close();
+    app.quit();
+    return;
+  }
   await verifyTitlebarContinuity(win);
   win.setContentSize(1180, 820);
   win.webContents.setZoomFactor(1);
@@ -158,7 +168,7 @@ async function run() {
 // a 240px secondary pane (292px including the ribbon). Both must stay usable.
 async function verifyNarrowSidebarControls(win) {
   const savedWidth = await evaluate(win, () => localStorage.getItem("wuu.desktop.sidebarWidth"));
-  for (const totalWidth of [240, 292]) {
+  for (const totalWidth of focusedControls ? [240] : [240, 292]) {
     await evaluate(win, width => {
       localStorage.setItem("wuu.desktop.sidebarWidth", String(width));
       localStorage.setItem("wuu.desktop.sidebarCollapsed", "false");
@@ -175,6 +185,19 @@ async function verifyNarrowSidebarControls(win) {
     }, fixturePlatform);
     await settleChrome(win);
     assert.equal(await evaluate(win, () => parseFloat(getComputedStyle(document.querySelector(".app-shell")).getPropertyValue("--sidebar-open-width"))), totalWidth);
+    if (totalWidth === 240) {
+      for (const zoom of [0.75, 0.8]) {
+        win.setContentSize(Math.round(1200 * zoom), Math.round(900 * zoom));
+        win.webContents.setZoomFactor(zoom);
+        await evaluate(win, value => document.documentElement.style.setProperty("--desktop-page-zoom", String(value)), zoom);
+        await settleChrome(win);
+        await verifyNotificationClick(win, zoom);
+      }
+      win.setContentSize(900, 675);
+      win.webContents.setZoomFactor(0.75);
+      await evaluate(win, () => document.documentElement.style.setProperty("--desktop-page-zoom", "0.75"));
+      await settleChrome(win);
+    }
     let collapsedGeometry;
     for (const layout of ["docked", "collapsed", "drawer"]) {
       if (layout === "collapsed") {
@@ -223,6 +246,67 @@ async function verifyNarrowSidebarControls(win) {
   win.webContents.setZoomFactor(1);
   await loadFile(win, rendererHtml);
   await waitFor(win, () => !!document.querySelector(".conversation-pane"), 5000);
+}
+
+async function notificationRouteState(win) {
+  return evaluate(win, () => ({
+    title: document.querySelector('.conversation-title-heading h1')?.textContent,
+    draft: document.querySelector('.composer textarea')?.value,
+    settingsOpen: document.querySelector('.app-shell').hasAttribute('data-settings-open'),
+    activeRibbon: [...document.querySelectorAll('[data-ribbon-id][aria-current="page"]')].map(node => node.dataset.ribbonId),
+    backEnabled: !document.querySelector('[data-wuu-component="page-history-back"]').disabled,
+    forwardEnabled: !document.querySelector('[data-wuu-component="page-history-forward"]').disabled,
+  }));
+}
+
+async function pointerClick(win, selector) {
+  const point = await evaluate(win, selector => {
+    const target = document.querySelector(selector);
+    const box = target.getBoundingClientRect();
+    return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+  }, selector);
+  const zoom = win.webContents.getZoomFactor();
+  const position = { x: Math.round(point.x * zoom), y: Math.round(point.y * zoom) };
+  win.webContents.sendInputEvent({ type: "mouseMove", ...position });
+  win.webContents.sendInputEvent({ type: "mouseDown", button: "left", clickCount: 1, ...position });
+  win.webContents.sendInputEvent({ type: "mouseUp", button: "left", clickCount: 1, ...position });
+}
+
+async function verifyNotificationClick(win, zoom) {
+  // Seed a real forward destination so an overlapping app-forward hit cannot
+  // pass merely because the history button happens to be disabled.
+  await evaluate(win, () => {
+    const input = document.querySelector('.composer textarea');
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, 'Keep notification click draft');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    document.querySelector('.sidebar-account-trigger').click();
+  });
+  await waitFor(win, () => !!document.querySelector('[data-settings-page="providers"]'), 3000);
+  await evaluate(win, () => document.querySelector('[data-settings-page="providers"]').click());
+  await waitFor(win, () => !!document.querySelector('.settings-shell'), 3000);
+  await waitFor(win, () => !document.querySelector('[data-wuu-component="page-history-back"]').disabled, 3000);
+  await evaluate(win, () => document.querySelector('[data-wuu-component="page-history-back"]').click());
+  await waitFor(win, () => !document.querySelector('.app-shell[data-settings-open]') &&
+    !document.querySelector('[data-wuu-component="page-history-forward"]').disabled, 3000);
+  await settleChrome(win);
+  const before = await notificationRouteState(win);
+  assert.equal(before.draft, 'Keep notification click draft');
+  assert.equal(before.forwardEnabled, true, 'Notification test has an actionable forward destination');
+  await pointerClick(win, '.sidebar-notifications-button');
+  await waitFor(win, () => document.querySelector('.sidebar-notifications-button')?.getAttribute('aria-pressed') === 'true' &&
+    !!document.querySelector('.sidebar-unread-view'), 3000);
+  const after = await notificationRouteState(win);
+  assert.deepEqual(after, before, 'A physical notification click must not navigate or change the active conversation draft/history availability');
+  results.push({ scenario: `notification-click-240-20px-${zoom}`, before, after, attentionOpen: true });
+  saveResults();
+  await capture(win, `notification-click-240-20px-${zoom}.png`);
+  await pointerClick(win, '.sidebar-notifications-button');
+  await waitFor(win, () => !document.querySelector('.sidebar-unread-view'), 3000);
+  await evaluate(win, () => {
+    const input = document.querySelector('.composer textarea');
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, '');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
 }
 
 // Exercise the real app, not copies of header markup or stylesheet literals.
@@ -371,21 +455,26 @@ async function chromeToggleGeometry(win) {
       ...document.querySelectorAll('.section-sidebar-toggle, .shell-page-history-controls button, .sidebar-notifications-button, .sidebar-brand .conversation-search-trigger'),
       ...activeHeader.querySelectorAll('h1, button'),
     ])].filter(visible);
+    const drawer = shell.classList.contains('sidebar-drawer-open')
+      ? document.querySelector(settingsOpen ? '.settings-sidebar' : '.sidebar > .sidebar-content') : null;
+    const drawerBounds = drawer && visible(drawer) ? drawer.getBoundingClientRect().toJSON() : null;
     const separationTargets = guardElements.map(element => {
       const box = element.getBoundingClientRect();
       const samples = [[0.5, 0.5], [0.2, 0.2], [0.8, 0.2], [0.2, 0.8], [0.8, 0.8]].map(([x, y]) => {
-        const hit = document.elementFromPoint(box.left + box.width * x, box.top + box.height * y);
-        return { owned: hit === element || element.contains(hit),
-          drawer: !!hit?.closest(settingsOpen ? '.settings-sidebar' : '.sidebar-content'),
+        const point = { x: box.left + box.width * x, y: box.top + box.height * y };
+        const hit = document.elementFromPoint(point.x, point.y);
+        return { ...point, owned: hit === element || element.contains(hit),
+          drawer: !!drawer?.contains(hit),
           hit: hit?.closest('button')?.dataset.wuuComponent || hit?.className || null };
       });
       return { target: element.dataset.wuuComponent || element.className || element.tagName,
         bounds: box.toJSON(), button: element instanceof HTMLButtonElement,
+        contentHeader: activeHeader.contains(element),
         history: !!element.closest('.shell-page-history-controls'),
         drawerOwned: !!element.closest(settingsOpen ? '.settings-sidebar' : '.sidebar-content'), samples };
     });
     return {
-      header: header.toJSON(), peers, separationTargets, historyState,
+      header: header.toJSON(), peers, separationTargets, historyState, drawerBounds,
       contentAxis: (header.top + parseFloat(headerStyle.paddingTop) + header.bottom - parseFloat(headerStyle.paddingBottom)) / 2,
       shellRow: shellBounds.toJSON(), shellControls,
       shellAxis: (shellBounds.top + parseFloat(shellStyle.paddingTop) + shellBounds.bottom - parseFloat(shellStyle.paddingBottom)) / 2,
@@ -520,15 +609,15 @@ function assertControlSeparation(geometry, context) {
   assert.equal(geometry.historyState.inert, suppressed, `Hidden history cannot receive keyboard input: ${details}`);
   for (const target of targets) {
     if (target.button) {
-      const coveredByDrawer = !target.history && !target.drawerOwned && target.samples.every(sample => sample.drawer);
-      assert.ok(coveredByDrawer || target.samples.every(sample => sample.owned),
+      assert.ok(target.samples.every(sample => ownsHeaderSample(target, sample, geometry.drawerBounds)),
         `Visible controls own their interior, not only their center: ${details}`);
     }
     for (const history of histories) {
       if (target === history) continue;
       // The preview legitimately covers underlying content; its own visible
       // notification/search controls still have to remain independently usable.
-      if (!target.drawerOwned && target.samples.every(sample => sample.drawer) && !target.samples.some(sample => sample.owned)) continue;
+      if (target.contentHeader && !target.drawerOwned && target.samples.every(sample =>
+        !sample.owned && ownsHeaderSample(target, sample, geometry.drawerBounds))) continue;
       const a = history.bounds, b = target.bounds;
       const overlapX = Math.min(a.right, b.right) - Math.max(a.left, b.left);
       const overlapY = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
@@ -540,7 +629,7 @@ function assertControlSeparation(geometry, context) {
 
 function saveResults(failure) {
   fs.writeFileSync(path.join(evidenceDir, "results.json"), JSON.stringify({
-    platform: process.platform, fixturePlatform, simulatedPlatform: fixturePlatform !== process.platform,
+    platform: process.platform, fixturePlatform, focusedControls, simulatedPlatform: fixturePlatform !== process.platform,
     captionCapabilities: "Renderer-only stubs; not evidence of native OS caption behavior.",
     electron: process.versions.electron, rendererHtml,
     nativeTrafficLights: {
