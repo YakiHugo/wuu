@@ -252,24 +252,24 @@ describe("EngineSettingsSection", () => {
       settings: { codex: { enabled: false, binary_path: "/first/codex" } },
     };
     act(() => root.render(<EngineSettingsSection {...props} result={disabled} />));
-    expect(container.querySelector<HTMLMeterElement>('[data-testid="settings-engine-codex-status"] meter')?.value).toBe(25);
+    expect(container.querySelector<HTMLMeterElement>('[data-testid="settings-engine-codex-status"] meter')?.value).toBe(75);
     act(() => root.render(<EngineSettingsSection {...props} result={disabled} quotaFailed />));
     expect(container.querySelector('[data-testid="settings-engine-codex-status"] meter')).toBeNull();
-    expect(container.querySelector('[data-testid="settings-engine-codex-status"]')?.textContent).toContain("25");
+    expect(container.querySelector('[data-testid="settings-engine-codex-status"]')?.textContent).toContain("75");
     const overview: EngineListResult = { ...disabled, engines: [{ ...disabled.engines[0], quota: {
       status: "available", kind: "subscription", observed_at: new Date(observedAt - 60_000).toISOString(),
       checked_at: new Date(observedAt - 60_000).toISOString(),
       windows: [{ id: "weekly", label: "Weekly", used_percent: 10, window_minutes: 10080 }],
     } }] };
     act(() => root.render(<EngineSettingsSection {...props} result={overview} />));
-    expect(container.querySelector<HTMLMeterElement>('[data-testid="settings-engine-codex-status"] meter')?.value).toBe(25);
+    expect(container.querySelector<HTMLMeterElement>('[data-testid="settings-engine-codex-status"] meter')?.value).toBe(75);
     overview.engines[0].quota!.observed_at = undefined;
     overview.engines[0].quota!.checked_at = "";
     act(() => root.render(<EngineSettingsSection {...props} result={{ ...overview }} />));
-    expect(container.querySelector<HTMLMeterElement>('[data-testid="settings-engine-codex-status"] meter')?.value).toBe(25);
+    expect(container.querySelector<HTMLMeterElement>('[data-testid="settings-engine-codex-status"] meter')?.value).toBe(75);
     overview.engines[0].quota!.observed_at = new Date(observedAt + 60_000).toISOString();
     act(() => root.render(<EngineSettingsSection {...props} result={{ ...overview }} />));
-    expect(container.querySelector<HTMLMeterElement>('[data-testid="settings-engine-codex-status"] meter')?.value).toBe(10);
+    expect(container.querySelector<HTMLMeterElement>('[data-testid="settings-engine-codex-status"] meter')?.value).toBe(90);
     await act(async () => root.render(<EngineSettingsSection {...props} result={disabled} selectedEngineID="codex" />));
     expect(container.textContent).toContain("First account");
     expect(window.wuu.listEngines).toHaveBeenCalledOnce();

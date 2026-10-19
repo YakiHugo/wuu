@@ -141,6 +141,10 @@ const layoutProblems = win => evaluate(win, () => {
     if (icon.right > copy.left + 1 || copy.right > chevron.left + 1) problems.push('connection icon, text or chevron overlaps');
     if (Math.abs(icon.top + icon.height / 2 - chevron.top - chevron.height / 2) > 1) problems.push('connection icon and chevron centers misaligned');
     if (copy.width <= 0 || rect.height < icon.height) problems.push('connection row content clipped');
+    if (icon.height > copy.height + 1) problems.push('connection icon exceeds its two-line identity');
+    const quota = row.querySelector(':scope > .connection-usage-summary')?.getBoundingClientRect();
+    if (quota && (quota.right > chevron.left + 1 || quota.left < copy.left - 1)) problems.push('connection quota outside its reading column');
+    if (quota && quota.top < copy.bottom - 1 && quota.left < copy.right - 1) problems.push('connection quota overlaps identity');
     const viewport = row.closest('.settings-scroll').getBoundingClientRect();
     const x = rect.left + rect.width / 2;
     const y = rect.top + rect.height / 2;

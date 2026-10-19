@@ -6,6 +6,7 @@ import {
   Suspense,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -29,7 +30,6 @@ import {
   Code2,
   MoreHorizontal,
   Plus,
-  RefreshCw,
   RotateCcw,
   Search,
   Trash2,
@@ -286,9 +286,11 @@ function AccountMethods({ selected, disabled, onSelect }: { selected: AccountMet
 
 type CatalogState = { providers?: CatalogProviderSummary[]; failed: boolean };
 
-export function useCatalogProviders(version: number): CatalogState {
+export function useCatalogProviders(version: number, snapshot?: CatalogProviderSummary[]): CatalogState {
   const [state, setState] = useState<CatalogState>({ failed: false });
   useEffect(() => {
+    if (snapshot) return;
+    // Older hosts do not include the directory in initialization.
     if (!hostSupports("listCatalogProviders") || typeof window.wuu?.listCatalogProviders !== "function") {
       setState({ failed: true });
       return;
@@ -299,8 +301,8 @@ export function useCatalogProviders(version: number): CatalogState {
       () => { if (active) setState({ failed: true }); },
     );
     return () => { active = false; };
-  }, [version]);
-  return state;
+  }, [version, snapshot]);
+  return snapshot ? { providers: snapshot, failed: false } : state;
 }
 
 export function ModelServicesPage({
@@ -313,11 +315,11 @@ export function ModelServicesPage({
   runningProviderNames,
   onSave,
   onRemoveProvider,
-  onRefreshModelCatalog,
   onProvidersChanged,
   onProviderModelsChanged,
 }: ModelServicesPageProps): JSX.Element {
   const { t } = useI18n();
+  const rootRef = useRef<HTMLDivElement>(null);
   const addButtonRef = useRef<HTMLButtonElement>(null);
   const providers = initialized?.providers ?? [];
   const labels = useMemo(() => serviceLabels(providers, t), [providers, t]);
@@ -384,9 +386,13 @@ export function ModelServicesPage({
     }
   }, [openService, adding]);
   const [catalogVersion, setCatalogVersion] = useState(0);
-  const [catalogRefreshing, setCatalogRefreshing] = useState(false);
-  const catalog = useCatalogProviders(catalogVersion);
+  const catalog = useCatalogProviders(catalogVersion, initialized?.catalog_providers);
   const detailProvider = overviewProviders.find((provider) => provider.name === openService);
+
+  useLayoutEffect(() => {
+    const scroller = rootRef.current?.closest(".settings-scroll");
+    if (scroller) scroller.scrollTop = 0;
+  }, [openService]);
 
   // A removed or renamed service returns the page to the overview.
   useEffect(() => {
@@ -396,29 +402,15 @@ export function ModelServicesPage({
   const defaultProvider = providers.find((provider) => provider.name === initialized?.provider);
   const defaultUsable = Boolean(defaultProvider && !serviceIdentity(defaultProvider, t).attention);
 
-  async function refreshCatalog(): Promise<void> {
-    setCatalogRefreshing(true);
-    try {
-      await onRefreshModelCatalog();
-      setCatalogVersion((value) => value + 1);
-      setQuotaVersion(value => value + 1);
-    } finally {
-      setCatalogRefreshing(false);
-    }
-  }
 
   return (
-    <div className="model-services" data-testid="settings-providers">
-      <SettingsPageHeader title={t("settings.providers")} />
-      {!adding && !detailProvider && !selectedEngine ? <div className="settings-page-actions connection-list-actions">
-          <button type="button" className="settings-button settings-button-ghost settings-icon-button"
-            data-testid="settings-model-catalog-refresh" aria-label={t("settings.modelCatalogUpdate")}
-            title={t("settings.modelCatalogUpdate")} aria-busy={catalogRefreshing} disabled={catalogRefreshing}
-            onClick={() => void refreshCatalog()}><RefreshCw className={`icon${catalogRefreshing ? " settings-spin" : ""}`} aria-hidden="true" /></button>
-          <button type="button" className="settings-button" data-testid="settings-connection-add" ref={addButtonRef} disabled={running}
-            onClick={() => setAdding(true)}><Plus className="icon" aria-hidden="true" />{t("provider.addConnection")}</button>
-      </div> : null}
-      {!adding && !detailProvider && !selectedEngine ? <ServicesOverview providers={overviewProviders} labels={labels} initialized={initialized} quotaLoading={quotaLoading} now={quotaNow}
+    <div className="model-services" data-testid="settings-providers" ref={rootRef}>
+      <SettingsPageHeader title={t("settings.providers")} actions={!adding && !detailProvider && !selectedEngine ?
+        <button type="button" className="settings-button settings-button-ghost settings-icon-button"
+          data-testid="settings-connection-add" ref={addButtonRef} disabled={running}
+          aria-label={t("provider.addConnection")} title={t("provider.addConnection")}
+          onClick={() => setAdding(true)}><Plus className="icon" aria-hidden="true" /></button> : undefined} />
+      {!adding && !detailProvider && !selectedEngine ? <ServicesOverview providers={overviewProviders} initialized={initialized} quotaLoading={quotaLoading} now={quotaNow}
         onOpenService={setOpenService} /> : null}
       {onRefreshEngines && onUpdateEngines && !detailProvider && (!adding || selectedEngine) ? <EngineSettingsSection embedded
         result={overviewInventory} quotaFailed={quotaFailed} quotaLoading={quotaLoading} quotaNow={quotaNow} loadError={inventoryError} onRefresh={onRefreshEngines} onUpdate={onUpdateEngines}
@@ -539,7 +531,6 @@ export function ServiceConnector({
       {!catalogDialog ? <><div className="model-service-catalog" data-testid="settings-provider-tiles">
         <CatalogServiceGroups
           catalogProviders={[...featured, ...local.filter((provider) => !featuredIDs.includes(provider.id))]}
-          pendingCatalogTiles={catalog.providers === undefined && !catalog.failed ? featuredIDs.length : 0}
           providers={providers}
           grouped={false}
           disabled={running}
@@ -617,14 +608,12 @@ export function ServiceConnector({
 
 function ServicesOverview({
   providers,
-  labels,
   initialized,
   onOpenService,
   quotaLoading,
   now,
 }: {
   providers: readonly ProviderSummary[];
-  labels: ReadonlyMap<string, string>;
   initialized?: InitializeResult;
   onOpenService: (name: string) => void;
   quotaLoading: boolean;
@@ -637,14 +626,15 @@ function ServicesOverview({
     <>
 
       {providers.length > 0 ? (
-        <SettingsSection title={t("provider.providerConnections")}>
-          <div className="model-service-grid" role="list" aria-label={t("provider.providerConnections")}>
+        <SettingsSection title={t("provider.connectionModels")}>
+          <div className="model-service-grid" role="list" aria-label={t("provider.connectionModels")}>
             {providers.map((provider) => {
               const identity = serviceIdentity(provider, t);
-              const label = labels.get(provider.name) ?? identity.label;
+              const label = identity.label;
               const isDefault = provider.name === initialized?.provider;
               const attention = identity.attention ?? (provider.quota?.status === "sign_in" ? t("settings.subscriptionSignIn") : undefined);
-              const status = attention ?? t(isDefault ? "provider.defaultBadge" : "settings.engineReady");
+              const status = attention ?? t("settings.engineReady");
+              const plan = provider.quota?.plan?.trim() || (identity.subscription ? t("settings.subscriptionKindSubscription") : "API");
               return (
                 <div role="listitem" key={provider.name}>
                   <button
@@ -654,17 +644,17 @@ function ServicesOverview({
                     data-provider={provider.name}
                     data-default={isDefault ? "" : undefined}
                     aria-label={label}
-                    aria-describedby={`${summaryID}-${encodeURIComponent(provider.name)}`}
+                    aria-describedby={`${summaryID}-${encodeURIComponent(provider.name)} ${summaryID}-${encodeURIComponent(provider.name)}-quota`}
                     onClick={() => onOpenService(provider.name)}
                   >
                     <span className="connection-summary-icon"><ServiceMark identity={identity} /></span>
                     <span id={`${summaryID}-${encodeURIComponent(provider.name)}`} className="model-service-card-copy connection-summary-copy">
-                      <span className="connection-summary-heading">
-                        <span className="model-service-card-title">{label}</span>
+                      <span className="model-service-card-title">{label}</span>
+                      <span className="connection-summary-meta"><span>{plan}</span><span aria-hidden="true"> · </span>
                         <span className="connection-summary-status" data-attention={attention ? "" : undefined}>{status}</span>
                       </span>
-                      {(provider.quota || identity.subscription) && !attention ? <ConnectionUsageSummary quota={provider.quota} loading={quotaLoading} now={now} /> : null}
                     </span>
+                    {!attention ? <ConnectionUsageSummary id={`${summaryID}-${encodeURIComponent(provider.name)}-quota`} quota={provider.quota} loading={quotaLoading} now={now} /> : null}
                     <ChevronRight className="icon settings-disclosure-chevron" aria-hidden="true" />
                   </button>
                 </div>
@@ -672,7 +662,7 @@ function ServicesOverview({
             })}
           </div>
         </SettingsSection>
-      ) : <SettingsSection title={t("provider.providerConnections")}><p className="settings-muted-line">{t("provider.noService")}</p></SettingsSection>}
+      ) : <SettingsSection title={t("provider.connectionModels")}><p className="settings-muted-line">{t("provider.noService")}</p></SettingsSection>}
 
     </>
   );
@@ -1549,7 +1539,6 @@ function ModelChoices({
 // featured list reads as one run in the same order.
 function CatalogServiceGroups({
   catalogProviders,
-  pendingCatalogTiles = 0,
   providers,
   query = "",
   grouped,
@@ -1557,7 +1546,6 @@ function CatalogServiceGroups({
   onConnect,
 }: {
   catalogProviders: readonly CatalogProviderSummary[];
-  pendingCatalogTiles?: number;
   providers: readonly ProviderSummary[];
   query?: string;
   grouped: boolean;
@@ -1627,7 +1615,7 @@ function CatalogServiceGroups({
       </span>
     </button>
   ));
-  const empty = entries.length === 0 && subscriptions.length === 0 && !directTile && !pendingCatalogTiles
+  const empty = entries.length === 0 && subscriptions.length === 0 && !directTile
     ? <p className="settings-group-empty">{t("provider.noServiceMatches")}</p>
     : null;
 
@@ -1637,14 +1625,7 @@ function CatalogServiceGroups({
         {directTile}
         {subscriptionTiles}
         {groups.flatMap(catalogTiles)}
-        {Array.from({ length: pendingCatalogTiles }, (_, index) => (
-          <div key={`pending-${index}`} className="model-service-tile model-service-skeleton" aria-hidden="true">
-            <span className="model-service-skeleton-mark" />
-            <span className="model-service-skeleton-name" />
-          </div>
-        ))}
       </div>
-      {pendingCatalogTiles ? <span className="sr-only" role="status">{t("settings.loading")}</span> : null}
       {empty}
     </>;
   }

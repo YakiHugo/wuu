@@ -218,8 +218,25 @@ async function run() {
   await waitFor(main, () => document.querySelector('[data-settings-page="providers"]'));
   await click(main, '[data-settings-page="providers"]');
   await waitFor(main, () => document.querySelector('[data-provider="personal"] .connection-usage-summary meter'));
-  assert.deepEqual(await evaluate(main, () => [...document.querySelectorAll('[data-provider="personal"] meter')].map(meter => meter.value)), [37, 100], 'Overview meters show consumed usage.');
+  assert.deepEqual(await evaluate(main, () => [...document.querySelectorAll('[data-provider="personal"] meter')].map(meter => meter.value)), [63, 0], 'Overview meters show remaining allowance.');
   assert.equal(await evaluate(main, () => document.querySelector('[data-provider="team"] meter') === null), true, 'Unknown usage must not become an empty or full meter.');
+  assert.equal(await evaluate(main, () => document.querySelector('[data-provider="team"] .connection-usage-summary') === null), true, 'Missing quota observations leave no empty quota area.');
+  assert.equal(await evaluate(main, () => document.querySelector('[data-provider="unknown"] .connection-usage-summary') === null), true, 'Unsupported quota leaves no empty quota area.');
+  const overview = await evaluate(main, () => {
+    const row = document.querySelector('[data-provider="personal"]');
+    const meters = [...row.querySelectorAll('meter')];
+    const values = [...row.querySelectorAll('.connection-usage-value')];
+    return {
+      resetTimesVisible: [...row.querySelectorAll('time')].every(time => time.textContent.trim() && time.dateTime),
+      exhausted: meters[1].getAttribute('data-exhausted'),
+      valueColors: values.map(value => getComputedStyle(value).color),
+      explicitRefresh: Boolean(document.querySelector('[data-testid="settings-model-catalog-refresh"], [data-testid="settings-engine-refresh"]')),
+    };
+  });
+  assert.equal(overview.resetTimesVisible, true);
+  assert.equal(overview.exhausted, 'true');
+  assert.equal(overview.valueColors[0], overview.valueColors[1], 'Quota severity changes the bar, never the percentage text.');
+  assert.equal(overview.explicitRefresh, false);
   await capture(main, '00-connection-overview.png');
   await openProviderDetail(main, 'personal');
   const fresh = await snapshot(main);
@@ -325,8 +342,8 @@ async function run() {
   await refresh(main);
   assert.deepEqual(await evaluate(main, selector => [...document.querySelectorAll(`${selector} meter`)].map(meter => meter.value), card('personal')), [48, 0]);
   await click(main, '[data-testid="settings-provider-back"]');
-  await waitFor(main, () => document.querySelector('[data-provider="personal"] meter')?.value === 52);
-  assert.deepEqual(await evaluate(main, () => [...document.querySelectorAll('[data-provider="personal"] meter')].map(meter => meter.value)), [52, 100], 'Returning from refreshed detail shows the latest consumed allowance.');
+  await waitFor(main, () => document.querySelector('[data-provider="personal"] meter')?.value === 48);
+  assert.deepEqual(await evaluate(main, () => [...document.querySelectorAll('[data-provider="personal"] meter')].map(meter => meter.value)), [48, 0], 'Returning from refreshed detail shows the latest remaining allowance.');
   await openProviderDetail(main, 'personal');
   firstStatus = 401;
   await refresh(main);

@@ -609,7 +609,7 @@ describe("SettingsView model services", () => {
     expect(document.querySelector('[data-testid="settings-provider-custom"]')).not.toBeNull();
   });
 
-  it("names connected services by vendor", async () => {
+  it("names connected services by provider identity", async () => {
     installServicesStub();
     const initialized = servicesInitialized();
     const beforeBrowsing = structuredClone(initialized);
@@ -619,7 +619,7 @@ describe("SettingsView model services", () => {
 
     const cards = [...document.querySelectorAll('[data-testid="settings-provider-card"]')];
     expect(cards.map((card) => card.getAttribute("aria-label"))).toEqual(["ChatGPT", "DeepSeek", "OpenRouter"]);
-    expect(cards[0]?.textContent).toContain("Default");
+    expect(cards[0]?.textContent).toContain("Ready");
     expect(cards[2]?.textContent).toContain("API key missing");
     expect(document.querySelector('[data-catalog="deepseek"]')).toBeNull();
     await openProviderCatalog();
@@ -661,9 +661,15 @@ describe("SettingsView model services", () => {
     expect(api.listEngines).toHaveBeenCalledTimes(1);
     expect(api.listEngines).toHaveBeenCalledWith({ include_quota: true });
     const provider = document.querySelector('[data-provider="openai-codex"]')!;
-    expect(provider.querySelector("meter")?.value).toBe(25);
+    expect(provider.querySelector("meter")?.value).toBe(75);
     const engine = document.querySelector('[data-testid="settings-engine-codex-status"]')!;
-    expect(engine.querySelector("meter")?.value).toBe(25);
+    expect(engine.querySelector("meter")?.value).toBe(75);
+    for (const row of [provider, engine]) {
+      const quota = row.querySelector(".connection-usage-summary")!;
+      expect(quota.id).toBeTruthy();
+      expect(quota.hasAttribute("aria-label")).toBe(false);
+      expect(row.getAttribute("aria-describedby")?.split(" ")).toContain(quota.id);
+    }
     click(engine);
     await flush();
     expect(document.querySelector('[data-testid="settings-engine-codex-enabled"]')?.getAttribute("aria-checked")).toBe("true");
@@ -722,22 +728,34 @@ describe("SettingsView model services", () => {
     expect(document.querySelector('[data-provider="openai-codex"] meter')).toBeNull();
   });
 
-  it("stops presenting cached allowance as live after a failed refresh", async () => {
+  it("does not show a previously available allowance for a disconnected account", async () => {
     const api = installServicesStub();
     const initialized = servicesInitialized();
-    vi.mocked(api.listEngines).mockResolvedValueOnce({
-      engines: [], subscription_providers: [{ ...initialized.providers![0],
-        quota: { status: "available", checked_at: new Date().toISOString(), windows: [{ id: "short", used_percent: 25 }] },
-      }],
-    }).mockRejectedValueOnce(new Error("quota request failed"));
+    const provider = { name: "disconnected", type: "chatgpt", model: "model", chatgpt_account_id: "account", auth_status: "reauth_required" as const };
+    initialized.providers = [provider];
+    vi.mocked(api.listEngines).mockResolvedValue({ engines: [], subscription_providers: [{ ...provider,
+      quota: { status: "available", checked_at: new Date().toISOString(), windows: [{ id: "short", used_percent: 25 }] },
+    }] });
     renderSettings({ initialized, initialPage: "providers" });
     await flush();
-    expect(document.querySelector('[data-provider="openai-codex"] meter')).not.toBeNull();
-    click(document.querySelector('[data-testid="settings-model-catalog-refresh"]'));
+    const row = document.querySelector('[data-provider="disconnected"]')!;
+    expect(row.querySelector(".connection-summary-status")?.hasAttribute("data-attention")).toBe(true);
+    expect(row.querySelector(".connection-usage-summary")).toBeNull();
+  });
+
+  it("keeps unavailable quota out of the list without hiding connection status", async () => {
+    const api = installServicesStub();
+    const initialized = servicesInitialized();
+    vi.mocked(api.listEngines).mockResolvedValue({ engines: [], subscription_providers: [{
+      ...initialized.providers![0], quota: { status: "unsupported", checked_at: new Date().toISOString() },
+    }] });
+    renderSettings({ initialized, engineInventory: readyEngineInventory(), initialPage: "providers" });
     await flush();
-    expect(api.listEngines).toHaveBeenCalledTimes(2);
-    expect(document.querySelector('[data-provider="openai-codex"] meter')).toBeNull();
-    expect(document.querySelector('[data-provider="openai-codex"]')?.textContent).toContain("25");
+    const row = document.querySelector('[data-provider="openai-codex"]')!;
+    expect(row.querySelector(".connection-usage-summary")).toBeNull();
+    expect(row.querySelector(".connection-summary-status")?.textContent).toBeTruthy();
+    expect(document.querySelector('[data-testid="settings-model-catalog-refresh"]')).toBeNull();
+    expect(document.querySelector('[data-testid="settings-engine-refresh"]')).toBeNull();
   });
 
   it("shows one authentication warning instead of ready or default for a rejected quota login", async () => {
@@ -757,7 +775,8 @@ describe("SettingsView model services", () => {
     expect(warning.length).toBeGreaterThan(0);
     // The row has only its service name and one actionable authentication
     // state, rather than a default/ready badge or duplicate usage warning.
-    expect(row.textContent).toBe(`${row.getAttribute("aria-label")}${warning}`);
+    expect(row.querySelector(".connection-summary-status")?.textContent).toBe(warning);
+    expect(row.querySelector(".connection-usage-summary")).toBeNull();
     expect(row.querySelector("meter")).toBeNull();
   });
 
@@ -1035,19 +1054,22 @@ describe("SettingsView model services", () => {
     expect(document.querySelector<HTMLButtonElement>('[data-testid="settings-provider-remove-confirm"]')!.disabled).toBe(true);
   });
 
-  it("refreshes the model catalog with a button-only loading state", async () => {
-    installServicesStub();
-    let finish: () => void = () => {};
-    const onRefreshModelCatalog = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
-    renderSettings({ initialized: servicesInitialized(), initialPage: "providers", onRefreshModelCatalog });
+  it("allows repeated provider display names with observed subscription plans", async () => {
+    const api = installServicesStub();
+    const initialized = servicesInitialized();
+    initialized.providers = ["personal", "work"].map(name => ({ name, type: "openai-codex", api_key_configured: true, model: "gpt-6-astra" }));
+    vi.mocked(api.listEngines).mockResolvedValue({ engines: [], subscription_providers: [{ ...initialized.providers[0],
+      quota: { status: "available", plan: "Plus", checked_at: new Date().toISOString(), windows: [{ id: "weekly", window_minutes: 10080, used_percent: 32 }] },
+    }] });
+    renderSettings({ initialized, initialPage: "providers", locale: "en-US" });
     await flush();
-    const refresh = document.querySelector<HTMLButtonElement>('[data-testid="settings-model-catalog-refresh"]')!;
-    click(refresh);
-    expect(refresh.disabled).toBe(true);
-    expect(refresh.getAttribute("aria-busy")).toBe("true");
-    await act(async () => finish());
-    expect(refresh.disabled).toBe(false);
-    expect(window.wuu.listCatalogProviders).toHaveBeenCalledTimes(2);
+    const row = document.querySelector('[data-provider="personal"]')!;
+    expect([...document.querySelectorAll('[data-testid="settings-provider-card"]')].map(card => card.getAttribute("aria-label"))).toEqual(["ChatGPT", "ChatGPT"]);
+    expect(row.querySelector(".connection-summary-meta")?.textContent).toContain("Plus");
+    expect(row.querySelectorAll("meter")).toHaveLength(1);
+    click(row);
+    await flush();
+    expect(document.querySelector('[data-testid="settings-provider-back"]')).not.toBeNull();
   });
 });
 
