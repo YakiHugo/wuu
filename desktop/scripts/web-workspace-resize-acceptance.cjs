@@ -23,6 +23,7 @@ module.exports = async function accept(h) {
     return view && !view.webContents.isLoading();
   }, 'animated native page');
   const wc = view.webContents;
+  if (process.env.WUU_RESIZE_CHROME_ONLY === '1') return require('./web-workspace-chrome-acceptance.cjs')(h, view);
   // Switching already loaded ribbon tabs must not hide the newly selected
   // page again while React updates the shared browser chrome.
   const switchPages = new Map();

@@ -53,6 +53,15 @@ export type WebWorkspaceMenuRequest = {
   labels: Record<WebWorkspaceMenuAction, string>;
 };
 
+export type WebWorkspaceTooltip = {
+  text: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  style: { fontFamily: string; fontSize: string; fontWeight: string; fontStyle: string; color: string; backgroundColor: string; border: string; borderRadius: string; padding: string; lineHeight: string };
+};
+
 export type WebWorkspaceApi = {
   /** Restore the ribbon and migrate legacy website sessions once, without losing their child tabs. */
   initializeTabs: (destinations: WebWorkspaceLegacyDestination[]) => Promise<WebWorkspaceInitializationState>;
@@ -62,6 +71,7 @@ export type WebWorkspaceApi = {
   open: (destination: WebWorkspaceDestination) => Promise<WebWorkspaceState>;
   /** One current-page JPEG backdrop; null when hidden, stale, or unavailable. */
   capture: (id: string) => Promise<string | null>;
+  showTooltip: (token: string, hint: WebWorkspaceTooltip | null) => Promise<void>;
   /** Native popup keeps the live page composited; null means dismissed. */
   showOptions: (id: string, request: WebWorkspaceMenuRequest) => Promise<WebWorkspaceMenuAction | null>;
   /** CSS-pixel geometry; null hides this destination without closing its pages. */

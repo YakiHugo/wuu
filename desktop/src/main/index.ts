@@ -5,7 +5,8 @@ import { WebWorkspaceHost } from "./webWorkspaceHost";
 import { WebWorkspaceLibrary } from "./webWorkspaceLibrary";
 import { WebWorkspaceDownloads } from "./webWorkspaceDownloads";
 import type { WebWorkspaceDownloadCommand } from "../shared/webWorkspaceDownloads";
-import type { WebWorkspaceMenuRequest, WebWorkspaceBounds, WebWorkspaceCommand, WebWorkspaceDestination, WebWorkspaceLegacyDestination, WebWorkspaceFindOptions } from "../shared/webWorkspace";
+import { NativeTooltip } from "./nativeTooltip";
+import type { WebWorkspaceTooltip, WebWorkspaceMenuRequest, WebWorkspaceBounds, WebWorkspaceCommand, WebWorkspaceDestination, WebWorkspaceLegacyDestination, WebWorkspaceFindOptions } from "../shared/webWorkspace";
 import { importBrowserCookies, listBrowserProfiles } from "./browserCookieImport";
 import { BrowserExtensionManager } from "./browserExtensions";
 import { saveArtifactFile } from "./artifactSave";
@@ -2863,6 +2864,7 @@ app.whenReady().then(async () => {
       return { ok: true };
     },
   );
+  const nativeTooltip = new NativeTooltip();
   const webWorkspaceSender = (event: IpcMainInvokeEvent): BrowserWindow => {
     if (!ENABLE_EMBEDDED_BROWSER) throw new Error("The embedded browser is disabled in this build.");
     if (!isAppContextSender(event)) throw new Error("Website destinations are available from Wuu's main window only.");
@@ -2872,6 +2874,8 @@ app.whenReady().then(async () => {
     webWorkspaceHost.initializeTabs(webWorkspaceSender(event), destinations));
   ipcMain.handle("wuu:web-workspace-open", (event, destination: WebWorkspaceDestination) =>
     webWorkspaceHost.open(webWorkspaceSender(event), destination));
+  ipcMain.handle("wuu:web-workspace-tooltip", (event, token: string, hint: WebWorkspaceTooltip | null) =>
+    nativeTooltip.show(webWorkspaceSender(event), token, hint));
   ipcMain.handle("wuu:web-workspace-options", (event, id: string, request: WebWorkspaceMenuRequest) =>
     webWorkspaceHost.showOptions(webWorkspaceSender(event), id, request));
   ipcMain.handle("wuu:web-workspace-capture", (event, id: string) => webWorkspaceHost.capture(webWorkspaceSender(event), id));

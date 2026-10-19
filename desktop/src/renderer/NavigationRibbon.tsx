@@ -40,9 +40,10 @@ export interface RibbonBrowserActions {
   onReorderTabs?: (ids: string[]) => void;
 }
 
-function RibbonDestination({ item, onMove, onMenu }: {
+function RibbonDestination({ item, onMove, onMenu, nativeTooltip }: {
   item: NavigationRibbonItem;
   onMove: (direction: -1 | 1) => void;
+  nativeTooltip: boolean;
   onMenu?: (x: number, y: number) => void;
 }): JSX.Element {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -51,7 +52,7 @@ function RibbonDestination({ item, onMove, onMenu }: {
   });
   const style: CSSProperties = { transform: CSS.Transform.toString(transform), transition };
   return (
-    <Tooltip content={item.title} disabled={isDragging}>
+    <Tooltip content={item.title} disabled={isDragging} native={nativeTooltip}>
       <button
         {...attributes}
         {...listeners}
@@ -190,11 +191,11 @@ export function NavigationRibbon({ items, websites = [], activeWebsiteId, onSele
         onDragEnd={({ active, over }) => { if (over) reorder(String(active.id), String(over.id)); }}>
         <div className="sidebar-ribbon-main scrollbar-hidden">
           <SortableContext items={orderedIDs} strategy={verticalListSortingStrategy}>
-            {ordered.map((item) => <RibbonDestination key={item.id} item={item}
+            {ordered.map((item) => <RibbonDestination key={item.id} item={item} nativeTooltip={Boolean(activeWebsiteId)}
               onMove={(direction) => move(item.id, direction)}
               onMenu={websiteIDs.has(item.id) ? (x, y) => setMenu({ id: item.id, x, y }) : undefined} />)}
           </SortableContext>
-          <Tooltip content={t("webWorkspace.newTab")}>
+          <Tooltip content={t("webWorkspace.newTab")} native={Boolean(activeWebsiteId)}>
             <button type="button" className="sidebar-ribbon-button sidebar-ribbon-add" aria-label={t("webWorkspace.newTab")}
               disabled={!onNewTab} onClick={onNewTab}><Plus aria-hidden="true" /></button>
           </Tooltip>
