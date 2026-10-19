@@ -3179,10 +3179,10 @@ export type WuuDesktopApi = {
   // on <html> before first paint (window-chrome CSS keys off it) and
   // mirrors the value here for renderer logic (shortcut hints, OS labels).
   platform?: DesktopPlatform;
-  // Linux frameless chrome: the renderer draws caption buttons. Absent or
-  // unused on macOS (traffic lights) and Windows (controls overlay).
+  // Renderer-owned macOS and Linux window controls; Windows uses its native overlay.
   windowMinimize?: () => Promise<void>;
   windowToggleMaximize?: () => Promise<boolean>;
+  windowToggleFullScreen?: () => Promise<void>;
   windowClose?: () => Promise<void>;
   windowIsMaximized?: () => Promise<boolean>;
   onWindowMaximizedChange?: (handler: (maximized: boolean) => void) => () => void;

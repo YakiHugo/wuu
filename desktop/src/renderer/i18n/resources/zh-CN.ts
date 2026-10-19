@@ -1644,6 +1644,7 @@ export const zhCN = {
   "shell.openRightSidebar": "打开右侧栏",
   "shell.windowControls": "窗口控制",
   "shell.minimizeWindow": "最小化",
+  "shell.toggleFullScreen": "切换全屏",
   "shell.maximizeWindow": "最大化",
   "shell.restoreWindow": "还原",
   "shell.closeWindow": "关闭",

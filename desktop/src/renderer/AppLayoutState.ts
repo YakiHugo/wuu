@@ -23,7 +23,7 @@ export const sidebarDrawerExitMs = (): number =>
   motionDurationMs("--sidebar-drawer-exit-duration", 220);
 export const rightPanelMotionMs = (): number =>
   motionDurationMs("--workspace-panel-motion-duration", 180);
-export const SIDEBAR_RIBBON_WIDTH = 48;
+export const SIDEBAR_RIBBON_WIDTH = 52;
 export const SIDEBAR_DEFAULT_WIDTH = 264;
 // Keep enough horizontal room for one-line navigation labels and useful
 // conversation titles. The rail becomes an overlay drawer below the compact

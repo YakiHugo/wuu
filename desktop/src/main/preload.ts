@@ -574,6 +574,7 @@ const api: WuuDesktopApi = {
   windowMinimize: () => ipcRenderer.invoke("wuu:window-minimize"),
   windowToggleMaximize: () =>
     ipcRenderer.invoke("wuu:window-toggle-maximize") as Promise<boolean>,
+  windowToggleFullScreen: () => ipcRenderer.invoke("wuu:window-toggle-full-screen"),
   windowClose: () => ipcRenderer.invoke("wuu:window-close"),
   windowIsMaximized: () =>
     ipcRenderer.invoke("wuu:window-is-maximized") as Promise<boolean>,

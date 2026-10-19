@@ -5742,7 +5742,9 @@ export function App(): JSX.Element {
       >
         <header className="titlebar" data-wuu-component="conversation-titlebar">
           <div className="title-block">
-            {sidebarToggleVisible && sidebarDrawerMode && !rightPanelGlobalized ? (
+            {/* The ribbon owns a shell-level toggle. A hidden legacy toggle
+                would still activate the hover drawer's layout placeholder. */}
+            {sidebarToggleVisible && sidebarDrawerMode && !rightPanelGlobalized && !nativeRibbonPresent ? (
               <button
                 className="icon-button side-panel-toggle-button sidebar-toggle-button sidebar-collapse-toggle"
                 data-wuu-component="sidebar-toggle"

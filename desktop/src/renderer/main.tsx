@@ -8,6 +8,7 @@ import { startAppearanceSync } from "./AppearancePreferences";
 import { AppBackground } from "./background/AppBackground";
 import { applyMessageFlowFontSize } from "./MessageFlowFontSizeSection";
 import { ENABLE_ACCOUNT } from "./FeatureFlags";
+import { MacWindowControls } from "./MacWindowControls";
 import { LinuxWindowControls, startLinuxTitlebarMaximizeGesture } from "./LinuxWindowControls";
 import { applyPlatformStamp } from "./platform";
 import { startRendererVisibilitySync } from "./RendererVisibility";
@@ -99,6 +100,7 @@ ReactDOM.createRoot(rendererRoot).render(
         : <><App />{ENABLE_APP_SNAPSHOTS && <AppContextCaptureHost />}</>}
       {/* Native drag regions follow DOM order; caption exclusions must follow app titlebars. */}
       <LinuxWindowControls />
+      <MacWindowControls />
       <ToastViewport />
       <ConfirmDialogHost />
     </WuuUIRoot>

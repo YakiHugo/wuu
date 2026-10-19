@@ -1647,6 +1647,7 @@ export const enUS = {
   "shell.openRightSidebar": "Open right sidebar",
   "shell.windowControls": "Window controls",
   "shell.minimizeWindow": "Minimize",
+  "shell.toggleFullScreen": "Toggle full screen",
   "shell.maximizeWindow": "Maximize",
   "shell.restoreWindow": "Restore",
   "shell.closeWindow": "Close",
