@@ -193,11 +193,12 @@ export class ChromeOverlayHost {
     if (!request || !message || request.token !== message.token || !surface.view.getVisible()) return;
     const command = message.command;
     if (!command || typeof command.type !== "string") return;
-    // Pointer/focus ownership belongs to this opening, not a title/progress
-    // revision. Dropping a leave during a model update strands the native rail.
-    const lifecycle = command.type === "pointer" || command.type === "retain" || command.type === "dismiss" || command.type === "reveal";
+    // Pointer/focus ownership, reveal progress and opening a menu belong to this
+    // opening, not a title/progress revision. A menu is rebuilt from the current
+    // validated tab below; actual Pin/Close commands use the current generation.
+    const presentation = command.type === "pointer" || command.type === "retain" || command.type === "dismiss" || command.type === "reveal" || command.type === "tab-menu";
     if (!Number.isSafeInteger(message.generation) || message.generation < 1
-      || (lifecycle ? message.generation > request.generation : message.generation !== request.generation)) return;
+      || (presentation ? message.generation > request.generation : message.generation !== request.generation)) return;
     if (command.type === "reveal" && surface.kind === "ribbon") {
       if (!Number.isFinite(command.fraction) || command.fraction < 0 || command.fraction > 1) return;
       surface.reveal = command.fraction;

@@ -62,6 +62,7 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Keep native tab context menus responsive when a title or favicon update crosses the right-click, while validating the current tab and menu actions.
 - Dismiss the live native hover ribbon on real pointer movement into the shell or page after reopening a tab, including when the reused overlay never received a pointer-enter event.
 - Keep tab-close focus inside the native ribbon instead of moving to its duplicate shell controls.
 - Keep floating tab ribbon reversals continuous during page-title updates and let clicks reach browser controls beneath the saved sidebar footprint.

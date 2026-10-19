@@ -6,7 +6,7 @@ const path = require('node:path');
 const http = require('node:http');
 const { spawnSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
-const { app, BrowserWindow, dialog, Menu, nativeImage, session, webContents } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, session, webContents } = require('electron');
 const { prepareMediaFixture, serveMediaFixture, runBrowserMediaAcceptance } = require('./browser-media-acceptance.cjs');
 
 async function createWebsiteFixture(home) {
@@ -122,12 +122,28 @@ async function runWebsiteAcceptance(h, fixture) {
   async function fill(target, value) {
     const query = typeof target === 'string' ? target : target.selector;
     if (!await evaluatePopover(selector => Boolean(document.querySelector(selector)), query)) return fillShell(target, value);
+    const wc = (await nativePopover()).view.webContents;
     await click(target, 'focus-native-popover-input', false);
-    await waitPopover(selector => document.activeElement?.matches(selector), query);
-    xinput(['key', '--clearmodifiers', 'ctrl+a']);
-    await waitPopover(selector => { const input = document.querySelector(selector); return input.selectionStart === 0 && input.selectionEnd === input.value.length; }, query);
-    if (value) xinput(['type', '--clearmodifiers', '--delay', '8', value]); else xinput(['key', 'BackSpace']);
-    await waitPopover(({ selector, value }) => document.querySelector(selector)?.value === value, { selector: query, value });
+    await until(() => wc.isFocused(), 'Native popover owns keyboard focus before typing');
+    await waitPopover(selector => document.hasFocus() && document.activeElement?.matches(selector), query);
+    try {
+      xinput(['key', '--clearmodifiers', 'ctrl+a']);
+      await waitPopover(selector => { const input = document.querySelector(selector); return document.hasFocus() && document.activeElement === input
+        && input.selectionStart === 0 && input.selectionEnd === input.value.length; }, query);
+      // Let each real key reach the controlled cross-document input before
+      // sending the next. No dropped character is retried or silently repaired.
+      let entered = '';
+      for (const character of value) {
+        xinput(['type', '--clearmodifiers', '--delay', '8', character]);
+        entered += character;
+        await waitPopover(({ selector, value }) => document.querySelector(selector)?.value === value, { selector: query, value: entered });
+      }
+      if (!value) { xinput(['key', 'BackSpace']); await waitPopover(selector => document.querySelector(selector)?.value === '', query); }
+    } catch (error) {
+      report.nativePopoverInputFailure = { selector: query, expected: value, focusedContentsID: webContents.getFocusedWebContents()?.id,
+        input: await evaluateContents(wc, selector => { const input = document.querySelector(selector); return { focused: document.hasFocus(), active: document.activeElement?.outerHTML.slice(0, 300), value: input?.value, selection: [input?.selectionStart, input?.selectionEnd] }; }, query) };
+      save(); throw error;
+    }
   }
   async function chromePoint(target) {
     const query = typeof target === 'string' ? { selector: target } : target;
@@ -596,6 +612,11 @@ async function runWebsiteAcceptance(h, fixture) {
   async function tabMenu(id, label) {
     await hoverTab(id);
     const p = await chromePoint(tabButton(id)), bounds = win.getContentBounds(), zoom = win.webContents.getZoomFactor();
+    const wc = chromeView('ribbon').webContents, trace = { label, id, point: p, commands: [] };
+    const observe = (event, message) => {
+      if (event.sender === wc && trace.commands.length < 40) trace.commands.push({ token: message?.token, generation: message?.generation, command: message?.command, atMs: Date.now() - started });
+    };
+    ipcMain.on('wuu:chrome-overlay-command', observe);
     const popup = Menu.prototype.popup; let items;
     Menu.prototype.popup = function (...args) { items = this.items.map(item => ({ label: item.label, enabled: item.enabled })); return popup.apply(this, args); };
     try {
@@ -603,7 +624,17 @@ async function runWebsiteAcceptance(h, fixture) {
       await until(() => items, 'Actual native tab context menu opens');
       await capture(`tab-context-${label}`);
       return items.map(item => item.label);
-    } finally { Menu.prototype.popup = popup; }
+    } finally {
+      Menu.prototype.popup = popup;
+      ipcMain.removeListener('wuu:chrome-overlay-command', observe);
+      trace.items = items;
+      trace.current = await evaluateContents(wc, async id => {
+        const request = await window.wuuChromeOverlay.ready();
+        return { token: request?.token, generation: request?.generation, item: request?.model.items?.find(item => item.id === id),
+          focused: document.hasFocus(), active: document.activeElement?.outerHTML.slice(0, 240) };
+      }, id).catch(error => ({ unavailable: String(error) }));
+      (report.tabMenuTraces ||= []).push(trace); save();
+    }
   }
   async function closeActiveTab(label) {
     const before = await readSite(), id = before.activeTabId;
