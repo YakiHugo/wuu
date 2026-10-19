@@ -3744,11 +3744,11 @@ describe("AppState English localization", () => {
       code: 0,
       message: "",
     });
-    expect(sessionTabLabel(skills, initialState)).toBe("Plugins");
+    expect(sessionTabLabel(skills, initialState)).toBe("Extensions");
     expect(resolveLocalizedText(exited.status)).toBe("wuu core exited");
 
     setActiveLocale("zh-CN");
-    expect(sessionTabLabel(skills, initialState)).toBe("插件");
+    expect(sessionTabLabel(skills, initialState)).toBe("拓展");
     expect(resolveLocalizedText(exited.status)).toBe("wuu core 已退出");
   });
 });

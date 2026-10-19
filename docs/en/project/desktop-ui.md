@@ -198,7 +198,7 @@ Preview `/dev/settings/` with `page` set to a page ID, and optional `theme=dark`
 
 ## Plugins catalog
 
-The Plugins page, named **Plugins** like its sidebar entry, uses the settings page column. The titlebar already names it, so the page opens on a toolbar: search, then reload and local install. **Plugins** and **Skills** are separate tabs with their counts; a catalog without plugins opens on Skills. A search hides every group it leaves empty.
+The **Extensions** entry groups **Plugins** and **Skills** in the sidebar. The catalog uses the settings page column, with a large heading naming the selected category above the toolbar: search, then reload and local install. When rendered without the sidebar navigation, the catalog shows Plugins and Skills as tabs with their counts; a catalog without plugins opens on Skills. A search hides every group it leaves empty.
 
 Plugins are grouped by what they need from you, each group a bordered list like a settings group. **Needs attention** rows name the plugin and the one most serious reason — it failed to start or misses a requirement, then a staged update, a changed or unapproved package, or a conflict — and open the plugin's page, where that decision is made. **On** and **Off** rows carry the mark, the name over a one-line tagline, a switch that turns a trusted plugin on or off in place, and a chevron to the plugin's page. Turning on a plugin that is not approved yet opens its page when it asks for permissions and approves it directly otherwise. Rows show the manifest's display name and tagline, not the plugin ID. Skills are listed the same way, under **Official skills** and **Your skills**; a skill row ends in the owning plugin's name, when there is one, and a chevron that opens the preview.
 

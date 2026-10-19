@@ -35,7 +35,7 @@ import { Modal } from "./Modal";
 import { PluginIcon } from "./PublicIcon";
 import { PluginSettingsEditor } from "./PluginSettingsEditor";
 import { RichContent } from "./RichContent";
-import { SettingsGroup, SettingsSection } from "./SettingsSection";
+import { SettingsGroup, SettingsPageHeader, SettingsSection } from "./SettingsSection";
 import { ThreadContextMenu, type ThreadContextMenuItem } from "./ThreadContextMenu";
 import { showErrorToast, showToast, toastErrorMessage } from "./Toast";
 
@@ -446,7 +446,7 @@ export function SkillsCatalog({
       aria-label={t("skills.catalogLabel")}
       data-wuu-component="skills-catalog"
     >
-      {/* The titlebar already names the page, so it opens on its tools. */}
+      <SettingsPageHeader title={t(activeTab === "plugins" ? "skills.tabPlugins" : "skills.tabSkills")} />
       <div className="catalog-toolbar">
         <CatalogSearchField
           value={filter}

@@ -6,9 +6,8 @@
   background: var(--paper);
 }
 
-/* The plugins catalog is a .settings-page: the same UI-text column and
- * section rhythm as Settings. The titlebar names the page, so it opens on a
- * toolbar: search first, then the page's tools. */
+/* The catalog shares the settings column and section rhythm. Its heading
+ * names the selected category; search and catalog actions follow below. */
 .catalog-toolbar {
   display: flex;
   min-width: 0;

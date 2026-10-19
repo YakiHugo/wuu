@@ -25,6 +25,7 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Changed
 
+- Rename the plugins-and-skills navigation entry to Extensions and restore a large heading for the selected catalog category.
 - Separate plugins, settings, and account controls into a persistent icon ribbon
   beside contextual conversation, catalog, and plugin navigation, within the
   existing sidebar width. Share one rounded workbench between the secondary
