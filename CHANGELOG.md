@@ -10,6 +10,8 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Added
 
+- Offer optional browser cookie import during macOS onboarding, with recently
+  active local profiles listed first and explicit import actions.
 - Add an experimental headless workspace host and `wuu remote ssh` tunnel: use remote agent engines, files, Git, and terminals in the shared browser workbench, with running tasks preserved across SSH disconnects.
 - Add Linux X11 computer control with window-bound observation and foreground input,
   and watch-only activity previews that retain the existing controls and layout.
