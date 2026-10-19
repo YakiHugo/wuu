@@ -1,0 +1,196 @@
+/* The saved sidebar width includes both navigation levels. Collapsing hides
+   only the conversation tree, leaving global destinations in a stable rail. */
+.navigation-ribbon-layout:has(.sidebar-ribbon) .sidebar {
+  grid-column: 1;
+}
+
+.navigation-ribbon-layout:has(.sidebar-ribbon) .sidebar-content {
+  --sidebar-content-pad-x: var(--space-2);
+  --sidebar-row-pad-x: var(--space-2);
+  width: calc(var(--sidebar-open-width) - var(--sidebar-ribbon-width));
+  min-width: calc(var(--sidebar-open-width) - var(--sidebar-ribbon-width));
+  margin-left: var(--sidebar-ribbon-width);
+  background: var(--wuu-color-surface-muted, var(--sidebar-material-fill));
+}
+
+.sidebar-ribbon {
+  position: absolute;
+  inset: 0 auto 0 0;
+  z-index: 126;
+  display: flex;
+  width: var(--sidebar-ribbon-width, 48px);
+  min-height: 0;
+  flex-direction: column;
+  align-items: center;
+  padding: calc(var(--window-titlebar-height) + var(--space-1)) 6px var(--space-2);
+  border-right: 1px solid var(--hairline-soft);
+  background: var(--wuu-color-surface-muted, var(--sidebar-material-fill));
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+}
+
+.sidebar-ribbon-main,
+.sidebar-ribbon-footer {
+  display: flex;
+  width: 100%;
+  min-height: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.sidebar-ribbon-main {
+  flex: 1;
+  overflow: auto;
+  padding-bottom: var(--space-3);
+}
+
+.sidebar-ribbon-footer {
+  position: relative;
+  flex-shrink: 0;
+  padding-top: 40px;
+}
+
+.sidebar-ribbon-button,
+.sidebar-account-compact .sidebar-account-trigger {
+  display: grid;
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
+  min-height: 36px;
+  padding: 0;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-tertiary);
+}
+
+.sidebar-ribbon-button > :is(svg, .plugin-icon-asset, .plugin-icon-themed) {
+  width: var(--icon-size, 18px);
+  height: var(--icon-size, 18px);
+}
+
+.sidebar-ribbon-button:hover,
+.sidebar-account-compact .sidebar-account-trigger:hover {
+  background: var(--wuu-nav-item-hover-background, var(--ink-overlay-6));
+  color: var(--ink);
+}
+
+.sidebar-ribbon-button:is([aria-current="page"], [aria-pressed="true"], [aria-expanded="true"]),
+.sidebar-account-compact .sidebar-account-trigger[aria-expanded="true"] {
+  background: var(--wuu-nav-item-active-background, var(--ink-overlay-8));
+  color: var(--ink-strong);
+}
+
+.sidebar-ribbon-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.sidebar-ribbon-button:disabled {
+  opacity: 0.45;
+}
+
+.sidebar-ribbon-divider {
+  width: 20px;
+  height: 1px;
+  flex-shrink: 0;
+  margin-block: var(--space-2);
+  background: var(--hairline);
+}
+
+.sidebar-account-compact .sidebar-account-trigger {
+  grid-template-columns: 1fr;
+}
+
+.sidebar-account-compact .sidebar-account-name,
+.sidebar-account-compact .sidebar-account-trigger > svg {
+  display: none;
+}
+
+.sidebar-account-compact .sidebar-account-avatar {
+  width: var(--icon-size, 18px);
+  height: var(--icon-size, 18px);
+  flex-basis: var(--icon-size, 18px);
+}
+
+.sidebar-account-compact .sidebar-account-menu {
+  inset-inline: 0 auto;
+  width: max(240px, 15em);
+  max-width: calc(100vw - var(--space-4));
+}
+
+.sidebar-account-compact .desktop-update {
+  inset: auto 0 80px;
+  display: grid;
+  place-items: center;
+  transform: none;
+}
+
+.navigation-ribbon-layout:has(.sidebar-ribbon) .sidebar-settings:empty {
+  display: none;
+}
+
+/* The portal target remains the host-owned aside. Navigation-region plugin
+   views use the secondary pane while the native ribbon is present. */
+.navigation-ribbon-layout:has(.sidebar-ribbon) .sidebar:has(.sidebar-ribbon) .plugin-workbench-view-navigation {
+  left: var(--sidebar-ribbon-width);
+}
+
+.app-shell.navigation-ribbon-layout:has(.sidebar-ribbon).sidebar-collapsed .sidebar,
+.app-shell.navigation-ribbon-layout:has(.sidebar-ribbon).sidebar-drawer-docking .sidebar {
+  transform: none;
+  overflow: visible;
+  background: transparent;
+  box-shadow: none;
+}
+
+.app-shell.navigation-ribbon-layout:has(.sidebar-ribbon).sidebar-collapsed:not(.sidebar-drawer-open):not(.sidebar-drawer-closing) .sidebar {
+  position: relative;
+  inset: auto;
+  width: var(--sidebar-ribbon-width);
+  min-width: var(--sidebar-ribbon-width);
+  pointer-events: none;
+}
+
+.navigation-ribbon-layout:has(.sidebar-ribbon).sidebar-collapsed:not(.sidebar-drawer-open):not(.sidebar-drawer-closing) .sidebar-content,
+.navigation-ribbon-layout:has(.sidebar-ribbon).sidebar-collapsed:not(.sidebar-drawer-open):not(.sidebar-drawer-closing) .sidebar:has(.sidebar-ribbon) .plugin-workbench-view-navigation {
+  visibility: hidden;
+}
+
+.navigation-ribbon-layout:has(.sidebar-ribbon).sidebar-collapsed:is(.sidebar-drawer-open, .sidebar-drawer-closing) .sidebar-content {
+  box-shadow: var(--shadow-drawer-right);
+}
+
+.navigation-ribbon-layout:has(.sidebar-ribbon).sidebar-collapsed.sidebar-drawer-closing .sidebar-content {
+  opacity: 0;
+  transform: translate3d(-18px, 0, 0);
+  pointer-events: none;
+}
+
+.navigation-ribbon-layout:has(.sidebar-ribbon).sidebar-collapsed .sidebar-hover-zone {
+  left: var(--sidebar-ribbon-width);
+  width: 8px;
+}
+
+.navigation-ribbon-layout:has(.sidebar-ribbon) .titlebar .sidebar-toggle-button,
+.navigation-ribbon-layout:has(.sidebar-ribbon) .globalized-sidebar-toggle-region {
+  display: none;
+}
+
+.app-shell.navigation-ribbon-layout:has(.sidebar-ribbon).sidebar-collapsed .titlebar {
+  padding-left: max(
+    var(--control-toolbar-inset),
+    calc(var(--window-titlebar-leading-inset) - var(--sidebar-ribbon-width) - var(--conversation-pane-inset))
+  );
+}
+
+/* Replacement presenters retain the original collapsed shell and controls. */
+.app-shell.navigation-ribbon-layout.sidebar-collapsed:not(.popped-out-shell):not(:has(.sidebar-ribbon)) {
+  grid-template-columns: 0 minmax(0, 1fr) var(--workspace-right-panel-reserved-width, 0px);
+}
+
+.app-shell.navigation-ribbon-layout.sidebar-collapsed:not(.popped-out-shell):not(:has(.sidebar-ribbon))
+  .workspace-right-panel:is([data-sheet="arming"], [data-sheet="open"], [data-sheet="parked"]) {
+  left: var(--conversation-pane-inset);
+}

@@ -89,6 +89,7 @@
      session.css at :root — change them there and nothing else.
      Use the composer's width directly so message cards and answer prose stay
      flush with the input box without a second value to keep in sync. */
+  container-type: inline-size;
   --conversation-message-max-width: var(--session-composer-width);
   --conversation-message-max-inline: 90%;
   --conversation-split-message-max-width: 760px;

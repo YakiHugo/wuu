@@ -23,6 +23,7 @@ export const sidebarDrawerExitMs = (): number =>
   motionDurationMs("--sidebar-drawer-exit-duration", 220);
 export const rightPanelMotionMs = (): number =>
   motionDurationMs("--workspace-panel-motion-duration", 180);
+export const SIDEBAR_RIBBON_WIDTH = 48;
 export const SIDEBAR_DEFAULT_WIDTH = 264;
 // Keep enough horizontal room for one-line navigation labels and useful
 // conversation titles. The rail becomes an overlay drawer below the compact
@@ -285,6 +286,7 @@ export function useAppLayoutState({
   layoutRootRef,
   settingsLayoutRootRef,
   viewportWidth,
+  collapsedSidebarWidth = 0,
   onCloseWorkspaceMenu
 }: {
   layoutRootRef?: RefObject<HTMLElement | null>;
@@ -295,6 +297,7 @@ export function useAppLayoutState({
   // Callers with a virtual or embedded viewport can provide the width that
   // owns layout decisions instead of the outer browser window.
   viewportWidth?: number;
+  collapsedSidebarWidth?: number;
   onCloseWorkspaceMenu: () => void;
 }): {
   sidebarWidth: number;
@@ -348,7 +351,7 @@ export function useAppLayoutState({
   const rightPanelMotionTimerRef = useRef<number | undefined>(undefined);
   // Window resizing changes the canvas, not the user-selected sidebar width.
   const sidebarWidth = sidebarPreferredWidth;
-  const effectiveSidebarWidth = sidebarCollapsed ? 0 : sidebarWidth;
+  const effectiveSidebarWidth = sidebarCollapsed ? collapsedSidebarWidth : sidebarWidth;
   // Auto-globalize the open right panel only when the window is too narrow to
   // dock conversation + panel even with the sidebar fully collapsed — i.e. we
   // measure the space WITHOUT the sidebar's width. Opening the sidebar no
@@ -362,7 +365,7 @@ export function useAppLayoutState({
   // tip the layout over the threshold and auto-globalize the panel.)
   const workspaceRightPanelAutoGlobalized = workspacePanelNeedsFocus(
     windowWidth,
-    0,
+    collapsedSidebarWidth,
   );
   // Complement of the above by construction: if the panel can't dock without
   // the sidebar it auto-globalizes, and vice versa.

@@ -33,5 +33,6 @@
 @import "./styles/appearance.css";
 @import "./styles/background.css";
 
+@import "./styles/navigation-ribbon.css";
 @import "./styles/icon-controls.css";
 @import "./styles/focus.css";

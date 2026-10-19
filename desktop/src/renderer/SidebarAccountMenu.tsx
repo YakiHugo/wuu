@@ -9,9 +9,10 @@ import { useI18n } from "./i18n";
 import { moveMenuFocus } from "./MenuKeyboardNavigation";
 import "./SidebarAccountMenu.css";
 
-export function SidebarAccountMenu({ disabled, localOnly = false, onOpenSettings, onOpenAccount }: {
+export function SidebarAccountMenu({ disabled, localOnly = false, compact = false, onOpenSettings, onOpenAccount }: {
   disabled: boolean;
   localOnly?: boolean;
+  compact?: boolean;
   onOpenAccount?: () => void;
   onOpenSettings: (page: "providers" | "usage") => void;
 }): React.JSX.Element {
@@ -79,7 +80,7 @@ export function SidebarAccountMenu({ disabled, localOnly = false, onOpenSettings
   };
   const avatar = <span className="sidebar-account-avatar" aria-hidden="true">{account.username ? (account.display_name || account.username).slice(0, 2).toUpperCase() : <UserRound size={18} />}</span>;
 
-  return <div className="sidebar-account">
+  return <div className={`sidebar-account${compact ? " sidebar-account-compact" : ""}`}>
     <button ref={anchor} className="sidebar-account-trigger" type="button" disabled={disabled}
       aria-label={t("account.menu")} aria-haspopup="menu" aria-expanded={open} aria-controls={open ? id : undefined}
       onClick={() => setOpen(!open)} onKeyDown={event => {

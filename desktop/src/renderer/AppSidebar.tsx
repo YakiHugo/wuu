@@ -11,6 +11,7 @@ import {
   MessagesSquare,
   Plus,
   Search,
+  Settings,
   Project,
 } from "./WuuIcons";
 import {
@@ -104,7 +105,8 @@ import type { PluginHost } from "./plugins/PluginHost";
 import type { WorkbenchController } from "./plugins/Workbench";
 import { primaryViewNavigation } from "./plugins/PrimaryViewNavigation";
 import { PluginSlot } from "./plugins/PluginSlot";
-import { SidePanelToggleIcon } from "./SidePanelToggleIcon";
+import { Tooltip } from "./Tooltip";
+import { HoverRevealScopeContext } from "./HoverReveal";
 
 /**
  * Stable section identity keys for the new sidebar tree.
@@ -450,6 +452,7 @@ export function AppSidebar({
   sidebarVisible = true,
   sidebarCollapsed = false,
   onToggleSidebar,
+  onPreviewSidebar,
 }: {
   state: AppState;
   // The sidebar renders scratch conversations through the same WorkspaceList
@@ -524,6 +527,7 @@ export function AppSidebar({
   sidebarVisible?: boolean;
   sidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
+  onPreviewSidebar?: () => void;
 }): JSX.Element {
   const { t } = useI18n();
   const [attentionStickyIDsState, setAttentionStickyIDsState] = useState<Set<string>>(() => new Set());
@@ -1757,41 +1761,99 @@ export function AppSidebar({
 
   const nativeSidebar = (
     <>
-      <div className="sidebar-content">
-        <div className="traffic-spacer">
-          {onToggleSidebar ? (
+      <HoverRevealScopeContext.Provider value={null}>
+      <nav className="sidebar-ribbon" aria-label={t("sidebar.mainNavigation")}>
+        <div className="sidebar-ribbon-main scrollbar-hidden">
+          <Tooltip content={t("sidebar.conversations")}>
             <button
-              className="icon-button side-panel-toggle-button sidebar-toggle-button sidebar-collapse-toggle"
-              data-wuu-component="sidebar-toggle"
+              className="sidebar-ribbon-button sidebar-toggle-button sidebar-collapse-toggle"
               type="button"
               aria-label={t(sidebarCollapsed ? "app.expandLeftSidebar" : "app.collapseLeftSidebar")}
               aria-pressed={!sidebarCollapsed}
+              data-wuu-component="sidebar-toggle"
               onClick={onToggleSidebar}
+              onPointerEnter={onPreviewSidebar}
+              onPointerLeave={onPointerLeave}
             >
-              <SidePanelToggleIcon side="left" open={!sidebarCollapsed} />
+              <MessagesSquare aria-hidden="true" />
             </button>
-          ) : null}
+          </Tooltip>
+          <Tooltip content={t("sidebar.searchConversations")}>
+            <button
+              className="sidebar-ribbon-button conversation-search-trigger"
+              type="button"
+              aria-label={t("sidebar.searchConversations")}
+              aria-haspopup="dialog"
+              aria-expanded={searchOpen}
+              onClick={() => activateNative(onToggleConversationSearch)}
+              disabled={!hasRuntimeContext}
+            >
+              <Search aria-hidden="true" />
+            </button>
+          </Tooltip>
+          <div className="sidebar-ribbon-divider" role="separator" />
+          <Tooltip content={t("skills.sectionSkills")}>
+            <button
+              className="sidebar-ribbon-button"
+              type="button"
+              aria-label={t("skills.sectionSkills")}
+              aria-current={pluginCatalogActive ? "page" : undefined}
+              onClick={() => activateNative(onOpenSkillsTab)}
+              disabled={!hasRuntimeContext}
+            >
+              <PluginBlocksIcon aria-hidden="true" />
+            </button>
+          </Tooltip>
+          {pluginNavigationEntries.map((entry) => {
+            const active = activePluginMainView !== undefined && activePluginMainView.id === entry.instanceId;
+            return (
+              <Tooltip key={`${entry.pluginId}:${entry.id}`} content={entry.title}>
+                <button
+                  type="button"
+                  className={`sidebar-ribbon-button plugin-navigation-item${active ? " active" : ""}`}
+                  data-wuu-component="plugin-navigation-item"
+                  data-wuu-plugin={entry.pluginId}
+                  aria-label={entry.title}
+                  aria-current={active ? "page" : undefined}
+                  onClick={() => openPluginNavigation(entry.pluginId, entry.view, entry.instanceId)}
+                >
+                  <PluginIcon icon={entry.icon} pluginId={entry.pluginId} fingerprint={entry.generation} />
+                </button>
+              </Tooltip>
+            );
+          })}
         </div>
+        <div className="sidebar-ribbon-footer">
+          <Tooltip content={t("sidebar.settings")}>
+            <button
+              className="sidebar-ribbon-button"
+              type="button"
+              aria-label={t("sidebar.settings")}
+              disabled={!state.initialized}
+              onClick={() => activateNative(onOpenSettings)}
+            >
+              <Settings aria-hidden="true" />
+            </button>
+          </Tooltip>
+          <SidebarAccountMenu
+            key={sidebarCollapsed ? "collapsed" : "docked"}
+            compact
+            disabled={!state.initialized}
+            onOpenAccount={onOpenAccount ? () => activateNative(onOpenAccount) : undefined}
+            onOpenSettings={(page) => activateNative(() => onOpenSettings(page))}
+          />
+        </div>
+      </nav>
+      </HoverRevealScopeContext.Provider>
+      <div className="sidebar-content" inert={!sidebarVisible}>
+        <div className="traffic-spacer" />
         <SidebarBrand
           unreadViewOpen={unreadViewOpen}
           attentionCount={attentionCount}
           hasUnread={unreadThreads.length > 0}
           onToggleUnreadView={onToggleUnreadView}
           onClearUnread={() => onMarkThreadsViewed(unreadThreads)}
-        >
-          <button
-            className="icon-button conversation-search-trigger"
-            type="button"
-            aria-label={t("sidebar.searchConversations")}
-            title={t("sidebar.searchConversations")}
-            aria-haspopup="dialog"
-            aria-expanded={searchOpen}
-            onClick={() => activateNative(onToggleConversationSearch)}
-            disabled={!hasRuntimeContext}
-          >
-            <Search className="icon-lg" />
-          </button>
-        </SidebarBrand>
+        />
         {unreadViewOpen ? (
           <section
             className="sidebar-unread-view scrollbar-hidden"
@@ -2218,45 +2280,11 @@ export function AppSidebar({
           </>
         )}
         <div className="sidebar-settings">
-          <nav className="sidebar-app-navigation scrollbar-hidden" aria-label={t("skills.sectionPlugins")}>
-            <button
-              className="nav-item"
-              aria-current={pluginCatalogActive ? "page" : undefined}
-              onClick={() => activateNative(onOpenSkillsTab)}
-              disabled={!hasRuntimeContext}
-            >
-              <PluginBlocksIcon className="icon-lg" />
-              <span>{t("skills.sectionSkills")}</span>
-            </button>
-            {pluginNavigationEntries.map((entry) => {
-              const active = activePluginMainView !== undefined && activePluginMainView.id === entry.instanceId;
-              return (
-                <button
-                  key={`${entry.pluginId}:${entry.id}`}
-                  type="button"
-                  className={`nav-item plugin-navigation-item${active ? " active" : ""}`}
-                  data-wuu-component="plugin-navigation-item"
-                  data-wuu-plugin={entry.pluginId}
-                  aria-current={active ? "page" : undefined}
-                  title={entry.description || entry.title}
-                  onClick={() => openPluginNavigation(entry.pluginId, entry.view, entry.instanceId)}
-                >
-                  <PluginIcon icon={entry.icon} pluginId={entry.pluginId} fingerprint={entry.generation} className="icon-lg" />
-                  <span>{entry.title}</span>
-                </button>
-              );
-            })}
-          </nav>
           <PluginSlot
             host={pluginHost}
             id="sidebar.footer"
             context={Object.freeze({ initialized: Boolean(state.initialized) })}
           />
-          {sidebarVisible && <SidebarAccountMenu
-            disabled={!state.initialized}
-            onOpenAccount={onOpenAccount ? () => activateNative(onOpenAccount) : undefined}
-            onOpenSettings={(page) => activateNative(() => onOpenSettings(page))}
-          />}
         </div>
         {groupContextMenu ? (
           <ThreadContextMenu
@@ -2329,7 +2357,11 @@ export function AppSidebar({
         ...navigationNodes,
       ]}
       fallback={organizedSidebar}
-      onPointerEnter={onPointerEnter}
+      onPointerEnter={(event) => {
+        if (!(event.target instanceof Element) || !event.target.closest(".sidebar-ribbon")) {
+          onPointerEnter?.();
+        }
+      }}
       onPointerLeave={onPointerLeave}
     />
   );

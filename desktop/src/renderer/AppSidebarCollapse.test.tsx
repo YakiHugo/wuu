@@ -196,7 +196,7 @@ describe("sidebar collapse-state independence", () => {
     delete (globalThis as { wuu?: WuuDesktopApi }).wuu;
   });
 
-  it("keeps the account menu inside the sidebar and dismisses it on collapse", async () => {
+  it("keeps the account control available and dismisses its menu on collapse", async () => {
     installWuuApi();
     await act(async () => {
       root = createRoot(container);
@@ -212,7 +212,7 @@ describe("sidebar collapse-state independence", () => {
     expect(toggle).not.toBeNull();
     await act(async () => toggle?.click());
     expect(document.querySelector(".sidebar-account-menu")).toBeNull();
-    expect(accountTrigger()).toBeNull();
+    expect(accountTrigger()?.getAttribute("aria-expanded")).toBe("false");
 
     const expandedToggle = container.querySelector<HTMLButtonElement>(".sidebar-toggle-button");
     expect(expandedToggle).not.toBeNull();

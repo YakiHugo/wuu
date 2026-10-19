@@ -184,6 +184,7 @@ import {
   sidebarDrawerExitMs,
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
+  SIDEBAR_RIBBON_WIDTH,
   sidebarMotionMs,
   WORKSPACE_RIGHT_PANEL_MAIN_MIN_WIDTH,
   WORKSPACE_RIGHT_PANEL_MAX_WIDTH,
@@ -588,6 +589,7 @@ export function App(): JSX.Element {
   } = useAppLayoutState({
     layoutRootRef: appShellRef,
     settingsLayoutRootRef: settingsShellRef,
+    collapsedSidebarWidth: SIDEBAR_RIBBON_WIDTH,
     onCloseWorkspaceMenu: closeWorkspaceMenu,
   });
   const [rightPanelManualGlobalized, setRightPanelManualGlobalized] =
@@ -1250,9 +1252,9 @@ export function App(): JSX.Element {
     const previous = previousWorkspaceFocusModeRef.current;
     previousWorkspaceFocusModeRef.current = { fullPanel, open: rightPanelOpen };
 
-    appShellRef.current
-      ?.querySelector<HTMLElement>(".sidebar")
-      ?.toggleAttribute("inert", fullPanel && sidebarDrawerMode && !sidebarDrawerVisible);
+    const sidebar = appShellRef.current?.querySelector<HTMLElement>(".sidebar");
+    sidebar?.toggleAttribute("inert", fullPanel && sidebarDrawerMode && !sidebarDrawerVisible
+      && !sidebar.querySelector(".sidebar-ribbon"));
 
     if (fullPanel && !previous.fullPanel) {
       appShellRef.current
@@ -3085,7 +3087,7 @@ export function App(): JSX.Element {
   const sidebarVisible = !poppedOutMode;
   const sidebarToggleVisible = sidebarVisible;
 
-  const shellClassName = `app-shell${poppedOutMode ? " popped-out-shell" : ""}${sidebarDrawerMode ? " sidebar-collapsed" : ""}${
+  const shellClassName = `app-shell navigation-ribbon-layout${poppedOutMode ? " popped-out-shell" : ""}${sidebarDrawerMode ? " sidebar-collapsed" : ""}${
     sidebarDrawerMode && sidebarDrawerVisible ? " sidebar-drawer-open" : ""
   }${
     sidebarDrawerMode &&
@@ -3104,8 +3106,9 @@ export function App(): JSX.Element {
   }${rightPanelOpen ? " right-panel-open" : ""}${rightPanelGlobalized && rightPanelOpen ? " right-panel-globalized" : ""}${workspaceConversationActive ? " workspace-conversation-active" : ""}${resizingSplit ? " resizing-split" : ""}`;
   const shellStyle = {
     "--sidebar-width": `${effectiveSidebarWidth}px`,
+    "--sidebar-ribbon-width": `${SIDEBAR_RIBBON_WIDTH}px`,
     "--sidebar-open-width": `${sidebarWidth}px`,
-    "--workspace-sheet-left": `${sidebarDrawerMode ? 0 : effectiveSidebarWidth}px`,
+    "--workspace-sheet-left": `${effectiveSidebarWidth}px`,
     "--workspace-right-panel-width": `${clampedWorkspaceRightPanelWidth}px`,
     "--conversation-split-left": `${splitLeftPercent}%`,
   } as CSSProperties;
@@ -5561,7 +5564,8 @@ export function App(): JSX.Element {
           ) : null}
           <HoverRevealScopeContext.Provider value={sidebarHoverScope}>
             <AppSidebar
-              onToggleSidebar={sidebarDrawerMode ? undefined : toggleSidebar}
+              onToggleSidebar={toggleSidebar}
+              onPreviewSidebar={scheduleSidebarDrawerOpen}
               sidebarCollapsed={sidebarCollapsed}
               sidebarVisible={!sidebarDrawerMode || sidebarDrawerVisible}
               state={state}
