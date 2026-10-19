@@ -47,6 +47,7 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 ### Fixed
 
 - Avoid remeasuring covered conversation inputs during website window resizing, and refit retained drafts when their workspace becomes visible again.
+- Keep full-workspace websites attached to the native window edges during live resizing, including when the shell renderer is busy.
 - Show local, theme-aware Notion, Feishu, and ChatGPT marks for saved website shortcuts and browser tabs without requiring their optional integrations.
 
 - Match the DeepSeek Harness icon's visible size to peer agent icons in settings, runtime menus, and onboarding.

@@ -179,7 +179,10 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
   reportBounds(owner: BrowserWindow, id: string, bounds: WebWorkspaceBounds | null): void {
     if (bounds === null && !this.groups.has(id)) return;
     const group = this.group(owner, id);
-    if (bounds !== null && ![bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite)) throw new Error("Website bounds must be finite numbers.");
+    if (bounds !== null) {
+      const dimensions = "right" in bounds ? [bounds.right, bounds.bottom] : [bounds.width, bounds.height];
+      if (![bounds.x, bounds.y, ...dimensions].every(Number.isFinite)) throw new Error("Website bounds must be finite numbers.");
+    }
     group.bounds = bounds;
     this.layoutGroup(group);
   }
@@ -658,8 +661,12 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     const zoom = htmlFullscreen ? 1 : owner.webContents.getZoomFactor();
     const x = Math.max(0, Math.min(width, Math.round(bounds.x * zoom)));
     const y = Math.max(0, Math.min(height, Math.round(bounds.y * zoom)));
-    const right = Math.max(x, Math.min(width, Math.round((bounds.x + bounds.width) * zoom)));
-    const bottom = Math.max(y, Math.min(height, Math.round((bounds.y + bounds.height) * zoom)));
+    // Window-filling pages retain their chrome insets through native live
+    // resizing, including while the shell renderer is busy with its own layout.
+    const rightEdge = "right" in bounds ? width - Math.round(bounds.right * zoom) : Math.round((bounds.x + bounds.width) * zoom);
+    const bottomEdge = "bottom" in bounds ? height - Math.round(bounds.bottom * zoom) : Math.round((bounds.y + bounds.height) * zoom);
+    const right = Math.max(x, Math.min(width, rightEdge));
+    const bottom = Math.max(y, Math.min(height, bottomEdge));
     const current = view.getBounds();
     if (current.x !== x || current.y !== y || current.width !== right - x || current.height !== bottom - y) {
       view.setBounds({ x, y, width: right - x, height: bottom - y });
@@ -682,7 +689,10 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
       for (const group of [...this.groups.values()]) if (group.owner === owner) this.destroyGroup(group);
       this.flushLibrary();
     };
-    owner.on("resize", layout);
+    // Moving and resizing together can emit resize before the native content
+    // size getter is updated. Finish that bounds operation before reading it;
+    // this still runs in the same turn, without waiting for a renderer frame.
+    owner.on("resize", () => queueMicrotask(layout));
     owner.on("show", layout);
     owner.on("hide", layout);
     owner.on("minimize", layout);

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent } from "react";
-import { WEB_WORKSPACE_ZOOM_MIN, WEB_WORKSPACE_ZOOM_MAX, WEB_WORKSPACE_TAB_LIMIT, type WebWorkspaceApi, type WebWorkspaceCommand, type WebWorkspaceState } from "../shared/webWorkspace";
+import { WEB_WORKSPACE_ZOOM_MIN, WEB_WORKSPACE_ZOOM_MAX, WEB_WORKSPACE_TAB_LIMIT, type WebWorkspaceApi, type WebWorkspaceBounds, type WebWorkspaceCommand, type WebWorkspaceState } from "../shared/webWorkspace";
 import { ArrowLeft, ArrowRight, ArrowUpRight, ChevronDown, ChevronUp, Ellipsis, Globe, Hand, Minus, Plus, RotateCcw, RotateCw, Search, X } from "./WuuIcons";
 import { useI18n } from "./i18n";
 import { normalizeWebsiteURL } from "./NavigationRibbonPreferences";
@@ -22,10 +22,12 @@ export function WebWorkspacePanel({
   site,
   active = true,
   tabs = false,
+  resizeWithWindow = false,
 }: {
   site?: WebWorkspaceSite;
   active?: boolean;
   tabs?: boolean;
+  resizeWithWindow?: boolean;
 }): JSX.Element {
   const { t } = useI18n();
   const api = (window.wuu as typeof window.wuu & { webWorkspace?: WebWorkspaceApi }).webWorkspace;
@@ -212,12 +214,14 @@ export function WebWorkspacePanel({
     }
     let disposed = false;
     let wasVisible = false;
-    const report = (bounds: HostRect | null): void => {
+    const report = (bounds: WebWorkspaceBounds | null): void => {
       void api.reportBounds(id, bounds).catch((cause: unknown) => {
         if (!disposed && currentSiteID.current === id) setFailure({ id, message: rawErrorMessage(cause) });
       });
     };
-    const stop = observeWebWorkspaceBounds(host, (bounds) => {
+    // A development hot update can run against the preceding native process.
+    // Keep rectangle reports until its matching preload has been restarted.
+    const stop = observeWebWorkspaceBounds(host, resizeWithWindow && api.supportsWindowInsets === true, (bounds) => {
       if (disposed) return;
       setOccluded(bounds === null);
       if (bounds) { wasVisible = true; report(bounds); return; }
@@ -232,7 +236,7 @@ export function WebWorkspacePanel({
       stop();
       report(null);
     };
-  }, [api, site?.id, active, Boolean(current), current?.activeTabId, error, blank, captureBackdrop]);
+  }, [api, site?.id, active, resizeWithWindow, Boolean(current), current?.activeTabId, error, blank, captureBackdrop]);
 
   useEffect(() => {
     if (!api || !site || !active) return;
@@ -486,7 +490,7 @@ function mutationAffectsSurface(records: MutationRecord[], host: Element | null,
 
 // Native views sit above every renderer layer. Hide the surface for modal UI
 // and overlapping menus, then restore the same page when the overlay closes.
-function observeWebWorkspaceBounds(host: HTMLElement, report: (bounds: HostRect | null) => void): () => void {
+function observeWebWorkspaceBounds(host: HTMLElement, resizeWithWindow: boolean, report: (bounds: WebWorkspaceBounds | null) => void): () => void {
   let last = "";
   let frame = 0;
   let overlays: Element[] = [];
@@ -526,8 +530,17 @@ function observeWebWorkspaceBounds(host: HTMLElement, report: (bounds: HostRect 
         }
       }
     }
-    const key = JSON.stringify(bounds);
-    if (key !== last) { last = key; report(bounds); }
+    // The native window can grow before this renderer gets another frame.
+    // Insets let its view follow that resize immediately, without replaying a
+    // stale viewport size. Local extension surfaces still report their rectangle.
+    const geometry: WebWorkspaceBounds | null = bounds && resizeWithWindow ? {
+      x: bounds.x, y: bounds.y,
+      right: window.innerWidth - bounds.x - bounds.width,
+      bottom: window.innerHeight - bounds.y - bounds.height,
+    } : bounds;
+    // Page zoom changes the native scale even when CSS insets stay identical.
+    const key = JSON.stringify([geometry, window.devicePixelRatio]);
+    if (key !== last) { last = key; report(geometry); }
     for (const layer of movingLayers) if (!layer.isConnected) movingLayers.delete(layer);
     if (movingLayers.size) frame = requestAnimationFrame(send);
   };

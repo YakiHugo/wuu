@@ -5,8 +5,11 @@ export const WEB_WORKSPACE_TAB_LIMIT = 64;
 export const WEB_WORKSPACE_ZOOM_MIN = 0.25;
 export const WEB_WORKSPACE_ZOOM_MAX = 3;
 
-/** Desktop-only website destinations with optional, explicit automation attachment. */
-export type WebWorkspaceBounds = { x: number; y: number; width: number; height: number };
+/** CSS pixels: a local rectangle, or edge insets for a window-filling surface. */
+export type WebWorkspaceBounds = { x: number; y: number } & (
+  | { width: number; height: number }
+  | { right: number; bottom: number }
+);
 export type WebWorkspaceFindResult = { requestId: number; activeMatchOrdinal: number; matches: number; finalUpdate: boolean };
 export type WebWorkspaceFindOptions = { forward?: boolean; findNext?: boolean };
 
@@ -35,11 +38,13 @@ export type WebWorkspaceDestination = { id: string; url: string; tabs?: boolean 
 export type WebWorkspaceCommand = "back" | "forward" | "reload" | "reloadIgnoringCache" | "stop" | "navigate" | "focus" | "takeOver";
 
 export type WebWorkspaceApi = {
+  /** The preload and native host understand window-relative edge geometry. */
+  supportsWindowInsets?: true;
   /** Reopening retains navigation. Only ribbon destinations opt into tab groups. */
   open: (destination: WebWorkspaceDestination) => Promise<WebWorkspaceState>;
-  /** CSS-pixel bounds; null hides this destination without closing its pages. */
   /** One current-page JPEG backdrop; null when hidden, stale, or unavailable. */
   capture: (id: string) => Promise<string | null>;
+  /** CSS-pixel geometry; null hides this destination without closing its pages. */
   reportBounds: (id: string, bounds: WebWorkspaceBounds | null) => Promise<void>;
   setShortcutTarget: (id: string, active: boolean) => Promise<void>;
   command: (id: string, command: WebWorkspaceCommand, url?: string) => Promise<WebWorkspaceState>;
