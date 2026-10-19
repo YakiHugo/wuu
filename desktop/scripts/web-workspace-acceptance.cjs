@@ -266,7 +266,8 @@ async function runWebsiteAcceptance(h, fixture) {
       for (const elapsed of [0, 3000, 10000, 20000]) {
         await delay(Math.max(0, selectedAt + elapsed - Date.now()));
         const shell = await evaluate(() => {
-          const root = document.querySelector('.plugin-workbench-view[data-plugin-id="notion-workspace"]:not([hidden])');
+          const root = [...document.querySelectorAll('.plugin-workbench-view[data-plugin-id="notion-workspace"], [data-wuu-component="plugin-view-content"][data-wuu-plugin="notion-workspace"]')]
+            .find(node => node.getBoundingClientRect().width > 0 && node.getBoundingClientRect().height > 0);
           return { mounted: Boolean(root), text: root?.innerText.slice(0, 1600) || '',
             nativeHost: root?.querySelector('[data-wuu-component="web-workspace"]')?.getAttribute('data-website-id') || null,
             alert: root?.querySelector('[role="alert"]')?.textContent || null };
@@ -278,7 +279,7 @@ async function runWebsiteAcceptance(h, fixture) {
           const state = { id: wc.id, url: wc.getURL(), visible: view.getVisible(), loading: wc.isLoading(), bounds: view.getBounds() };
           if (!wc.isLoadingMainFrame() && /^https:\/\//.test(state.url)) {
             state.document = await Promise.race([
-              wc.executeJavaScript('({title:document.title,ready:document.readyState,userAgent:navigator.userAgent,text:document.body?.innerText.slice(0,1800)||""})').catch(error => ({ error: String(error) })),
+              wc.executeJavaScript('({title:document.title,ready:document.readyState,userAgent:navigator.userAgent,text:document.body?.innerText.slice(0,1800)||"",visibleInputs:Array.from(document.querySelectorAll("input")).filter(e=>e.getBoundingClientRect().width>0).map(e=>({type:e.type,placeholder:e.placeholder}))})').catch(error => ({ error: String(error) })),
               delay(1500).then(() => ({ unavailable: 'document observation timed out' })),
             ]);
           }
@@ -299,8 +300,10 @@ async function runWebsiteAcceptance(h, fixture) {
       // Anonymous notion.so can redirect to marketing. Follow its real public
       // login link to observe the application, without entering any account data.
       const page = created.find(wc => !wc.isDestroyed() && /^https:\/\/(?:www\.)?notion\.(?:com|so)\//.test(wc.getURL()));
-      diagnostic.publicLogin = { status: 'not-offered' };
-      if (page && !page.isLoadingMainFrame()) {
+      const existingLogin = last.native.find(page => /^https:\/\/(?:app\.|www\.)?notion\.(?:com|so)\/login/.test(page.url) && page.document?.visibleInputs?.length);
+      diagnostic.publicLogin = existingLogin ? { status: 'login-form-visible', ...existingLogin } : { status: 'not-offered' };
+      if (existingLogin) { save(); await capture('notion-public-application-login'); }
+      else if (page && !page.isLoadingMainFrame()) {
         const href = await Promise.race([
           page.executeJavaScript(`Array.from(document.querySelectorAll('a[href]')).find(a => /^(log in|登录)$/i.test(a.textContent.trim()))?.getAttribute('href') || ''`),
           delay(1500).then(() => ''),
