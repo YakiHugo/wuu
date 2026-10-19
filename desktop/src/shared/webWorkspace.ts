@@ -8,7 +8,7 @@ export const WEB_WORKSPACE_ZOOM_MIN = 0.25;
 export const WEB_WORKSPACE_ZOOM_MAX = 3;
 
 /** CSS pixels: a local rectangle, or edge insets for a window-filling surface. */
-export type WebWorkspaceBounds = { x: number; y: number } & (
+export type WebWorkspaceBounds = { x: number; y: number; borderRadius?: number; occluded?: true } & (
   | { width: number; height: number }
   | { right: number; bottom: number }
 );
@@ -69,12 +69,12 @@ export type WebWorkspaceApi = {
   supportsWindowInsets?: true;
   /** Reopening retains navigation. Extension pages retain their independent lifetime. */
   open: (destination: WebWorkspaceDestination) => Promise<WebWorkspaceState>;
-  /** One current-page JPEG backdrop; null when hidden, stale, or unavailable. */
+  /** One lossless, device-resolution backdrop, including an occluded active tab; null when stale, unavailable, or over budget. */
   capture: (id: string) => Promise<string | null>;
   showTooltip: (token: string, hint: WebWorkspaceTooltip | null) => Promise<void>;
   /** Native popup keeps the live page composited; null means dismissed. */
   showOptions: (id: string, request: WebWorkspaceMenuRequest) => Promise<WebWorkspaceMenuAction | null>;
-  /** CSS-pixel geometry; null hides this destination without closing its pages. */
+  /** CSS-pixel geometry; occluded retains capture geometry, while null hides the destination. */
   reportBounds: (id: string, bounds: WebWorkspaceBounds | null) => Promise<void>;
   setShortcutTarget: (id: string, active: boolean) => Promise<void>;
   command: (id: string, command: WebWorkspaceCommand, url?: string) => Promise<WebWorkspaceState>;

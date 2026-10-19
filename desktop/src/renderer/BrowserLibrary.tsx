@@ -8,13 +8,14 @@ import { rawErrorMessage } from "./UserFacingErrors";
 import { showActionErrorToast } from "./Toast";
 import "./styles/browser-library.css";
 
-export function BrowserLibrary({ api, currentURL, currentTitle, onOpen, active = true, destinationId }: {
+export function BrowserLibrary({ api, currentURL, currentTitle, onOpen, active = true, destinationId, presentation = "toolbar" }: {
   api?: WebWorkspaceApi;
   currentURL: string;
   currentTitle: string;
   onOpen: (url: string) => void;
   active?: boolean;
   destinationId?: string;
+  presentation?: "toolbar" | "menu";
 }): JSX.Element {
   const { t, formatDate } = useI18n();
   const library = api?.library;
@@ -149,15 +150,17 @@ export function BrowserLibrary({ api, currentURL, currentTitle, onOpen, active =
   const matching = needle ? entries.filter((entry) => `${entry.title}\n${entry.url}`.toLowerCase().includes(needle)) : entries;
   const bookmarkLabel = t(bookmarked ? "browserLibrary.removeBookmark" : "browserLibrary.addBookmark");
   return <>
-    <button type="button" className="icon-button workspace-browser-nav browser-library-bookmark" data-browser-bookmark-current
+    <button type="button" className={presentation === "menu" ? "web-workspace-menu-item browser-library-bookmark" : "icon-button workspace-browser-nav browser-library-bookmark"} data-browser-bookmark-current
       aria-label={bookmarkLabel} title={safeURL ? bookmarkLabel : t("browserLibrary.privacy")} aria-pressed={bookmarked}
       disabled={!library || !safeURL || pending} onClick={() => void changeBookmark(currentURL, currentTitle, !bookmarked)}>
       <Bookmark className="icon" aria-hidden="true" />
+      {presentation === "menu" ? <span>{bookmarkLabel}</span> : null}
     </button>
-    <button ref={trigger} type="button" className="icon-button workspace-browser-nav" data-browser-library-trigger
+    <button ref={trigger} type="button" className={presentation === "menu" ? "web-workspace-menu-item" : "icon-button workspace-browser-nav"} data-browser-library-trigger
       aria-label={t("browserLibrary.title")} title={t("browserLibrary.title")} aria-haspopup="dialog" aria-expanded={open}
       aria-controls={open ? panelId : undefined} disabled={!library} onClick={() => { if (open) close(); else { setOpen(true); setConfirmClear(false); } }}>
       <BookOpen className="icon" aria-hidden="true" />
+      {presentation === "menu" ? <span>{t("browserLibrary.title")}</span> : null}
     </button>
     {open ? <UILayerPortal layer="popover">
       <div ref={panel} id={panelId} role="dialog" aria-labelledby={headingId} className="browser-library-panel"

@@ -1,9 +1,11 @@
-import { useEffect, useLayoutEffect, useState, type CSSProperties, type ReactNode, type Ref } from "react";
+import { useCallback, useEffect, useLayoutEffect, useState, type CSSProperties, type ReactNode, type Ref } from "react";
 import { closestCenter, DndContext, useSensor, useSensors } from "@dnd-kit/core";
 import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { Globe, Pin, PinOff, Plus, RotateCw, X } from "./WuuIcons";
+import { readFocusModality } from "./FocusModality";
+import { HoverRevealScopeContext } from "./HoverReveal";
 import {
   readNavigationRibbonPreferences,
   saveNavigationRibbonPreferences,
@@ -46,59 +48,72 @@ function RibbonDestination({ item, onMove, onMenu, nativeTooltip }: {
   nativeTooltip: boolean;
   onMenu?: (x: number, y: number) => void;
 }): JSX.Element {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+  const { t } = useI18n();
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({
     id: item.id,
     transition: useSortableTransition(),
   });
   const style: CSSProperties = { transform: CSS.Transform.toString(transform), transition };
   return (
-    <Tooltip content={item.title} disabled={isDragging} native={nativeTooltip}>
-      <button
-        {...attributes}
-        {...listeners}
-        ref={setNodeRef}
-        style={style}
-        type="button"
-        className={`sidebar-ribbon-button${item.pluginId ? " plugin-navigation-item" : ""}${item.active ? " active" : ""}`}
-        aria-label={item.title}
-        aria-current={item.active ? "page" : undefined}
-        aria-disabled={item.disabled || undefined}
-        aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
-        aria-haspopup={onMenu ? "menu" : undefined}
-        data-ribbon-id={item.id}
-        data-wuu-component={item.component}
-        data-wuu-plugin={item.pluginId}
-        data-pinned={item.pinned || undefined}
-        data-dragging={isDragging || undefined}
-        onClick={() => { if (!item.disabled) item.onSelect(); }}
-        onAuxClick={(event) => {
-          if (event.button === 1 && item.onClose) { event.preventDefault(); item.onClose(); }
-        }}
-        onContextMenu={(event) => {
-          event.preventDefault();
-          if (!onMenu) return;
-          event.currentTarget.focus();
-          onMenu(event.clientX, event.clientY);
-        }}
-        onKeyDown={(event) => {
-          if (event.altKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+    <div ref={setNodeRef} style={style}
+      className={`sidebar-ribbon-tab-row${item.active ? " active" : ""}${item.onClose ? " closable" : ""}`}
+      data-dragging={isDragging || undefined}>
+      <Tooltip content={item.title} disabled={isDragging} native={nativeTooltip}>
+        <button
+          {...attributes}
+          {...listeners}
+          ref={setActivatorNodeRef}
+          type="button"
+          className={`sidebar-ribbon-button${item.pluginId ? " plugin-navigation-item" : ""}${item.active ? " active" : ""}`}
+          aria-label={item.title}
+          aria-current={item.active ? "page" : undefined}
+          aria-disabled={item.disabled || undefined}
+          aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
+          aria-haspopup={onMenu ? "menu" : undefined}
+          data-ribbon-id={item.id}
+          data-wuu-component={item.component}
+          data-wuu-plugin={item.pluginId}
+          data-pinned={item.pinned || undefined}
+          data-dragging={isDragging || undefined}
+          onClick={() => { if (!item.disabled) item.onSelect(); }}
+          onAuxClick={(event) => {
+            if (event.button === 1 && item.onClose) { event.preventDefault(); item.onClose(); }
+          }}
+          onContextMenu={(event) => {
             event.preventDefault();
-            event.stopPropagation();
-            onMove(event.key === "ArrowUp" ? -1 : 1);
-          } else if (onMenu && (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10"))) {
-            event.preventDefault();
-            const rect = event.currentTarget.getBoundingClientRect();
-            onMenu(rect.right, rect.top);
-          } else if (event.key === "Delete" && item.onClose) {
-            event.preventDefault();
-            item.onClose();
-          }
-        }}
-      >
-        {item.icon}
-        {item.pinned ? <Pin className="sidebar-ribbon-pin" aria-hidden="true" /> : null}
-      </button>
-    </Tooltip>
+            if (!onMenu) return;
+            event.currentTarget.focus();
+            onMenu(event.clientX, event.clientY);
+          }}
+          onKeyDown={(event) => {
+            if (event.altKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+              event.preventDefault();
+              event.stopPropagation();
+              onMove(event.key === "ArrowUp" ? -1 : 1);
+            } else if (onMenu && (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10"))) {
+              event.preventDefault();
+              const rect = event.currentTarget.getBoundingClientRect();
+              onMenu(rect.right, rect.top);
+            } else if (event.key === "Delete" && item.onClose) {
+              event.preventDefault();
+              item.onClose();
+            }
+          }}
+        >
+          {item.icon}
+          <span className="sidebar-ribbon-label">{item.title}</span>
+          {item.pinned ? <Pin className="sidebar-ribbon-pin" aria-hidden="true" /> : null}
+        </button>
+      </Tooltip>
+      {item.onClose ? <Tooltip content={t("webWorkspace.closeTab", { title: item.title })} disabled={isDragging} native={nativeTooltip}>
+        <button type="button" className="sidebar-ribbon-close" data-ribbon-close-id={item.id}
+          aria-label={t("webWorkspace.closeTab", { title: item.title })}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => { event.stopPropagation(); item.onClose?.(); }}>
+          <X aria-hidden="true" />
+        </button>
+      </Tooltip> : null}
+    </div>
   );
 }
 
@@ -113,6 +128,14 @@ export function NavigationRibbon({ items, websites = [], activeWebsiteId, onSele
   const preferences = useNavigationRibbonPreferences();
   const [announcement, setAnnouncement] = useState("");
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  const [pointerInside, setPointerInside] = useState(false);
+  const [keyboardFocusWithin, setKeyboardFocusWithin] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const [retainedLayers, setRetainedLayers] = useState(0);
+  const retainLayer = useCallback(() => {
+    setRetainedLayers((count) => count + 1);
+    return () => setRetainedLayers((count) => count - 1);
+  }, []);
   const sensors = useSensors(useSensor(SidebarPointerSensor, { activationConstraint: { distance: 6 } }));
   const destinations: NavigationRibbonItem[] = [
     ...items,
@@ -184,11 +207,30 @@ export function NavigationRibbon({ items, websites = [], activeWebsiteId, onSele
   }
 
   const menuWebsite = menu && websites.find((website) => website.id === menu.id);
+  const expanded = pointerInside || keyboardFocusWithin || dragging || Boolean(menuWebsite) || retainedLayers > 0;
   return <>
-    <nav ref={ribbonRef} className="sidebar-ribbon" aria-label={t("sidebar.mainNavigation")}>
+    <HoverRevealScopeContext.Provider value={{ disabled: false, retain: retainLayer }}>
+    <nav ref={ribbonRef} className="sidebar-ribbon" aria-label={t("sidebar.mainNavigation")}
+      data-expanded={expanded || undefined}
+      data-wuu-layer={expanded ? "popover" : undefined}
+      onPointerOver={(event) => {
+        if (event.currentTarget.contains(event.target as Node)) setPointerInside(true);
+      }}
+      onPointerOut={(event) => {
+        if (event.currentTarget.contains(event.target as Node)
+          && (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget))) setPointerInside(false);
+      }}
+      onPointerDownCapture={() => setKeyboardFocusWithin(false)}
+      onFocus={() => setKeyboardFocusWithin(readFocusModality() === "keyboard")}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setKeyboardFocusWithin(false);
+      }}
+      onKeyDownCapture={() => setKeyboardFocusWithin(true)}>
       <DndContext sensors={sensors} collisionDetection={closestCenter} modifiers={[restrictToVerticalAxis]}
         accessibility={{ screenReaderInstructions: { draggable: t("ribbon.reorderHint") } }}
-        onDragEnd={({ active, over }) => { if (over) reorder(String(active.id), String(over.id)); }}>
+        onDragStart={() => setDragging(true)}
+        onDragCancel={() => setDragging(false)}
+        onDragEnd={({ active, over }) => { setDragging(false); if (over) reorder(String(active.id), String(over.id)); }}>
         <div className="sidebar-ribbon-main scrollbar-hidden">
           <SortableContext items={orderedIDs} strategy={verticalListSortingStrategy}>
             {ordered.map((item) => <RibbonDestination key={item.id} item={item} nativeTooltip={Boolean(activeWebsiteId)}
@@ -197,13 +239,16 @@ export function NavigationRibbon({ items, websites = [], activeWebsiteId, onSele
           </SortableContext>
           <Tooltip content={t("webWorkspace.newTab")} native={Boolean(activeWebsiteId)}>
             <button type="button" className="sidebar-ribbon-button sidebar-ribbon-add" aria-label={t("webWorkspace.newTab")}
-              disabled={!onNewTab} onClick={onNewTab}><Plus aria-hidden="true" /></button>
+              disabled={!onNewTab} onClick={onNewTab}>
+              <Plus aria-hidden="true" /><span className="sidebar-ribbon-label">{t("webWorkspace.newTab")}</span>
+            </button>
           </Tooltip>
         </div>
       </DndContext>
       {footer ? <div className="sidebar-ribbon-footer">{footer}</div> : null}
       <span className="sr-only" role="status" aria-live="polite">{announcement}</span>
     </nav>
+    </HoverRevealScopeContext.Provider>
     {menu && menuWebsite ? <ThreadContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)} items={[
       { label: t(menuWebsite.pinned ? "webWorkspace.unpinTab" : "webWorkspace.pinTab"), icon: menuWebsite.pinned ? <PinOff /> : <Pin />, onSelect: () => { focusRibbonItem(menuWebsite.id); onPinTab?.(menuWebsite.id, !menuWebsite.pinned); } },
       { label: t("webWorkspace.closeCurrentTab"), icon: <X />, onSelect: () => closeWebsite(menuWebsite.id) },

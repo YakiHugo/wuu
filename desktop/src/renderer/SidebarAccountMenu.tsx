@@ -5,14 +5,15 @@ import { BarChart3, ChevronsUpDown, LogOut, Settings, Smartphone, UserRound } fr
 import type { AccountView } from "./AccountPanel";
 import { hostSupports } from "./HostCapabilities";
 import { ENABLE_ACCOUNT } from "./FeatureFlags";
+import { useRetainHoverOwner } from "./HoverReveal";
 import { useI18n } from "./i18n";
 import { composerMenuWidth, FloatingMenuPortal, handleFloatingMenuKeyDown, useFloatingMenuFocus } from "./ComposerFloatingMenu";
 import "./SidebarAccountMenu.css";
 
-export function SidebarAccountMenu({ disabled, localOnly = false, compact = false, onOpenSettings, onOpenAccount }: {
+export function SidebarAccountMenu({ disabled, localOnly = false, matchTriggerWidth = true, onOpenSettings, onOpenAccount }: {
   disabled: boolean;
   localOnly?: boolean;
-  compact?: boolean;
+  matchTriggerWidth?: boolean;
   onOpenAccount?: () => void;
   onOpenSettings: (page: "providers" | "usage") => void;
 }): React.JSX.Element {
@@ -23,6 +24,7 @@ export function SidebarAccountMenu({ disabled, localOnly = false, compact = fals
   const panel = useRef<HTMLDivElement>(null);
   const generation = useRef(0);
   const [open, setOpen] = useState(false);
+  useRetainHoverOwner(open);
   const [account, setAccount] = useState<AccountView>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -80,7 +82,7 @@ export function SidebarAccountMenu({ disabled, localOnly = false, compact = fals
   };
   const avatar = <span className="sidebar-account-avatar" aria-hidden="true">{account.username ? (account.display_name || account.username).slice(0, 2).toUpperCase() : <UserRound size={18} />}</span>;
 
-  return <div className={`sidebar-account${compact ? " sidebar-account-compact" : ""}`}>
+  return <div className="sidebar-account">
     <button ref={anchor} className="sidebar-account-trigger" type="button" disabled={disabled}
       aria-label={t("account.menu")} aria-haspopup="menu" aria-expanded={open} aria-controls={open ? id : undefined}
       onClick={() => setOpen(!open)} onKeyDown={event => {
@@ -90,7 +92,7 @@ export function SidebarAccountMenu({ disabled, localOnly = false, compact = fals
     </button>
     <DesktopUpdateButton />
     {open && <FloatingMenuPortal anchorRef={anchor} owner="sidebar-account" placement="above" align="left"
-      width={composerMenuWidth(240)} matchAnchorWidth={!compact} flip>
+      width={composerMenuWidth(240)} matchAnchorWidth={matchTriggerWidth} flip>
       <div ref={panel} id={id} role="menu" aria-label={t("account.menu")} className="select-menu-panel sidebar-account-menu"
         onBlur={event => { if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node) && event.relatedTarget !== anchor.current) setOpen(false); }}
         onKeyDown={event => handleFloatingMenuKeyDown(event, () => setOpen(false), anchor.current)}>

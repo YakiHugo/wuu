@@ -35,6 +35,8 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Changed
 
+- Expand the vertical browser tab rail with readable titles and direct close controls for web tabs, while keeping built-in destinations permanent and preserving sidebar content widths.
+
 - Remove the redundant full-width browser loading line while retaining ribbon tab loading feedback and Stop/Reload controls.
 - Represent each browser page as one ribbon tab, with direct new-tab creation, drag ordering, and a compact pin/close menu instead of nested tab rows and navigation management.
 
@@ -53,6 +55,7 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Preserve native browser text and image sharpness behind account and browser menus on high-density displays.
 - Restore window dragging from empty browser toolbar space while keeping its address field and buttons interactive.
 - Center the compact account control with settings and the other ribbon icons.
 - Restore pointer-following eyes on the browser start page without background animation work.

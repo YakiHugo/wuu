@@ -47,6 +47,14 @@
   -webkit-app-region: no-drag;
 }
 
+/* Narrow pages keep one toolbar row. Secondary actions move into More;
+   reserve actual input space instead of shrinking text or action hitboxes. */
+.workspace-browser-toolbar.web-workspace-toolbar[data-compact] {
+  grid-template-columns: auto minmax(calc(80px + var(--space-2) * 2), 1fr) auto;
+  column-gap: var(--space-1);
+  padding-inline: var(--space-1);
+}
+
 /* Only the full-workspace browser is window chrome; embedded plugin pages
    retain ordinary pointer behavior. Controls below carve out the drag region. */
 .web-workspace-stage .workspace-browser-toolbar.web-workspace-toolbar {
@@ -141,6 +149,12 @@
 .web-workspace-host {
   position: absolute;
   inset: 0;
+}
+
+/* Native views cannot inherit the stage's DOM clip. Report this resolved
+   radius to Electron and use the same contour for an occlusion backdrop. */
+.web-workspace-stage :is(.web-workspace-host, .web-workspace-backdrop) {
+  border-radius: var(--conversation-canvas-radius);
 }
 
 .web-workspace-message {

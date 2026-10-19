@@ -230,6 +230,8 @@ export function WebWorkspacePanel({
   }, [update]);
 
   useLayoutEffect(() => {
+    // Tabs share this host. Replacing its observer on tab selection would hide
+    // the native page that the main process has just selected, then show it again.
     const host = hostRef.current;
     const id = site?.id;
     if (!api || !id || !host || !current) return;
@@ -248,21 +250,21 @@ export function WebWorkspacePanel({
     // Keep rectangle reports until its matching preload has been restarted.
     const stop = observeWebWorkspaceBounds(host, resizeWithWindow && api.supportsWindowInsets === true, (bounds) => {
       if (disposed) return;
-      setOccluded(bounds === null);
-      if (bounds) { wasVisible = true; report(bounds); return; }
+      setOccluded(bounds === null || bounds.occluded === true);
+      if (bounds && !bounds.occluded) { wasVisible = true; report(bounds); return; }
+      // Keep the hidden viewport current, including a first selected tab under
+      // an already expanded rail. Native capture does not make that tab visible.
+      report(bounds);
       // Keep a still image under renderer menus instead of replacing the whole
       // site with empty canvas. Capture once per occlusion, never per frame.
       if (wasVisible) void captureBackdrop();
       wasVisible = false;
-      report(null);
     });
     return () => {
       disposed = true;
       stop();
       report(null);
     };
-  // Tabs share this viewport; replacing its observer would briefly hide the
-  // newly selected native view after the main process has already shown it.
   }, [api, site?.id, active, resizeWithWindow, Boolean(current), error, blank, captureBackdrop]);
 
   useEffect(() => {
@@ -513,6 +515,7 @@ function observeWebWorkspaceBounds(host: HTMLElement, resizeWithWindow: boolean,
     let bounds: HostRect | null = rect && document.visibilityState !== "hidden" ? {
       x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height),
     } : null;
+    let occluded = false;
     if (bounds) {
       if (overlaysDirty) {
         // Resizing changes geometry, not membership. Reuse the candidate list
@@ -535,7 +538,7 @@ function observeWebWorkspaceBounds(host: HTMLElement, resizeWithWindow: boolean,
           if (bounds.height > 0) continue;
         }
         if (overlay.matches(MODALS) || overlaps) {
-          bounds = null;
+          occluded = true;
           break;
         }
       }
@@ -548,6 +551,8 @@ function observeWebWorkspaceBounds(host: HTMLElement, resizeWithWindow: boolean,
       right: window.innerWidth - bounds.x - bounds.width,
       bottom: window.innerHeight - bounds.y - bounds.height,
     } : bounds;
+    if (geometry) geometry.borderRadius = Number.parseFloat(getComputedStyle(host).borderBottomLeftRadius);
+    if (geometry && occluded) geometry.occluded = true;
     // Page zoom changes the native scale even when CSS insets stay identical.
     const key = JSON.stringify([geometry, window.devicePixelRatio]);
     if (key !== last) { last = key; report(geometry); }

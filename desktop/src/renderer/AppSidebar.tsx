@@ -1836,11 +1836,12 @@ export function AppSidebar({
               onClick={() => activateNative(onOpenSettings)}
             >
               <Settings aria-hidden="true" />
+              <span className="sidebar-ribbon-label">{t("sidebar.settings")}</span>
             </button>
           </Tooltip>
           <SidebarAccountMenu
             key={sidebarCollapsed ? "collapsed" : "docked"}
-            compact
+            matchTriggerWidth={false}
             disabled={!state.initialized}
             onOpenAccount={onOpenAccount ? () => activateNative(onOpenAccount) : undefined}
             onOpenSettings={(page) => activateNative(() => onOpenSettings(page))}
