@@ -2871,6 +2871,7 @@ app.whenReady().then(async () => {
     },
   );
   const nativeTooltip = new NativeTooltip();
+  ipcMain.on("wuu:web-workspace-page-edited", event => webWorkspaceHost.protectEditedPage(event.sender));
   const webWorkspaceSender = (event: IpcMainInvokeEvent): BrowserWindow => {
     if (!ENABLE_EMBEDDED_BROWSER) throw new Error("The embedded browser is disabled in this build.");
     if (!isAppContextSender(event)) throw new Error("Website destinations are available from Wuu's main window only.");

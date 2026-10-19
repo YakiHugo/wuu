@@ -117,6 +117,18 @@ The shortcut starts disabled, and no background history or audio is recorded. Ad
 
 ## Browser
 
+### Experimental website tabs
+
+In the experimental workbench, website tabs in the left ribbon retain their page while you switch destinations. Downloads, history, bookmarks, and address suggestions open above the live page. Hiding or minimizing Wuu keeps the selected page ready for restore.
+
+Ordinary background tabs become eligible for memory reclamation after 30 minutes without selection; Wuu checks once a minute. Selecting a reclaimed tab reloads its page, restoring navigation history, zoom, and the saved scroll offset. Cookies and the shared browser profile remain intact. Page scripts start again, so pin a tab if its background work must remain running.
+
+The selected tab is kept even when Wuu is hidden. Pinned tabs, edited forms, playing media, captured pages, active downloads, automation, and pages that refuse to unload are protected. Pages with embedded frames, session storage, editors, live opener connections, or changed background titles/icons also stay resident because Electron cannot restore all their live state. This conservative policy does not promise a particular memory reduction or replace macOS visual acceptance.
+
+The eligibility model follows [Chromium's discard policy](https://github.com/chromium/chromium/blob/main/chrome/browser/performance_manager/policies/discard_eligibility_policy.cc); history restoration uses [Electron navigationHistory](https://www.electronjs.org/docs/latest/api/navigation-history).
+
+### Conversation browser
+
 In the experimental website tabs in the left ribbon, ordinary links navigate the current tab. A website can request a new tab or a popup itself. Command-click on macOS, Ctrl-click on other platforms, middle-click, and **Open Link in New Tab** keep the current page selected while opening a background tab. Add Shift to Command/Ctrl-click or middle-click to select the new tab; Shift-click opens a separate website window. These website gestures are separate from the message-link behavior below.
 
 Open **Browser** or enter `/browser` to view a page in the workspace panel beside the conversation. That panel and the page the agent is using are the same tab: the address bar, back, forward, and reload all drive it. Clicking a web link in a message, a turn source capsule, or a compact browser activity row also opens or focuses that panel and navigates to the page. Hold Command (Ctrl on Windows) or middle-click to open it in the system browser instead. If you are already using another workspace tool, the page still navigates in that tab and does not steal the panel.

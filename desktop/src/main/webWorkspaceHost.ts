@@ -1,5 +1,7 @@
 import { BrowserWindow, Menu, clipboard, dialog, shell, type DownloadItem, type WebContents, type WebContentsView, type WebContentsViewConstructorOptions } from "electron";
 import { randomUUID } from "node:crypto";
+import { join } from "node:path";
+import type { NavigationEntry } from "electron";
 import { WEB_WORKSPACE_ZOOM_MIN, WEB_WORKSPACE_ZOOM_MAX, WEB_WORKSPACE_TAB_LIMIT, WEB_WORKSPACE_RIBBON_ID } from "../shared/webWorkspace";
 import type { WebWorkspaceMenuAction, WebWorkspaceMenuRequest, WebWorkspaceBounds, WebWorkspaceCommand, WebWorkspaceDestination, WebWorkspaceLegacyDestination, WebWorkspaceInitializationState, WebWorkspaceFindOptions, WebWorkspaceFindResult, WebWorkspaceState, WebWorkspaceTabState } from "../shared/webWorkspace";
 import { BROWSER_PARTITION, BROWSER_WORKSPACE_TAB_PREFIX, type BrowserWorkspaceSource, type BrowserWorkspaceAttachment, type BrowserViewHandle, type BrowserParentWindowHandle, type BrowserPermissionRequestDetails, type BrowserSessionPermissionDelegate } from "./browserHostWindows";
@@ -9,7 +11,8 @@ import type { WebWorkspaceDownloads } from "./webWorkspaceDownloads";
 
 // Website pages keep their native ownership. Explicit, turn-scoped automation
 // borrows a live view; restored tabs create native views only when selected.
-type WorkspaceTab = { id: string; url: string; title: string; zoomFactor: number; pinned?: boolean; favicon?: string; startPage?: boolean; page?: WorkspacePage };
+type WorkspaceTab = { id: string; url: string; title: string; zoomFactor: number; pinned?: boolean; favicon?: string; startPage?: boolean; page?: WorkspacePage;
+  discarded?: { entries: NavigationEntry[]; index: number; scroll: { x: number; y: number } } };
 type WorkspaceGroup = {
   id: string;
   owner: BrowserWindow;
@@ -42,6 +45,9 @@ type WorkspacePage = {
   popups: Set<BrowserWindow>;
   automation?: { restriction: AutomationRestriction; reclaim(): void; layout(): void; agentInput(): boolean; external: boolean };
   inheritedAutomation?: readonly AutomationRestriction[];
+  inactiveSince?: number;
+  discardProtected?: boolean;
+  discarding?: boolean;
 };
 type PermissionOwner = { page: WorkspacePage; grants: Set<string>; navigationGeneration: number };
 
@@ -54,6 +60,7 @@ const ZOOM_LEVELS = [0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1
 // or high-entropy page to create an unbounded encode or renderer IPC payload.
 const MAX_BACKDROP_PIXELS = 16 * 1024 * 1024;
 const MAX_BACKDROP_BYTES = 12 * 1024 * 1024;
+const IDLE_TAB_TIMEOUT = 30 * 60 * 1000;
 
 function websiteURL(value: string): string {
   const url = new URL(value);
@@ -76,6 +83,8 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
   private observedOwners = new Set<number>();
   private externalPrompts = new Set<number>();
   private permissionPrompts = new Set<number>();
+  private discardTimer: ReturnType<typeof setInterval>;
+  private discarding = false;
 
   constructor(
     private readonly onState: (owner: BrowserWindow, state: WebWorkspaceState) => void,
@@ -87,7 +96,90 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
       library?: WebWorkspaceLibrary;
       downloads?: WebWorkspaceDownloads;
     } = {},
-  ) {}
+  ) {
+    this.discardTimer = setInterval(() => {
+      void this.discardInactiveTabs().catch(error => console.warn("[web-workspace] Idle tab cleanup failed", error));
+    }, 60_000);
+    this.discardTimer.unref();
+  }
+
+  protectEditedPage(contents: WebContents): void {
+    const page = this.contentsOwners.get(contents.id)?.page;
+    if (page) page.discardProtected = true;
+  }
+
+  /** Release only idle ordinary tabs, preserving Chromium navigation state.
+   * Eligibility follows Chromium's DiscardEligibilityPolicy: active/pinned,
+   * audible/captured, edited, busy and externally controlled pages are protected.
+   * Electron does not expose Chromium's complete live-state graph; iframe,
+   * session-storage and editor pages stay resident rather than guessing safety.
+   * https://github.com/chromium/chromium/blob/main/chrome/browser/performance_manager/policies/discard_eligibility_policy.cc
+   */
+  async discardInactiveTabs(now = performance.now()): Promise<number> {
+    if (this.discarding) return 0;
+    this.discarding = true;
+    let discarded = 0;
+    try {
+      for (const page of this.pages.values()) {
+        const eligible = (): boolean => !page.contents.isDestroyed() && this.pages.get(page.id) === page
+          && page.group.tabbed && page.group.activeTabId !== page.tab.id && !page.tab.pinned
+          && page.inactiveSince !== undefined && now - page.inactiveSince >= IDLE_TAB_TIMEOUT
+          && !page.bounds && !page.discardProtected && !page.pendingClose && !page.error
+          && !page.automation && !page.inheritedAutomation?.some(restriction => restriction.active) && !page.popups.size
+          && !page.contents.isLoading() && !page.contents.isCurrentlyAudible() && !page.contents.isBeingCaptured()
+          && !page.contents.isDevToolsOpened() && !page.contents.debugger.isAttached()
+          && !this.permissionPrompts.has(page.contents.id) && !this.externalPrompts.has(page.contents.id)
+          && page.contents.mainFrame.framesInSubtree.length === 1
+          && /^https?:/.test(page.contents.getURL())
+          && !this.options.downloads?.list(page.owner).some(download => download.websiteId === page.group.id && !download.done);
+        if (!eligible()) continue;
+        const generation = page.navigationGeneration, inactiveSince = page.inactiveSince;
+        let timeout: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const safe = await Promise.race([
+            page.contents.executeJavaScriptInIsolatedWorld(999, [{ code: `(() => document.contentType === 'text/html'
+              && sessionStorage.length === 0 && !document.pictureInPictureElement
+              && !document.querySelector('[contenteditable]:not([contenteditable="false"])')
+              && ![...document.querySelectorAll('input,textarea,select')].some(el =>
+                el instanceof HTMLSelectElement ? [...el.options].some(option => option.selected !== option.defaultSelected)
+                : el instanceof HTMLInputElement && ['checkbox','radio'].includes(el.type) ? el.checked !== el.defaultChecked
+                : el.value !== el.defaultValue)
+              && ![...document.querySelectorAll('video,audio')].some(media => !media.paused && !media.ended)
+              && ({ x: scrollX, y: scrollY }))()` }]),
+            new Promise<boolean>(resolve => { timeout = setTimeout(() => resolve(false), 1000); }),
+          ]);
+          if (!safe || !eligible() || page.navigationGeneration !== generation || page.inactiveSince !== inactiveSince) continue;
+          const entries = page.contents.navigationHistory.getAllEntries(), index = page.contents.navigationHistory.getActiveIndex();
+          if (!entries[index]?.pageState) continue;
+          page.tab.url = page.contents.getURL();
+          page.tab.title = page.contents.getTitle();
+          // Respect a site's beforeunload veto without opening a background
+          // confirmation dialog. The tab remains resident if it refuses.
+          page.discarding = true;
+          const closed = await new Promise<boolean>(resolve => {
+            const finish = (value: boolean): void => {
+              page.contents.removeListener("destroyed", destroyed);
+              page.contents.removeListener("will-prevent-unload", prevented);
+              resolve(value);
+            };
+            const destroyed = (): void => finish(true);
+            const prevented = (): void => finish(false);
+            page.contents.once("destroyed", destroyed);
+            page.contents.once("will-prevent-unload", prevented);
+            page.contents.close({ waitForBeforeUnload: true });
+          });
+          page.discarding = false;
+          if (!closed) { page.discardProtected = true; continue; }
+          page.tab.discarded = { entries, index, scroll: safe };
+          this.destroyPage(page);
+          this.emit(page.group);
+          discarded++;
+        } catch { /* A navigating or unresponsive page stays resident. */ }
+        finally { if (timeout) clearTimeout(timeout); }
+      }
+    } finally { this.discarding = false; }
+    return discarded;
+  }
 
   /** Only live website pages from the nominated application window are discoverable. */
   browserSource(owner: () => BrowserWindow | null): BrowserWorkspaceSource {
@@ -466,6 +558,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
   }
 
   destroyAll(): void {
+    clearInterval(this.discardTimer);
     for (const group of [...this.groups.values()]) this.destroyGroup(group);
     this.flushLibrary();
     this.options.downloads?.destroyAll();
@@ -531,6 +624,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
       const allowed = response === 1 && !this.automationRestricted(owned.page) && !contents.isDestroyed()
         && this.contentsOwners.get(contents.id) === owned && owned.navigationGeneration === navigationGeneration
         && requestOrigin(contents.getURL()) === pageOrigin;
+      if (allowed) owned.page.discardProtected = true;
       if (allowed && TAB_PERMISSIONS.has(permission)) owned.grants.add(`${pageOrigin}\n${origin}\n${permission}`);
       if (allowed && permission === "fullscreen" && !parent.isDestroyed() && parent.isVisible() && !parent.isMinimized()
         && (contents !== owned.page.contents || (owned.page.bounds && owned.page.view.getVisible()
@@ -570,8 +664,9 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     return {
       id: tab.id, url: page?.error || contents?.isLoading() ? page!.requestedURL : contents?.getURL() || tab.url,
       title: contents?.getTitle() || tab.title, loading: contents?.isLoading() ?? false,
-      canGoBack: contents?.navigationHistory.canGoBack() ?? false,
-      canGoForward: contents?.navigationHistory.canGoForward() ?? false,
+      canGoBack: contents?.navigationHistory.canGoBack() ?? Boolean(tab.discarded && tab.discarded.index > 0),
+      canGoForward: contents?.navigationHistory.canGoForward() ?? Boolean(tab.discarded && tab.discarded.index < tab.discarded.entries.length - 1),
+      ...(tab.discarded ? { discarded: true } : {}),
       zoomFactor: tab.zoomFactor,
       ...(tab.pinned ? { pinned: true } : {}),
       ...(tab.favicon ? { favicon: tab.favicon } : {}),
@@ -603,8 +698,19 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
 
   private ensurePage(group: WorkspaceGroup, tab: WorkspaceTab): WorkspacePage {
     if (tab.page && !tab.page.contents.isDestroyed()) return tab.page;
-    const page = this.attachPage(group, tab, createBrowserView());
-    this.navigate(page, tab.url);
+    const history = tab.discarded;
+    tab.discarded = undefined;
+    const page = this.attachPage(group, tab, createBrowserView({ webPreferences: { preload: join(__dirname, "../preload/browserPage.cjs") } }));
+    if (history) void page.contents.navigationHistory.restore({ entries: history.entries, index: history.index }).then(async () => {
+      if (this.pages.get(page.id) !== page || page.contents.isDestroyed() || page.navigationGeneration !== 1) return;
+      // Chromium serializes pageState periodically; its saved scroll can lag
+      // behind the final viewport. Apply the live offset captured at discard.
+      await page.contents.executeJavaScriptInIsolatedWorld(999, [{ code: `scrollTo(${history.scroll.x}, ${history.scroll.y})` }]);
+    }).catch((error: Error) => {
+      if (this.pages.get(page.id) !== page || page.navigationGeneration > 1) return;
+      page.error = error.message; this.emit(group);
+    });
+    else this.navigate(page, tab.url);
     return page;
   }
 
@@ -612,6 +718,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     const page: WorkspacePage = {
       id: randomUUID(), group, tab, owner: group.owner, view, contents: view.webContents,
       bounds: null, borderRadius: 0, requestedURL: tab.url, navigationGeneration: 0, popups: new Set(), inheritedAutomation,
+      inactiveSince: group.activeTabId === tab.id ? undefined : performance.now(),
     };
     tab.page = page;
     this.pages.set(page.id, page);
@@ -658,6 +765,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     page.contents.on("did-navigate", committed);
     page.contents.on("did-navigate-in-page", (event, url, isMainFrame) => { if (isMainFrame) committed(event, url); });
     page.contents.on("page-title-updated", () => {
+      if (page.inactiveSince !== undefined && !page.contents.isLoading()) page.discardProtected = true;
       tab.title = page.contents.getTitle();
       if (group.tabbed) {
         this.options.library?.updateTitle(tab.url, tab.title);
@@ -666,6 +774,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
       this.emit(group);
     });
     page.contents.on("page-favicon-updated", (_event, favicons) => {
+      if (page.inactiveSince !== undefined && !page.contents.isLoading()) page.discardProtected = true;
       tab.favicon = favicons.find(value => /^https?:\/\//i.test(value) || /^data:image\//i.test(value));
       this.emit(group);
     });
@@ -686,6 +795,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     page.contents.on("zoom-changed", (_event, direction) => this.stepZoom(page, direction === "in" ? 1 : -1));
     page.contents.on("context-menu", (_event, params) => this.contextMenu(page, params));
     page.contents.once("destroyed", () => {
+      if (page.discarding) return;
       if (this.pages.get(page.id) !== page || this.groups.get(group.id) !== group) return;
       const index = group.tabs.indexOf(tab);
       if (group.tabbed && index >= 0) this.removeTab(group, index);
@@ -701,9 +811,15 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
   }
 
   private activate(group: WorkspaceGroup, tab: WorkspaceTab): void {
-    if (group.activeTabId !== tab.id) this.clearFind(this.activeTab(group)?.page);
+    if (group.activeTabId !== tab.id) {
+      const previous = this.activeTab(group)?.page;
+      this.clearFind(previous);
+      if (previous) previous.inactiveSince = performance.now();
+    }
     group.activeTabId = tab.id;
-    this.ensurePage(group, tab).contents.setZoomFactor(tab.zoomFactor);
+    const page = this.ensurePage(group, tab);
+    page.inactiveSince = undefined;
+    page.contents.setZoomFactor(tab.zoomFactor);
     this.layoutGroup(group);
   }
 
@@ -759,7 +875,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
 
   private destroyGroup(group: WorkspaceGroup): void {
     this.groups.delete(group.id);
-    if (this.shortcutTargets.get(group.owner.webContents.id) === group.id) this.shortcutTargets.delete(group.owner.webContents.id);
+    for (const [ownerID, id] of this.shortcutTargets) if (id === group.id) this.shortcutTargets.delete(ownerID);
     for (const tab of group.tabs) if (tab.page) this.destroyPage(tab.page);
   }
 
@@ -943,6 +1059,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     contents.on("did-start-navigation", details => { if (details.isMainFrame && !details.isSameDocument) owned.navigationGeneration++; });
     contents.on("will-attach-webview", event => event.preventDefault());
     contents.on("will-prevent-unload", event => {
+      if (page.discarding) return;
       const parent = BrowserWindow.fromWebContents(contents) ?? page.owner;
       // The native dialog identifies the origin, rather than trusting site
       // wording. Stay is the safe default for unsaved forms and editors.
@@ -986,7 +1103,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
           ...(restricted ? { show: false } : {}),
           frame: true, alwaysOnTop: false, fullscreen: false,
           webPreferences: {
-            partition: BROWSER_PARTITION, preload: "", contextIsolation: true,
+            partition: BROWSER_PARTITION, preload: join(__dirname, "../preload/browserPage.cjs"), contextIsolation: true,
             nodeIntegration: false, nodeIntegrationInSubFrames: false,
             nodeIntegrationInWorker: false, sandbox: true, webviewTag: false,
             webSecurity: true, allowRunningInsecureContent: false,
@@ -994,7 +1111,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
         },
       };
       if (!popup) response.createWindow = options => {
-        const view = createBrowserView(options);
+        const view = createBrowserView({ ...options, webPreferences: { ...options.webPreferences, preload: join(__dirname, "../preload/browserPage.cjs") } });
         if (this.pages.get(page.id) !== page || this.groups.get(page.group.id) !== page.group) {
           view.webContents.close();
           return view.webContents;
@@ -1006,6 +1123,9 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
         // of this child retains its own restriction until that lease releases.
         const restrictions = [...(page.inheritedAutomation ?? []), ...(page.automation ? [page.automation.restriction] : [])].filter(lease => lease.active);
         const child = this.attachPage(page.group, tab, view, restrictions);
+        // Electron cannot reconstruct a live WindowProxy connection on restore.
+        page.discardProtected = true;
+        child.discardProtected = true;
         // Keep Chromium's WindowProxy/opener, original POST, and referrer. A
         // supplied guest is already navigating; never load it a second time.
         if (!(options as WebContentsViewConstructorOptions).webContents) {

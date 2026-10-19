@@ -16,6 +16,7 @@ export type WebWorkspaceFindResult = { requestId: number; activeMatchOrdinal: nu
 export type WebWorkspaceFindOptions = { forward?: boolean; findNext?: boolean };
 
 export type WebWorkspaceTabState = {
+  discarded?: true;
   id: string;
   url: string;
   title: string;

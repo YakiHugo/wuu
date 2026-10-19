@@ -36,6 +36,7 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: resolve(__dirname, "src/main/preload.ts"),
+          browserPage: resolve(__dirname, "src/main/browserPagePreload.ts"),
           nativePreview: resolve(__dirname, "src/main/nativePreviewPreload.ts"),
           linuxPreview: resolve(__dirname, "src/main/linuxPreviewPreload.ts"),
 

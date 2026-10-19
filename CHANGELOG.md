@@ -10,6 +10,8 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Added
 
+- Reclaim eligible website tabs after 30 minutes in the background, restoring their history and scroll position on selection while protecting edited, pinned, media, and other stateful pages.
+
 - Add local history and bookmark suggestions to browser address fields, with keyboard selection and a mascot-centered new-tab search page.
 
 - Optional Feishu and Notion workspace extensions combine native website views with bounded document API tools and host-managed credentials in the OS secure store.
