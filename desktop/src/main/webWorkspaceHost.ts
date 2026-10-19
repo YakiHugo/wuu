@@ -20,6 +20,7 @@ type WorkspaceGroup = {
   bounds: WebWorkspaceBounds | null;
   closedTabs: { url: string; title: string; zoomFactor: number }[];
 };
+type AutomationRestriction = { active: boolean };
 type WorkspacePage = {
   id: string;
   group: WorkspaceGroup;
@@ -35,7 +36,8 @@ type WorkspacePage = {
   findRequestId?: number;
   pendingClose?: { promise: Promise<void>; resolve: () => void };
   popups: Set<BrowserWindow>;
-  automation?: { reclaim(): void; layout(): void; agentInput(): boolean; external: boolean };
+  automation?: { restriction: AutomationRestriction; reclaim(): void; layout(): void; agentInput(): boolean; external: boolean };
+  inheritedAutomation?: readonly AutomationRestriction[];
 };
 type PermissionOwner = { page: WorkspacePage; grants: Set<string>; navigationGeneration: number };
 
@@ -91,7 +93,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
         if (!page || page.contents.isDestroyed() || page.pendingClose) throw new Error("Workspace tab is no longer available");
         if (page.automation) throw new Error("Workspace tab is already attached to another task");
         if (page.contents.debugger.isAttached()) throw new Error("Workspace tab already has a debugger attached");
-        const automation = { reclaim, layout, agentInput, external: false };
+        const automation = { reclaim, layout, agentInput, external: false, restriction: { active: true } };
         page.automation = automation;
         const visible = () => Boolean(page.bounds && !page.owner.isDestroyed() && page.owner.isVisible() && !page.owner.isMinimized());
         this.emit(page.group);
@@ -109,6 +111,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
           },
           release: () => {
             if (page.automation !== automation) return;
+            automation.restriction.active = false;
             page.automation = undefined;
             if (!page.contents.isDestroyed()) {
               page.contents.setBackgroundThrottling(true);
@@ -340,9 +343,13 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     this.options.downloads?.destroyAll();
   }
 
+  private automationRestricted(page: WorkspacePage): boolean {
+    return Boolean(page.automation || page.inheritedAutomation?.some(lease => lease.active));
+  }
+
   handleDownload(contents: WebContents, item: DownloadItem): void {
     const owned = this.contentsOwners.get(contents.id);
-    if (owned && !owned.page.automation && this.options.downloads) this.options.downloads.start(owned.page.owner, owned.page.group.id, item);
+    if (owned && !this.automationRestricted(owned.page) && this.options.downloads) this.options.downloads.start(owned.page.owner, owned.page.group.id, item);
     else item.cancel();
   }
   ownsWebContents(id: number): boolean {
@@ -352,8 +359,9 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
   checkPermission(contents: WebContents, permission: string, requestingOrigin: string): boolean {
     const origin = requestOrigin(requestingOrigin);
     const topOrigin = requestOrigin(contents.getURL());
-    return Boolean(origin && topOrigin && !this.contentsOwners.get(contents.id)?.page.automation && TAB_PERMISSIONS.has(permission)
-      && this.contentsOwners.get(contents.id)?.grants.has(`${topOrigin}\n${origin}\n${permission}`));
+    const owned = this.contentsOwners.get(contents.id);
+    return Boolean(origin && topOrigin && owned && !this.automationRestricted(owned.page) && TAB_PERMISSIONS.has(permission)
+      && owned.grants.has(`${topOrigin}\n${origin}\n${permission}`));
   }
 
   requestPermission(
@@ -364,7 +372,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
   ): void {
     const owned = this.contentsOwners.get(contents.id);
     const origin = requestOrigin(details.requestingUrl);
-    if (!owned || owned.page.automation || !origin || permission === "notifications" || contents.isDestroyed() || this.permissionPrompts.has(contents.id)) {
+    if (!owned || this.automationRestricted(owned.page) || !origin || permission === "notifications" || contents.isDestroyed() || this.permissionPrompts.has(contents.id)) {
       callback(false);
       return;
     }
@@ -392,7 +400,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
       ].join("\n"),
       buttons: ["Deny", "Allow"], defaultId: 0, cancelId: 0, noLink: true,
     }).then(({ response }) => {
-      const allowed = response === 1 && !owned.page.automation && !contents.isDestroyed()
+      const allowed = response === 1 && !this.automationRestricted(owned.page) && !contents.isDestroyed()
         && this.contentsOwners.get(contents.id) === owned && owned.navigationGeneration === navigationGeneration
         && requestOrigin(contents.getURL()) === pageOrigin;
       if (allowed && TAB_PERMISSIONS.has(permission)) owned.grants.add(`${pageOrigin}\n${origin}\n${permission}`);
@@ -455,10 +463,10 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     return page;
   }
 
-  private attachPage(group: WorkspaceGroup, tab: WorkspaceTab, view: WebContentsView): WorkspacePage {
+  private attachPage(group: WorkspaceGroup, tab: WorkspaceTab, view: WebContentsView, inheritedAutomation?: readonly AutomationRestriction[]): WorkspacePage {
     const page: WorkspacePage = {
       id: randomUUID(), group, tab, owner: group.owner, view, contents: view.webContents,
-      bounds: null, requestedURL: tab.url, navigationGeneration: 0, popups: new Set(),
+      bounds: null, requestedURL: tab.url, navigationGeneration: 0, popups: new Set(), inheritedAutomation,
     };
     tab.page = page;
     this.pages.set(page.id, page);
@@ -759,7 +767,8 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     contents.on("will-redirect", guardNavigation);
     contents.setWindowOpenHandler(details => {
       const parent = BrowserWindow.fromWebContents(contents) ?? page.owner;
-      if (parent.isDestroyed() || (!page.automation && (!parent.isVisible() || parent.isMinimized() || (contents === page.contents && !page.bounds)))) return { action: "deny" };
+      const restricted = this.automationRestricted(page);
+      if (parent.isDestroyed() || (!restricted && (!parent.isVisible() || parent.isMinimized() || (contents === page.contents && !page.bounds)))) return { action: "deny" };
       const target = details.url || "about:blank";
       if (target !== "about:blank") {
         try { websiteURL(target); } catch { void this.openExternal(page, contents, target); return { action: "deny" }; }
@@ -770,7 +779,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
         action: "allow", outlivesOpener: !popup,
         overrideBrowserWindowOptions: {
           parent: page.owner, width: 1000, height: 750, autoHideMenuBar: true,
-          ...(page.automation ? { show: false } : {}),
+          ...(restricted ? { show: false } : {}),
           frame: true, alwaysOnTop: false, fullscreen: false,
           webPreferences: {
             partition: BROWSER_PARTITION, preload: "", contextIsolation: true,
@@ -788,7 +797,11 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
         }
         const tab: WorkspaceTab = { id: randomUUID(), url: target, title: "", zoomFactor: 1 };
         page.group.tabs.push(tab);
-        const child = this.attachPage(page.group, tab, view);
+        // A child keeps user ownership, but cannot escape its opener's live
+        // agent restrictions. Tokens expire independently; a later attachment
+        // of this child retains its own restriction until that lease releases.
+        const restrictions = [...(page.inheritedAutomation ?? []), ...(page.automation ? [page.automation.restriction] : [])].filter(lease => lease.active);
+        const child = this.attachPage(page.group, tab, view, restrictions);
         // Keep Chromium's WindowProxy/opener, original POST, and referrer. A
         // supplied guest is already navigating; never load it a second time.
         if (!(options as WebContentsViewConstructorOptions).webContents) {
@@ -798,7 +811,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
             if (error.code !== "ERR_ABORTED" && this.pages.has(child.id)) { child.error = error.message; this.emit(page.group); }
           });
         }
-        if (!page.automation && details.disposition !== "background-tab") this.activate(page.group, tab);
+        if (!restricted && details.disposition !== "background-tab") this.activate(page.group, tab);
         this.emit(page.group);
         return view.webContents;
       };
@@ -815,7 +828,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     });
   }
   private async openExternal(page: WorkspacePage, contents: WebContents, value: string): Promise<void> {
-    if (page.automation) return;
+    if (this.automationRestricted(page)) return;
     // Never hand local files, executable URLs, or browser-internal schemes to
     // the OS. Custom application links still require an explicit user choice.
     let url: URL;
@@ -832,7 +845,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
         message: `This website wants to open a ${url.protocol.slice(0, -1)} link.`,
         detail: value, buttons: ["Cancel", "Open"], defaultId: 0, cancelId: 0, noLink: true,
       });
-      if (response === 1 && !page.automation && !contents.isDestroyed() && this.pages.get(page.id) === page
+      if (response === 1 && !this.automationRestricted(page) && !contents.isDestroyed() && this.pages.get(page.id) === page
         && requestOrigin(contents.getURL()) === origin) await shell.openExternal(value);
     } catch (error) {
       console.warn("[web-workspace] Could not open external link", error);

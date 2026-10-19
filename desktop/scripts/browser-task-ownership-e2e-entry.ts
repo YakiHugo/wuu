@@ -9,6 +9,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, nativeImage, webContents, session, type WebContentsView, type WebContentsViewConstructorOptions } from "electron";
 import { WebWorkspaceHost } from "../src/main/webWorkspaceHost";
+import { WebWorkspaceDownloads } from "../src/main/webWorkspaceDownloads";
 import { createBrowserView } from "../src/main/browserView";
 import { AppServerClientPool } from "../src/main/appServerClients";
 import {
@@ -62,6 +63,7 @@ const failures: string[] = [];
 const checks: { name: string; passed: boolean; detail?: string }[] = [];
 function check(name: string, condition: unknown, detail?: string) {
   checks.push({ name, passed: Boolean(condition), ...(detail ? { detail } : {}) });
+  console.log(`${condition ? "PASS" : "FAIL"} ${checks.length}: ${name}`);
   if (!condition) failures.push(`${name}${detail ? `: ${detail}` : ""}`);
 }
 const completed = new Map<string, ReturnType<typeof deferred>>();
@@ -73,7 +75,7 @@ const activeTurnIDs = new Map<string, string>();
 const activeExecutionIDs = new Map<string, string>();
 const controlledResponses = new Map<string, ServerResponse>();
 const controlledWaiters = new Map<string, ReturnType<typeof deferred>>();
-const controlledMarkers = new Set(["OWNERSHIP_WORKSPACE", "OWNERSHIP_HIDDEN", "OWNERSHIP_CAPTURE_CANCEL", "OWNERSHIP_C", "OWNERSHIP_C_CONTINUE", "OWNERSHIP_LIFECYCLE", "OWNERSHIP_KEEP", "OWNERSHIP_DISPOSE", "OWNERSHIP_SIBLING", "OWNERSHIP_FOREIGN", "OWNERSHIP_RETAINED_AGAIN"]);
+const controlledMarkers = new Set(["OWNERSHIP_WORKSPACE_CHILD", "OWNERSHIP_WORKSPACE", "OWNERSHIP_HIDDEN", "OWNERSHIP_CAPTURE_CANCEL", "OWNERSHIP_C", "OWNERSHIP_C_CONTINUE", "OWNERSHIP_LIFECYCLE", "OWNERSHIP_KEEP", "OWNERSHIP_DISPOSE", "OWNERSHIP_SIBLING", "OWNERSHIP_FOREIGN", "OWNERSHIP_RETAINED_AGAIN"]);
 function controlledWaiter(marker: string) {
   let waiter = controlledWaiters.get(marker);
   if (!waiter) { waiter = deferred(); controlledWaiters.set(marker, waiter); }
@@ -196,9 +198,15 @@ const server = createServer((req, res) => {
     res.writeHead(204).end();
     return;
   }
+  if (pathname === "/workspace-download") {
+    res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Disposition": 'attachment; filename="workspace-proof.txt"' });
+    res.end("Local workspace download proof");
+    return;
+  }
   if (req.method === "GET") {
     res.writeHead(200, { "Content-Type": "text/html" });
-    res.end(`<!doctype html><title>${req.url}</title><body><h1>${req.url}</h1><button id="target" style="position:absolute;left:100px;top:100px;width:100px;height:50px">Target</button><input id="field" style="position:absolute;left:100px;top:200px"><script>window.clicks=0;document.querySelector('#target').onclick=()=>{window.clicks++;fetch('/clicked?source='+encodeURIComponent(location.pathname));};</script>`);
+    const workspaceControls = pathname === "/workspace-ribbon" ? `<a href="/workspace-child" target="_blank" rel="opener" style="position:absolute;left:100px;top:280px">Open child</a><button style="position:absolute;left:100px;top:330px" onclick="window.child.postMessage('download',location.origin)">Download child</button><script>addEventListener('message',event=>{if(event.origin===location.origin&&event.data==='child-ready')window.child=event.source;});</script>` : pathname === "/workspace-child" ? `<script>addEventListener('message',event=>{if(event.origin===location.origin&&event.source===opener&&event.data==='download')location.href='/workspace-download';});opener.postMessage('child-ready',location.origin);fetch('/popup-ready?source=/workspace-child');</script>` : "";
+    res.end(`<!doctype html><title>${req.url}</title><body><h1>${req.url}</h1><button id="target" style="position:absolute;left:100px;top:100px;width:100px;height:50px">Target</button><input id="field" style="position:absolute;left:100px;top:200px">${workspaceControls}<script>window.clicks=0;document.querySelector('#target').onclick=()=>{window.clicks++;fetch('/clicked?source='+encodeURIComponent(location.pathname));};</script>`);
     return;
   }
   let body = "";
@@ -217,7 +225,7 @@ const server = createServer((req, res) => {
     const step = turns.get(marker) ?? 0;
     turns.set(marker, step + 1);
     if (step === 0) {
-      respond(res, ["OWNERSHIP_C_CONTINUE", "OWNERSHIP_WORKSPACE"].includes(marker) ? { action: "tabs" }
+      respond(res, ["OWNERSHIP_C_CONTINUE", "OWNERSHIP_WORKSPACE", "OWNERSHIP_WORKSPACE_CHILD"].includes(marker) ? { action: "tabs" }
         : { action: "navigate", url: `${baseURL}/${["OWNERSHIP_POPUP", "OWNERSHIP_LIFECYCLE", "OWNERSHIP_KEEP"].includes(marker) ? "popup-opener" : marker}` });
       return;
     }
@@ -971,7 +979,25 @@ app.whenReady().then(async () => {
   // Borrow real ribbon/plugin native views through the same Go tool and
   // reverse-RPC route. No external accounts or duplicate navigation are used.
   const websiteReveals: string[] = [];
-  const websites = new WebWorkspaceHost(() => undefined, () => undefined, { onReveal: (_owner, id) => websiteReveals.push(id) });
+  const websiteDownloads = new WebWorkspaceDownloads(() => undefined);
+  const websites = new WebWorkspaceHost(() => undefined, () => undefined, { downloads: websiteDownloads, onReveal: (_owner, id) => websiteReveals.push(id) });
+  const browserSession = session.fromPartition(BROWSER_PARTITION);
+  let downloadSerial = 0;
+  const nextWorkspaceDownload = () => bounded("native workspace download settles", new Promise<string>(resolve => {
+    browserSession.prependOnceListener("will-download", (event, item) => {
+      // A policy regression must produce evidence, not hang a native save dialog.
+      item.setSavePath(join(fixture!, `workspace-download-${++downloadSerial}.txt`));
+      item.once("done", (_event, state) => resolve(state));
+      setImmediate(() => { if (event.defaultPrevented) resolve("blocked"); });
+    });
+  }));
+  const clickWorkspaceControl = async (name: string) => {
+    await controlledTool("OWNERSHIP_WORKSPACE", { action: "observe", tab_id: ribbonTab.tab_id });
+    const observation = lastToolText(providerRequests.at(-1) as { messages?: { role: string; content?: unknown }[] });
+    const node = new RegExp(`\\[(\\d+)\\][^\\n]*${name}`).exec(observation)?.[1];
+    assert(node, observation);
+    await controlledTool("OWNERSHIP_WORKSPACE", { action: "click", tab_id: ribbonTab.tab_id, node_id: Number(node) });
+  };
   const workspaceSource = websites.browserSource(() => main);
   host.setWorkspaceSource(workspaceSource);
   host.setRendererSink({
@@ -1019,7 +1045,31 @@ app.whenReady().then(async () => {
   assert(workspaceNode, workspaceObservation);
   await controlledTool("OWNERSHIP_WORKSPACE", { action: "click", tab_id: ribbonTab.tab_id, node_id: Number(workspaceNode) });
   check("ordinary Browser Use input changes the same user page", await ribbonContents.executeJavaScript("window.clicks") === 1);
+  const workspaceChildReady = deferred();
+  popupLoads.set("/workspace-child", workspaceChildReady);
+  await clickWorkspaceControl("Open child");
+  await bounded("agent-created website child loads", workspaceChildReady.promise);
+  const workspaceChildTab = workspaceSource.list().find(tab => tab.url === `${baseURL}/workspace-child`);
+  const workspaceChild = webContents.getAllWebContents().find(contents => contents.getURL() === `${baseURL}/workspace-child`);
+  assert(workspaceChildTab && workspaceChild);
+  check("agent-created website tab remains unadopted and preserves its opener", !workspaceChild.debugger.isAttached() && !host.ownsWebContents(workspaceChild.id) && await workspaceChild.executeJavaScript("opener.workspaceNonce") === "original-live-document");
+  const blockedChildDownload = nextWorkspaceDownload();
+  await clickWorkspaceControl("Download child");
+  const childDownloadState = await blockedChildDownload;
+  check("unadopted agent-created child inherits the download restriction", childDownloadState === "cancelled" && websiteDownloads.list(main).length === 0, childDownloadState);
+  const childTask = await start("OWNERSHIP_WORKSPACE_CHILD");
+  await bounded("independent child activity starts", controlledWaiter("OWNERSHIP_WORKSPACE_CHILD").promise);
+  await controlledTool("OWNERSHIP_WORKSPACE_CHILD", { action: "attach", tab_id: workspaceChildTab.tab_id });
   await controlledTool("OWNERSHIP_WORKSPACE", { action: "detach", tab_id: ribbonTab.tab_id });
+  const independentChildDownload = nextWorkspaceDownload();
+  workspaceChild.downloadURL(`${baseURL}/workspace-download`);
+  const independentState = await independentChildDownload;
+  check("releasing opener never releases a child's independent lease", independentState === "blocked" && host.ownsWebContents(workspaceChild.id) && websiteDownloads.list(main).length === 0, independentState);
+  await finishControlled("OWNERSHIP_WORKSPACE_CHILD", childTask);
+  const userChildDownload = nextWorkspaceDownload();
+  workspaceChild.downloadURL(`${baseURL}/workspace-download`);
+  const userDownloadState = await userChildDownload;
+  check("released popup returns to ordinary user download policy", userDownloadState === "completed" && websiteDownloads.list(main).length === 1 && !workspaceChild.debugger.isAttached(), userDownloadState);
   check("detach keeps native page and zoom while removing debugger and listeners", !ribbonContents.isDestroyed() && !ribbonContents.debugger.isAttached() && ribbonContents.listenerCount("before-input-event") === initialListeners && ribbonContents.getZoomFactor() === 1.25 && !host.ownsWebContents(nativeRibbonID));
   const viewsBeforeDetachedRead = webContents.getAllWebContents().length;
   await controlledTool("OWNERSHIP_WORKSPACE", { action: "observe", tab_id: ribbonTab.tab_id });
@@ -1136,7 +1186,6 @@ app.whenReady().then(async () => {
   check("disposal invalidates input before closing views", disposeResult !== "delivered" && host.tabSurfaceMeta(workdir, disposalTab) === undefined, disposeResult);
   await finishControlled("OWNERSHIP_DISPOSE", disposal);
   writeFileSync(join(output, "results.json"), JSON.stringify({ checks, threads: { hidden, captureCancelled, popup, sibling, lifecycle, retained, foreignThread, a, b, c, d, disposal }, tabs: { hiddenTab, cancelledCaptureTab, popupTab, lifecycleTab, freshTab, retainedOpenerTab, handoffTab, retainedAgainTemporary, deliverableTab, persistentTab, finalTemporaryTab, aTab, bTab, cTab, dTab, disposalTab }, calls, replies, providerRequests, popupRequests, popupAdoptions, selfCloseErrors, selfCloseNotifications, clickRequests, nativeInputCommands, events }, null, 2));
-  console.log(JSON.stringify(checks, null, 2));
   await pool.shutdown();
   host.destroyAll();
   main.destroy();
