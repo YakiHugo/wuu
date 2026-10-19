@@ -275,8 +275,8 @@ async function openDrawerViaHoverZone(): Promise<void> {
   expect(appShell()?.classList.contains("sidebar-drawer-open")).toBe(true);
 }
 
-async function openDrawerViaSidebarToggle(): Promise<void> {
-  const toggle = container.querySelector<HTMLElement>(".sidebar-toggle-button");
+async function hoverPersistentSidebarToggle(): Promise<void> {
+  const toggle = container.querySelector<HTMLElement>(".section-sidebar-toggle");
   expect(toggle).not.toBeNull();
   elementFromPointTarget = toggle;
   await act(async () => {
@@ -288,7 +288,7 @@ async function openDrawerViaSidebarToggle(): Promise<void> {
   await act(async () => {
     vi.advanceTimersByTime(SIDEBAR_DRAWER_HOVER_OPEN_DELAY_MS);
   });
-  expect(appShell()?.classList.contains("sidebar-drawer-open")).toBe(true);
+  expect(appShell()?.classList.contains("sidebar-drawer-open")).toBe(false);
 }
 
 async function moveBetweenSidebarTargets(from: Element, to: Element): Promise<void> {
@@ -367,6 +367,9 @@ describe("collapsed sidebar hover drawer", () => {
       addListener: vi.fn(), removeListener: vi.fn(), dispatchEvent: vi.fn(),
     }));
     await renderCollapsedApp();
+    if (host === "web" && coarse) {
+      expect(container.querySelector('[data-wuu-component="page-history-controls"]')).toBeNull();
+    }
     expect(container.querySelector('[data-wuu-component="conversation-titlebar"]')).not.toBeNull();
     expect(appShell()?.dataset.wuuSidebarMode).toBe("collapsed");
     await act(async () => {
@@ -401,17 +404,20 @@ describe("collapsed sidebar hover drawer", () => {
     expect(toggle()).not.toBeNull();
   });
 
-  it("opens the collapsed sidebar when the titlebar toggle is hovered", async () => {
+  it("keeps the secondary pane collapsed while its persistent toggle is hovered", async () => {
     await renderCollapsedApp();
     expect(appShell()?.dataset.wuuSidebarMode).toBe("collapsed");
-    await openDrawerViaSidebarToggle();
-    expect(appShell()?.dataset.wuuSidebarMode).toBe("drawer");
+    await hoverPersistentSidebarToggle();
+    expect(appShell()?.dataset.wuuSidebarMode).toBe("collapsed");
+    await act(async () => container.querySelector<HTMLButtonElement>(".section-sidebar-toggle")!.click());
+    expect(appShell()?.dataset.wuuSidebarMode).toBe("docked");
+    expect(appShell()?.classList.contains("sidebar-drawer-docking")).toBe(false);
   });
 
-  it("keeps the drawer open when the titlebar toggle is covered by the sliding rail", async () => {
+  it("retains an edge-opened drawer while the pointer travels over its persistent toggle", async () => {
     window.innerWidth = 820;
     await renderCollapsedApp();
-    const toggle = container.querySelector<HTMLElement>(".sidebar-toggle-button");
+    const toggle = container.querySelector<HTMLElement>(".section-sidebar-toggle");
     const sidebar = container.querySelector<HTMLElement>(".sidebar");
     expect(toggle).not.toBeNull();
     expect(sidebar).not.toBeNull();
@@ -421,6 +427,8 @@ describe("collapsed sidebar hover drawer", () => {
     vi.spyOn(sidebar!, "getBoundingClientRect").mockReturnValue(
       new DOMRect(0, 0, 296, 820),
     );
+
+    await openDrawerViaHoverZone();
 
     elementFromPointTarget = toggle;
     await act(async () => {
@@ -464,10 +472,10 @@ describe("collapsed sidebar hover drawer", () => {
 
   it("pins the collapsed sidebar open when its toggle is clicked after hover preview", async () => {
     await renderCollapsedApp();
-    await openDrawerViaSidebarToggle();
+    await openDrawerViaHoverZone();
 
     const toggle = container.querySelector<HTMLButtonElement>(
-      ".sidebar-toggle-button",
+      ".section-sidebar-toggle",
     );
     await act(async () => {
       toggle?.click();
@@ -482,6 +490,22 @@ describe("collapsed sidebar hover drawer", () => {
       vi.advanceTimersByTime(sidebarMotionMs());
     });
     expect(appShell()?.classList.contains("sidebar-drawer-docking")).toBe(false);
+  });
+
+  it("keeps the focused persistent toggle collapsed after an explicit close", async () => {
+    await renderCollapsedApp();
+    const toggle = container.querySelector<HTMLButtonElement>(".section-sidebar-toggle")!;
+    await act(async () => toggle.click());
+    expect(appShell()?.dataset.wuuSidebarMode).toBe("docked");
+    await act(async () => {
+      toggle.focus();
+      toggle.click();
+      vi.advanceTimersByTime(sidebarMotionMs() + SIDEBAR_DRAWER_HOVER_OPEN_DELAY_MS);
+    });
+    expect(document.activeElement).toBe(toggle);
+    expect(appShell()?.dataset.wuuSidebarMode).toBe("collapsed");
+    await hoverPersistentSidebarToggle();
+    expect(appShell()?.dataset.wuuSidebarMode).toBe("collapsed");
   });
 
   it("closes the drawer when the pointer leaves the window", async () => {
@@ -892,13 +916,7 @@ describe("collapsed sidebar hover drawer", () => {
     });
     expect(appShell()?.classList.contains("right-panel-globalized")).toBe(true);
 
-    await act(async () => {
-      container
-        .querySelector<HTMLButtonElement>(
-          '.globalized-sidebar-toggle[aria-label="展开左侧栏"]',
-        )
-        ?.click();
-    });
+    await openDrawerViaHoverZone();
     expect(appShell()?.classList.contains("sidebar-drawer-open")).toBe(true);
 
     await clickSidebarSession("Session from focused workspace");

@@ -10,6 +10,8 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Added
 
+- Navigate window-local app page history across conversations, settings, workspace tools, and workbench destinations without changing website Back/Forward history.
+
 - Add local history and bookmark suggestions to browser address fields, with keyboard selection and a mascot-centered new-tab search page.
 
 - Optional Feishu and Notion workspace extensions combine native website views with bounded document API tools and host-managed credentials in the OS secure store.
@@ -54,6 +56,8 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 - Avoid remeasuring covered conversation inputs during website window resizing, and refit retained drafts when their workspace becomes visible again.
 - Keep full-workspace websites attached to the native window edges during live resizing, including when the shell renderer is busy.
+- Keep explicit workbench sidebar collapse separate from hover previews, and remove the redundant settings breadcrumb root.
+
 - Keep the account menu above browser pages while preserving native website visibility on dismissal.
 
 - Show local, theme-aware Notion, Feishu, and ChatGPT marks for saved website shortcuts and browser tabs without requiring their optional integrations.

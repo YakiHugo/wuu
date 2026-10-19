@@ -99,6 +99,42 @@ async function renderSidebarDrawerState({
 }
 
 describe("useSidebarDrawerState", () => {
+  it("does not activate a hover drawer from the persistent toggle", async () => {
+    const hook = await renderSidebarDrawerState();
+    const toggle = document.createElement("button");
+    toggle.className = "sidebar-toggle-button";
+    hook.hoverZone.parentElement?.appendChild(toggle);
+    elementFromPointTarget = toggle;
+    await act(async () => {
+      toggle.dispatchEvent(new MouseEvent("pointermove", { bubbles: true, clientX: 100, clientY: 20 }));
+      hook.get().scheduleSidebarDrawerOpen();
+      vi.advanceTimersByTime(SIDEBAR_DRAWER_HOVER_OPEN_DELAY_MS + 1);
+    });
+    expect(hook.get().sidebarDrawerPhase).toBe("closed");
+    await act(async () => hook.get().openSidebarDrawer());
+    expect(hook.get().sidebarDrawerPhase).toBe("closed");
+  });
+
+  it("cancels queued edge reveal when the toggle explicitly dismisses navigation", async () => {
+    const hook = await renderSidebarDrawerState();
+    elementFromPointTarget = hook.hoverZone;
+    await act(async () => {
+      hook.hoverZone.dispatchEvent(new MouseEvent("pointermove", { bubbles: true, clientX: 8, clientY: 100 }));
+      hook.get().scheduleSidebarDrawerOpen();
+      hook.get().closeSidebarDrawer();
+      vi.advanceTimersByTime(SIDEBAR_DRAWER_HOVER_OPEN_DELAY_MS + 120);
+    });
+    expect(hook.get().sidebarDrawerPhase).toBe("closed");
+  });
+
+  it("does not fabricate a docking preview when expanding an already-closed pane", async () => {
+    const hook = await renderSidebarDrawerState();
+    await act(async () => hook.get().closeSidebarDrawer());
+    expect(hook.get().sidebarDrawerPhase).toBe("closed");
+    await hook.setCollapsed(false);
+    expect(hook.get().sidebarDrawerPhase).toBe("closed");
+  });
+
   it("finishes docking when the pointer enters the newly pinned rail", async () => {
     const hook = await renderSidebarDrawerState();
     await act(async () => hook.get().openSidebarDrawerNow());

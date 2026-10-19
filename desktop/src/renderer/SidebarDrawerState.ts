@@ -115,7 +115,14 @@ export function useSidebarDrawerState({
     };
   }, []);
 
-  const sidebarDrawerPointerHovered = useCallback((): boolean | undefined => {
+  const sidebarDrawerPointerHovered = useCallback((retainToggle = true): boolean | undefined => {
+    const point = sidebarPointerPositionRef.current;
+    // A toggle can retain an already-open drawer during pointer travel, but
+    // must never activate a hover preview after an explicit collapse.
+    if (!retainToggle && point && typeof document.elementFromPoint === "function" &&
+        document.elementFromPoint(point.x, point.y)?.closest(".sidebar-toggle-button")) {
+      return false;
+    }
     // A card owns its gap grace period and focus retention even outside the rail.
     if (hoverLayerCount > 0) return true;
     const sidebar = appShellRef.current?.querySelector(sidebarSelector);
@@ -125,12 +132,11 @@ export function useSidebarDrawerState({
     if (active instanceof Element && sidebar?.contains(active) && !active.closest(".sidebar-ribbon")) {
       return true;
     }
-    const point = sidebarPointerPositionRef.current;
     if (!point) {
       return undefined;
     }
     const hoverTriggers = appShellRef.current?.querySelectorAll(
-      SIDEBAR_DRAWER_HOVER_TRIGGER_SELECTOR,
+      retainToggle ? SIDEBAR_DRAWER_HOVER_TRIGGER_SELECTOR : ".sidebar-hover-zone",
     );
     for (const element of [sidebar, ...(hoverTriggers ?? [])]) {
       if (!element) continue;
@@ -172,7 +178,7 @@ export function useSidebarDrawerState({
     if (resizingSidebar || !sidebarCollapsed || sidebarDrawerSuppressedRef.current) {
       return;
     }
-    if (sidebarDrawerPointerHovered() === false) {
+    if (sidebarDrawerPointerHovered(false) === false) {
       return;
     }
     clearSidebarDrawerOpenTimer();
@@ -216,7 +222,7 @@ export function useSidebarDrawerState({
         !sidebarHoverZoneActiveRef.current ||
         resizingSidebar ||
         sidebarDrawerSuppressedRef.current ||
-        sidebarDrawerPointerHovered() === false
+        sidebarDrawerPointerHovered(false) === false
       ) {
         return;
       }
@@ -237,7 +243,7 @@ export function useSidebarDrawerState({
     clearSidebarDrawerCloseTimer();
     clearSidebarDrawerPointerLeaveTimer();
     blurSidebarFocus();
-    if (!sidebarCollapsed || resizingSidebar) {
+    if (!sidebarCollapsed || resizingSidebar || sidebarDrawerPhase === "closed") {
       setSidebarDrawerPhase("closed");
       return;
     }
@@ -254,6 +260,7 @@ export function useSidebarDrawerState({
     motionMs,
     resizingSidebar,
     sidebarCollapsed,
+    sidebarDrawerPhase,
   ]);
 
   const scheduleSidebarDrawerCloseFromPointerLeave = useCallback((event?: Event): void => {
