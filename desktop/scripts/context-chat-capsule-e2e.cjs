@@ -150,6 +150,8 @@ async function run(port) {
   assert.equal(await evaluate(main.webContents, () => document.querySelector('.web-workspace-stage')?.hidden), false);
   const request = requests.find(body => body.tools?.length && JSON.stringify(body.messages).includes('Explain this page'));
   assert.ok(JSON.stringify(request.messages).includes(context.pageId));
+  assert.ok(JSON.stringify(request.messages).includes('Visible page reference.'));
+  assert.ok(JSON.stringify(request.messages).includes('untrusted page content'));
   assert.ok(!JSON.stringify(request.messages).includes('secret-'));
   checks.push('Send uses production startThread/startTurn and exact bounded page reference; the normal Chat session persists while the source website remains visible.');
   await until(() => evaluate(native, () => Boolean(document.querySelector('.context-chat-capsule-status button'))));
