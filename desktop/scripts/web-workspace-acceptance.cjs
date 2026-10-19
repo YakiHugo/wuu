@@ -296,6 +296,33 @@ async function runWebsiteAcceptance(h, fixture) {
       assert.ok(diagnostic.events.some(event => event.event === 'did-start-navigation' && event.url === diagnostic.requestedURL), 'The actual plugin requests its default notion.so URL');
       assert.ok(last.native.some(page => page.visible), 'The Notion plugin presents its native page, independent of external network availability');
       assert.ok(created.length <= 2, `Plugin renders must not recreate native pages repeatedly: ${created.length}`);
+      // Anonymous notion.so can redirect to marketing. Follow its real public
+      // login link to observe the application, without entering any account data.
+      const page = created.find(wc => !wc.isDestroyed() && /^https:\/\/(?:www\.)?notion\.(?:com|so)\//.test(wc.getURL()));
+      diagnostic.publicLogin = { status: 'not-offered' };
+      if (page && !page.isLoadingMainFrame()) {
+        const href = await Promise.race([
+          page.executeJavaScript(`Array.from(document.querySelectorAll('a[href]')).find(a => /^(log in|登录)$/i.test(a.textContent.trim()))?.getAttribute('href') || ''`),
+          delay(1500).then(() => ''),
+        ]);
+        const destination = href ? new URL(href, page.getURL()) : null;
+        if (destination?.protocol === 'https:' && /(^|\.)notion\.(com|so)$/.test(destination.hostname) && destination.pathname.startsWith('/login')) {
+          diagnostic.publicLogin = { requestedURL: destination.href, status: 'observing' }; save();
+          await pageClick(page, `a[href=${JSON.stringify(href)}]`, 'notion-public-login-link');
+          await delay(10000);
+          const live = created.filter(wc => !wc.isDestroyed()).map(wc => ({ id: wc.id, url: wc.getURL(), loading: wc.isLoading() }));
+          diagnostic.publicLogin.pages = live;
+          const login = created.find(wc => !wc.isDestroyed() && /^https:\/\/(?:app\.|www\.)?notion\.(?:com|so)\/login/.test(wc.getURL()));
+          if (login && !login.isLoadingMainFrame()) {
+            diagnostic.publicLogin.document = await Promise.race([
+              login.executeJavaScript('({title:document.title,ready:document.readyState,userAgent:navigator.userAgent,text:document.body?.innerText.slice(0,2400)||"",visibleInputs:Array.from(document.querySelectorAll("input")).filter(e=>e.getBoundingClientRect().width>0).map(e=>({type:e.type,placeholder:e.placeholder}))})'),
+              delay(1500).then(() => ({ unavailable: 'document observation timed out' })),
+            ]);
+          }
+          diagnostic.publicLogin.status = diagnostic.publicLogin.document?.visibleInputs?.length ? 'login-form-visible' : 'unsettled-after-10s';
+          save(); await capture('notion-public-application-login');
+        }
+      }
       return { requestedURL: diagnostic.requestedURL, networkStatus: diagnostic.networkStatus, createdContents: created.length, final: last };
     } finally {
       app.removeListener('web-contents-created', observe);
