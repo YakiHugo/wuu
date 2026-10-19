@@ -174,7 +174,7 @@ export function SubscriptionDashboard({
     }
   }
 
-  if (detailOnly) return <SettingsSection testID="settings-subscriptions" title={t("connection.subscriptionQuota")}
+  if (detailOnly) return <SettingsSection testID="settings-subscriptions" ariaBusy={refreshing} title={t("connection.subscriptionQuota")}
     actions={<button type="button" className="settings-button settings-button-ghost settings-icon-button" aria-label={t("settings.subscriptionRefresh")} title={t("settings.subscriptionRefresh")} disabled={refreshing || !canRefresh} onClick={() => setRefreshVersion(value => value + 1)}><RefreshCw className="icon" /></button>}>
     <div className="connection-detail-quota" aria-busy={refreshing}>
       {error ? <p className="settings-error" role="alert">{t(error)}</p> : null}

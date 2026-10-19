@@ -452,3 +452,30 @@ it("preserves reset credits, account context and rechecking in compact connectio
   await act(async () => container.querySelector<HTMLButtonElement>('.settings-section-actions button')!.click());
   expect(read).toHaveBeenCalledTimes(2);
 });
+
+it("exposes compact quota loading and completion on its accessible section", async () => {
+  const snapshot: EngineListResult = { engines: [{ id: "codex", enabled: true, binary_ok: true, quota: quota() }] };
+  let complete!: (result: EngineListResult) => void;
+  let fail!: (reason: Error) => void;
+  const read = vi.fn().mockReturnValueOnce(new Promise<EngineListResult>(resolve => { complete = resolve; }))
+    .mockReturnValueOnce(new Promise<EngineListResult>((_resolve, reject) => { fail = reject; }));
+  window.wuu = { ...window.wuu, listEngines: read };
+  await act(async () => root.render(<SubscriptionDashboard detailOnly scope={{ kind: "engine", id: "codex" }} inventory={snapshot} providers={[]} onSelectBuiltinModel={vi.fn()} />));
+  const section = container.querySelector('[data-testid="settings-subscriptions"]')!;
+  const refresh = section.querySelector<HTMLButtonElement>('header button')!;
+  expect(section.getAttribute("aria-busy")).toBe("true");
+  expect(refresh.disabled).toBe(true);
+  await act(async () => complete(snapshot));
+  expect(section.getAttribute("aria-busy")).toBe("false");
+  expect(refresh.disabled).toBe(false);
+  const observed = [...section.querySelectorAll("meter")].map(meter => meter.value);
+  expect(observed.length).toBeGreaterThan(0);
+  await act(async () => refresh.click());
+  expect(section.getAttribute("aria-busy")).toBe("true");
+  expect(refresh.disabled).toBe(true);
+  await act(async () => fail(new Error("fixture quota read failed")));
+  expect(section.getAttribute("aria-busy")).toBe("false");
+  expect(refresh.disabled).toBe(false);
+  expect(section.querySelector('[role="alert"]')).not.toBeNull();
+  expect([...section.querySelectorAll("meter")].map(meter => meter.value)).toEqual(observed);
+});

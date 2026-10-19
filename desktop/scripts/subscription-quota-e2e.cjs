@@ -122,23 +122,63 @@ const findQuota = (result, name) => result.subscription_providers.find(provider 
 const card = name => `[data-testid="subscription-builtin-${name}"]`;
 const shots = [];
 const captures = [];
-async function verifyQuotaWindowLayout(win) {
+async function verifyQuotaWindowLayout(win, expected) {
   const layouts = await evaluate(win, async () => {
     await document.fonts.ready;
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    return [...document.querySelectorAll(".settings-subscription-windows")].map(grid => ({
-      source: grid.closest(".settings-subscription-source").getAttribute("data-testid"),
-      width: grid.getBoundingClientRect().width,
-      windows: [...grid.children].map(window => ({ width: window.getBoundingClientRect().width, metered: Boolean(window.querySelector("meter")) })),
-    }));
+    const detail = document.querySelector('.connection-detail-quota');
+    const containers = detail ? [...detail.querySelectorAll('[data-testid^="subscription-"]')]
+      : [...document.querySelectorAll('.settings-subscription-windows')];
+    return containers.map(container => {
+      const grid = detail ? container.querySelector('.connection-usage-summary') : container;
+      const bounds = (grid ?? container).getBoundingClientRect();
+      return {
+        source: (detail ? container : container.closest('.settings-subscription-source')).getAttribute('data-testid'),
+        detail: Boolean(detail), width: bounds.width, left: bounds.left, right: bounds.right,
+        windows: [...(grid?.querySelectorAll(detail ? '.connection-usage-window' : '.settings-subscription-window') ?? [])].map(window => {
+          const rect = window.getBoundingClientRect();
+          return { width: rect.width, height: rect.height, left: rect.left, right: rect.right, metered: Boolean(window.querySelector('meter')) };
+        }),
+      };
+    });
   });
+  if (expected.source) {
+    assert.equal(layouts.length, 1, 'Connection detail must measure exactly its own account.');
+    assert.equal(layouts[0].source, expected.source);
+    assert.equal(layouts[0].windows.length, expected.windows, 'Observed allowances must be present; unknown usage must not invent a row.');
+  } else if (expected.empty) {
+    assert.equal(layouts.length, 0, 'Empty and loading previews have no observed allowance rows.');
+  } else {
+    assert.ok(layouts.length > 0, 'The preview must contain observed allowance rows to measure.');
+  }
   for (const layout of layouts) {
-    if (layout.windows.length === 1) {
-      assert.ok(Math.abs(layout.windows[0].width - layout.width) <= 1,
-        `A single allowance must fill its available width, with or without a meter: ${JSON.stringify(layout)}`);
+    assert.ok(layout.width > 0, `The allowance container must be visible: ${JSON.stringify(layout)}`);
+    for (const window of layout.windows) {
+      assert.ok(window.width > 0 && window.height > 0 && window.left >= layout.left - 1 && window.right <= layout.right + 1,
+        `Each allowance must stay within its available width: ${JSON.stringify(layout)}`);
+      if (layout.detail || layout.windows.length === 1) {
+        assert.ok(Math.abs(window.width - layout.width) <= 1,
+          `Detail rows and single allowances must fill their available width, with or without a meter: ${JSON.stringify(layout)}`);
+      }
     }
   }
   return layouts;
+}
+async function verifyDetailContentLayout(win, name, context) {
+  const layout = await evaluate(win, selector => {
+    const account = document.querySelector(selector);
+    const page = document.querySelector('.settings-page').getBoundingClientRect();
+    const nodes = [...account.querySelectorAll('.connection-usage-heading, .connection-usage-value, .connection-usage-period, .connection-usage-window, .connection-usage-reset, .connection-usage-balance, .connection-usage-state, p.settings-muted-line')];
+    return {
+      measured: nodes.length,
+      problems: nodes.filter(node => {
+        const rect = node.getBoundingClientRect();
+        return rect.width <= 0 || rect.height <= 0 || rect.right > page.right + 1 || rect.left < page.left - 1 || node.scrollWidth > node.clientWidth + 1;
+      }).map(node => node.textContent),
+    };
+  }, card(name));
+  assert.ok(layout.measured > 0, `${name} must have visible account or allowance content to measure`);
+  assert.deepEqual(layout.problems, [], `${name} ${context}`);
 }
 async function capture(win, name) {
   await evaluate(win, async () => {
@@ -262,14 +302,15 @@ async function run() {
     return team.textContent.includes('team-with-a-long-account-name@example.test')
       && !team.textContent.includes('personal@example.test')
       && !document.querySelector('[data-testid="subscription-builtin-personal"]')
-      && !team.querySelector('meter');
+      && !team.querySelector('meter')
+      && [...team.querySelectorAll('p.settings-muted-line')].some(line => line.textContent.trim() && !line.textContent.includes('team-with-a-long-account-name@example.test'));
   }), true, 'Team connection keeps its own unknown allowance without borrowing personal usage.');
   await capture(main, '01-team-account-light.png');
   await openProviderDetail(main, 'deepseek');
   assert.equal(await evaluate(main, selector => Boolean(document.querySelector(`${selector} .select-menu`)), card('deepseek')), false);
   assert.equal(await evaluate(main, selector => document.querySelector(selector).textContent.includes('12.3400 USD'), card('deepseek')), true, 'The observed balance remains visible in connection detail.');
   await openProviderDetail(main, 'personal');
-  const resetTimes = await evaluate(main, selector => [...document.querySelectorAll(`${selector} .settings-subscription-reset time`)].map(time => ({
+  const resetTimes = await evaluate(main, selector => [...document.querySelectorAll(`${selector} time.connection-usage-reset`)].map(time => ({
     datetime: time.dateTime, exact: time.getAttribute('aria-label'), title: time.title,
   })), card('personal'));
   assert.equal(resetTimes.length, 2);
@@ -279,18 +320,22 @@ async function run() {
   await capture(main, '01-accounts-light.png');
 
   const beforeMenuRequests = requests.length;
-  await evaluate(main, selector => {
-    const trigger = document.querySelector(`${selector} [data-testid="subscription-account-actions"]`);
-    trigger.focus();
-    trigger.click();
-  }, card('personal'));
-  await waitFor(main, () => document.activeElement?.getAttribute('role') === 'menu');
-  assert.equal(await evaluate(main, () => document.querySelectorAll('[role="menuitem"]').length), 2);
+  assert.equal(await evaluate(main, () => document.querySelector('details.connection-credential-menu').open), false);
+  await evaluate(main, () => document.querySelector('details.connection-credential-menu > summary').focus());
+  main.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Space' });
+  main.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Space' });
+  await waitFor(main, () => document.querySelector('details.connection-credential-menu')?.open === true);
+  assert.deepEqual(await evaluate(main, () => ['settings-auth-method-local', 'settings-check-codex-login'].map(id => {
+    const action = document.querySelector(`details.connection-credential-menu [data-testid="${id}"]`);
+    const rect = action?.getBoundingClientRect();
+    return Boolean(action && !action.disabled && rect.width > 0 && rect.height > 0);
+  })), [true, true], 'Credential disclosure keeps local credential reuse and login checking available.');
   await capture(main, '01-account-actions-light.png');
-  main.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' });
-  main.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' });
-  await waitFor(main, () => !document.querySelector('[role="menu"]'));
-  assert.equal(await evaluate(main, selector => document.activeElement === document.querySelector(`${selector} [data-testid="subscription-account-actions"]`), card('personal')), true);
+  assert.equal(await evaluate(main, () => document.activeElement === document.querySelector('details.connection-credential-menu > summary')), true);
+  main.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Space' });
+  main.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Space' });
+  await waitFor(main, () => document.querySelector('details.connection-credential-menu')?.open === false);
+  assert.equal(await evaluate(main, () => document.activeElement === document.querySelector('details.connection-credential-menu > summary')), true);
   assert.equal(requests.length, beforeMenuRequests, 'Opening and dismissing credential actions must not read quota or start authentication.');
 
   const layouts = [];
@@ -301,24 +346,14 @@ async function run() {
       document.documentElement.style.setProperty('--conversation-message-font-size', `${size}px`);
       document.documentElement.style.setProperty('--appearance-scale', String(size / 14));
     }, { theme, size });
-    const problems = await evaluate(main, () => {
-      const page = document.querySelector('.settings-page').getBoundingClientRect();
-      return [...document.querySelectorAll('.settings-subscription-name, .settings-subscription-usage, .settings-subscription-balance, .settings-subscription-account, .settings-subscription-model-trigger, .settings-subscription-metadata, .settings-subscription-reset, .settings-subscription-plan, .settings-subscription-account-source, .settings-subscription-age')]
-        .filter(node => { const rect = node.getBoundingClientRect(); return rect.right > page.right + 1 || rect.left < page.left - 1 || node.scrollWidth > node.clientWidth + 1; })
-        .map(node => node.textContent);
-    });
-    assert.deepEqual(problems, [], `${theme}, ${size}px, ${width}px`);
-    layouts.push({ theme, size, width, allowances: await verifyQuotaWindowLayout(main) });
+    const context = `${theme}, ${size}px, ${width}px`;
+    const allowances = await verifyQuotaWindowLayout(main, { source: 'subscription-builtin-personal', windows: 2 });
+    await verifyDetailContentLayout(main, 'personal', context);
+    layouts.push({ theme, size, width, allowances });
     await capture(main, `02-${theme}-${size}-${width}.png`);
     await openProviderDetail(main, 'team');
-    const teamProblems = await evaluate(main, () => {
-      const page = document.querySelector('.settings-page').getBoundingClientRect();
-      return [...document.querySelectorAll('.settings-subscription-name, .settings-subscription-account, .settings-subscription-usage, .settings-subscription-reset')]
-        .filter(node => { const rect = node.getBoundingClientRect(); return rect.right > page.right + 1 || rect.left < page.left - 1 || node.scrollWidth > node.clientWidth + 1; })
-        .map(node => node.textContent);
-    });
-    assert.deepEqual(teamProblems, [], `team ${theme}, ${size}px, ${width}px`);
-    await verifyQuotaWindowLayout(main);
+    await verifyQuotaWindowLayout(main, { source: 'subscription-builtin-team', windows: 0 });
+    await verifyDetailContentLayout(main, 'team', context);
     await capture(main, `02-team-${theme}-${size}-${width}.png`);
     await openProviderDetail(main, 'personal');
   }
@@ -327,7 +362,7 @@ async function run() {
   await evaluate(main, selector => document.querySelector(selector).scrollIntoView({ block: 'center' }), card('personal'));
   firstReset = Math.floor(Date.now() / 1000) - 1;
   await refresh(main);
-  assert.equal(await evaluate(main, selector => document.querySelector(`${selector} .settings-subscription-window`).querySelector('meter') === null, card('personal')), true);
+  assert.equal(await evaluate(main, selector => document.querySelector(`${selector} .connection-usage-window`).querySelector('meter') === null, card('personal')), true);
   await capture(main, '03-reset-expired.png');
   firstReset = future;
   await refresh(main);
@@ -382,7 +417,7 @@ async function run() {
     if (state.name === 'unattributed') assert.equal(await evaluate(preview, () => Boolean(document.querySelector('[data-testid="subscription-engine-codex"] .settings-subscription-age'))), true, 'An observation without credential attribution keeps its visible age.');
     assert.deepEqual(await evaluate(preview, () => ({ width: innerWidth, height: innerHeight })), viewport, 'Preview must render at the requested viewport.');
     await capture(preview, `05-${state.name}-${theme}.png`);
-    await verifyQuotaWindowLayout(preview);
+    await verifyQuotaWindowLayout(preview, { empty: state.name === 'empty' || state.name === 'loading' });
     assert.deepEqual(await evaluate(preview, () => [...document.querySelectorAll('.settings-subscription-name, .settings-subscription-plan, .settings-subscription-account-name, .settings-subscription-metadata, .settings-subscription-balance')]
       .filter(node => { const r = node.getBoundingClientRect(); return r.right > innerWidth + 1 || r.left < -1 || node.scrollWidth > node.clientWidth + 1; })
       .map(node => node.textContent)), [], `${state.name} must fit the viewport`);
