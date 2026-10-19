@@ -216,7 +216,7 @@ async function settledGeometry(win, width, paneSelector = ".conversation-pane") 
         flowRight: flowRect.right - parseFloat(flowStyle.paddingRight)
       };
     }, paneSelector);
-    if (value?.windowWidth === width && value.compact === (width < 760) && JSON.stringify(value) === previous) {
+    if (value?.windowWidth === width && JSON.stringify(value) === previous) {
       stable += 1;
       if (stable >= 4) return value;
     } else {

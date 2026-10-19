@@ -56,7 +56,7 @@ async function run() {
   const commentaryItem = {
     id: "agent-process-handoff-commentary-e2e",
     type: "agent_message",
-    phase: "commentary",
+    terminal: false,
     status: "completed",
     text: "第一段说明：我会先查看文件，然后再给出最终回答。"
   };
@@ -74,7 +74,7 @@ async function run() {
   const finalItem = {
     id: "agent-process-handoff-final-e2e",
     type: "agent_message",
-    phase: "final_answer",
+    terminal: true,
     status: "in_progress",
     text: ""
   };
@@ -176,7 +176,7 @@ async function run() {
   );
   const completedFinalRect = await waitFor(win, finalAnswerRect, 3000);
   const completedProcessState = await waitFor(win, processGroupState, 3000);
-  const bodyToActionsGap = completedActionSlot.top - (completedFinalRect.top + completedFinalRect.height);
+  const bodyToActionsGap = completedActionSlot.firstButtonTop - (completedFinalRect.top + completedFinalRect.height);
   assert.equal(completedProcessState.shellHasProcess, true, "Completed process summary should remain in the stable shell.");
   assert.equal(completedProcessState.shellHasAnswer, true, "Completed answer should remain in the answer lane.");
   assert.equal(completedProcessState.checkpointVisible, false, "Completed process summary should not keep the live commentary preview.");
@@ -394,7 +394,8 @@ function completedAgentActionSlotRect() {
         left: rect.left,
         width: rect.width,
         height: rect.height,
-        hasButtons
+        hasButtons,
+        firstButtonTop: slot.querySelector(".message-action-button").getBoundingClientRect().top
       }
     : null;
 }

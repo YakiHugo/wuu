@@ -1086,8 +1086,9 @@ export function AppSidebar({
   );
   const visibleFunctionalGroupOrder = useMemo(() => functionalGroupOrder.filter(
     (id) => (id !== "projects" || onCreateProject || projectIndex.projects.length > 0)
-      && (id !== "pinned" || pinnedGroupShown),
-  ), [functionalGroupOrder, onCreateProject, pinnedGroupShown, projectIndex]);
+      && (id !== "pinned" || pinnedGroupShown)
+      && (id !== "folders" || visibleFolderSortableIDs.length > 0 || folderDragCanRemove),
+  ), [functionalGroupOrder, onCreateProject, pinnedGroupShown, projectIndex, visibleFolderSortableIDs.length, folderDragCanRemove]);
   // Projects list apart from workspaces unless the user pinned or filed them.
   const projectRows = useMemo(() => projectIndex.projects
     .filter((thread) => !thread.pinned && !organization.folderByThreadID[thread.id])
@@ -1501,32 +1502,32 @@ export function AppSidebar({
         disabled: !hasRuntimeContext,
         onActivate: () => activateNative(onToggleConversationSearch),
       },
-      {
-        id: "command:skills",
-        kind: "command",
-        label: t("skills.sectionSkills"),
-        icon: "plugin-blocks",
-        disabled: !hasRuntimeContext,
-        onActivate: () => activateNative(onOpenSkillsTab),
-      },
     ];
     return Object.freeze(nodes);
   }, [
-    activateNative, hasRuntimeContext, onOpenSkillsTab, onStartNewThread,
+    activateNative, hasRuntimeContext, onStartNewThread,
     onToggleConversationSearch, searchOpen, t,
   ]);
 
-  // Plugin navigation belongs to the primary navigation: it renders directly
-  // below the top-level actions, so its entries never hide below the
-  // functional groups.
+  // App destinations follow conversation navigation in both the native
+  // sidebar and extension presentations.
   const pluginNavigationNodes = useMemo<readonly NavigationSourceNode[]>(() => {
-    if (pluginNavigationEntries.length === 0) return [];
     const nodes: NavigationSourceNode[] = [{
       id: "section:plugins",
       kind: "section",
       label: t("skills.sectionPlugins"),
       icon: "plugin-blocks",
       depth: 0,
+    }, {
+      id: "command:skills",
+      kind: "command",
+      parentId: "section:plugins",
+      depth: 1,
+      label: t("skills.sectionSkills"),
+      icon: "plugin-blocks",
+      active: pluginCatalogActive,
+      disabled: !hasRuntimeContext,
+      onActivate: () => activateNative(onOpenSkillsTab),
     }];
     for (const entry of pluginNavigationEntries) {
       nodes.push({
@@ -1541,7 +1542,7 @@ export function AppSidebar({
       });
     }
     return Object.freeze(nodes);
-  }, [activePluginMainView, openPluginNavigation, pluginNavigationEntries, t]);
+  }, [activePluginMainView, activateNative, hasRuntimeContext, onOpenSkillsTab, openPluginNavigation, pluginCatalogActive, pluginNavigationEntries, t]);
 
   const navigationNodes = useMemo<readonly NavigationSourceNode[]>(() => {
     const nodes: NavigationSourceNode[] = [];
@@ -1730,6 +1731,7 @@ export function AppSidebar({
     for (const groupID of visibleFunctionalGroupOrder) {
       nodes.push(...functionalGroupNodes[groupID]);
     }
+    nodes.push(...pluginNavigationNodes);
     nodes.push({
       id: "command:settings",
       kind: "command",
@@ -1740,7 +1742,7 @@ export function AppSidebar({
     });
     return Object.freeze(nodes);
   }, [
-    pendingConversations, onSelectPendingConversation, state.activeSessionTabID,
+    pendingConversations, onSelectPendingConversation, state.activeSessionTabID, pluginNavigationNodes,
     activateNative, activeWorkspaceID, activeThreadID,
     hasPinnedRows,
     onOpenSettings,
@@ -1776,7 +1778,20 @@ export function AppSidebar({
           hasUnread={unreadThreads.length > 0}
           onToggleUnreadView={onToggleUnreadView}
           onClearUnread={() => onMarkThreadsViewed(unreadThreads)}
-        />
+        >
+          <button
+            className="icon-button conversation-search-trigger"
+            type="button"
+            aria-label={t("sidebar.searchConversations")}
+            title={t("sidebar.searchConversations")}
+            aria-haspopup="dialog"
+            aria-expanded={searchOpen}
+            onClick={() => activateNative(onToggleConversationSearch)}
+            disabled={!hasRuntimeContext}
+          >
+            <Search className="icon-lg" />
+          </button>
+        </SidebarBrand>
         {unreadViewOpen ? (
           <section
             className="sidebar-unread-view scrollbar-hidden"
@@ -1859,47 +1874,6 @@ export function AppSidebar({
             <MessageSquarePlus className="icon-lg" />
             <span>{t("sidebar.newConversation")}</span>
           </button>
-          <button
-            className="nav-item conversation-search-trigger"
-            type="button"
-            aria-haspopup="dialog"
-            aria-expanded={searchOpen}
-            onClick={() => activateNative(onToggleConversationSearch)}
-            disabled={!hasRuntimeContext}
-          >
-            <Search className="icon-lg" />
-            <span>{t("sidebar.searchConversations")}</span>
-          </button>
-          <button
-            className="nav-item"
-            aria-current={pluginCatalogActive ? "page" : undefined}
-            onClick={() => activateNative(onOpenSkillsTab)}
-            disabled={!hasRuntimeContext}
-          >
-            <PluginBlocksIcon className="icon-lg" />
-            <span>{t("skills.sectionSkills")}</span>
-          </button>
-          {/* Plugin pages are destinations beside the catalog that lists
-              their plugins, so they continue this list instead of opening a
-              second group headed with the catalog's own name. */}
-          {pluginNavigationEntries.map((entry) => {
-            const active = activePluginMainView !== undefined && activePluginMainView.id === entry.instanceId;
-            return (
-              <button
-                key={`${entry.pluginId}:${entry.id}`}
-                type="button"
-                className={`nav-item plugin-navigation-item${active ? " active" : ""}`}
-                data-wuu-component="plugin-navigation-item"
-                data-wuu-plugin={entry.pluginId}
-                aria-current={active ? "page" : undefined}
-                title={entry.description || entry.title}
-                onClick={() => openPluginNavigation(entry.pluginId, entry.view, entry.instanceId)}
-              >
-                <PluginIcon icon={entry.icon} pluginId={entry.pluginId} fingerprint={entry.generation} className="icon-lg" />
-                <span>{entry.title}</span>
-              </button>
-            );
-          })}
         </nav>
 
         <div className="sidebar-main scrollbar-hidden" data-scroll-fade="">
@@ -2168,8 +2142,8 @@ export function AppSidebar({
                         ref={addWorkspaceTriggerRef}
                         className="sidebar-functional-action"
                         type="button"
-                        aria-label={t("sidebar.addWorkspace")}
-                        title={t("sidebar.addWorkspace")}
+                        aria-label={t("sidebar.addOrganization")}
+                        title={t("sidebar.addOrganization")}
                         aria-haspopup="menu"
                         aria-expanded={workspaceMenuOpen}
                         onClick={onToggleWorkspaceMenu}
@@ -2185,6 +2159,10 @@ export function AppSidebar({
                           <button role="menuitem" disabled={!hostSupports("chooseProjectFolder")} onClick={onOpenWorkspaceFolder}>
                             <FolderOpen className="icon-xl" />
                             <span>{t("sidebar.useExistingFolder")}</span>
+                          </button>
+                          <button role="menuitem" onClick={() => { onToggleWorkspaceMenu(); createFolder(); }}>
+                            <FolderPlus className="icon-xl" />
+                            <span>{t("sidebar.newFolder")}</span>
                           </button>
                         </div>
                       ) : null}
@@ -2240,6 +2218,35 @@ export function AppSidebar({
           </>
         )}
         <div className="sidebar-settings">
+          <nav className="sidebar-app-navigation scrollbar-hidden" aria-label={t("skills.sectionPlugins")}>
+            <button
+              className="nav-item"
+              aria-current={pluginCatalogActive ? "page" : undefined}
+              onClick={() => activateNative(onOpenSkillsTab)}
+              disabled={!hasRuntimeContext}
+            >
+              <PluginBlocksIcon className="icon-lg" />
+              <span>{t("skills.sectionSkills")}</span>
+            </button>
+            {pluginNavigationEntries.map((entry) => {
+              const active = activePluginMainView !== undefined && activePluginMainView.id === entry.instanceId;
+              return (
+                <button
+                  key={`${entry.pluginId}:${entry.id}`}
+                  type="button"
+                  className={`nav-item plugin-navigation-item${active ? " active" : ""}`}
+                  data-wuu-component="plugin-navigation-item"
+                  data-wuu-plugin={entry.pluginId}
+                  aria-current={active ? "page" : undefined}
+                  title={entry.description || entry.title}
+                  onClick={() => openPluginNavigation(entry.pluginId, entry.view, entry.instanceId)}
+                >
+                  <PluginIcon icon={entry.icon} pluginId={entry.pluginId} fingerprint={entry.generation} className="icon-lg" />
+                  <span>{entry.title}</span>
+                </button>
+              );
+            })}
+          </nav>
           <PluginSlot
             host={pluginHost}
             id="sidebar.footer"
@@ -2319,7 +2326,6 @@ export function AppSidebar({
     <NavigationPresentation
       nodes={[
         ...primaryNavigationNodes,
-        ...pluginNavigationNodes,
         ...navigationNodes,
       ]}
       fallback={organizedSidebar}

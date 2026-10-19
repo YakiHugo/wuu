@@ -35,6 +35,7 @@ afterEach(() => {
   root = null;
   container.remove();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 function initialized(): InitializeResult {
@@ -179,7 +180,14 @@ describe("AppSidebar layout", () => {
     { saved: ["workspace", "pinned"], expected: ["projects", "folders", "workspace", "pinned"] },
     // Projects take the place a saved order gave Collaboration.
     { saved: ["folders", "collaboration", "workspace", "pinned"], expected: ["folders", "projects", "workspace", "pinned"] },
-  ])("restores group order without resetting existing preferences: $saved", ({ saved, expected }) => {
+  ])("restores group order without resetting existing preferences: $saved", async ({ saved, expected }) => {
+    // Empty groups have no heading; populate both optional groups to inspect their saved order.
+    vi.stubGlobal("wuu", {
+      ...window.wuu,
+      getSessionOrganization: async () => ({
+        organization: { folders: [{ id: "folder-1", name: "Design" }] },
+      }),
+    });
     window.localStorage.setItem("wuu.desktop.sidebarFunctionalGroupOrder", JSON.stringify(saved));
     const order = () => [...container.querySelectorAll<HTMLElement>(".sidebar-main > .sidebar-functional-group")]
       .map((element) => element.dataset.functionalGroupId ?? element.dataset.sectionId);
@@ -190,7 +198,9 @@ describe("AppSidebar layout", () => {
       created_at: "2026-09-17T00:00:00Z", updated_at: "2026-09-17T00:00:00Z",
       preview: "", model_provider: "test", model: "test", turns: [], turn_count: 0,
     };
-    renderSidebar({ onCreateProject: vi.fn(), pinnedThreads: [pinned] });
+    await act(async () => {
+      renderSidebar({ onCreateProject: vi.fn(), pinnedThreads: [pinned] });
+    });
     expect(order()).toEqual(expected);
   });
 
@@ -372,11 +382,12 @@ describe("AppSidebar layout", () => {
     expect(snapshot?.nodes.map(({ id }) => id)).toEqual([
       "command:new-conversation",
       "command:search-conversations",
-      "command:skills",
       "section:workspace",
       `project:${SCRATCH_PSEUDO_PROJECT_ID}`,
       "project:project-1",
       "project:project-2",
+      "section:plugins",
+      "command:skills",
       "command:settings",
     ]);
   });

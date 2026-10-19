@@ -1,9 +1,8 @@
 /* Component color tokens for sidebar.css.
    Light-theme values; the dark theme overrides these in base.css theme blocks. */
 :root {
-  /* An opaque neutral rail keeps navigation separate from the reading canvas
-   * without depending on wallpaper or browser backing colors. */
-  --sidebar-material-fill: var(--surface-2);
+  /* A quiet opaque rail separates navigation without outweighing the canvas. */
+  --sidebar-material-fill: var(--surface-1);
   /* Rail/content boundary: a crisp dark hairline instead of the old white
    * edge + white inset pair, which were invisible against the white content
    * column and left the boundary to be read from the gray brightness step.
@@ -360,7 +359,7 @@
    * Include each row's own leading when judging the visible whitespace. */
   --sidebar-functional-row-gap: var(--sidebar-row-gap);
   --sidebar-functional-heading-gap: var(--space-2);
-  --sidebar-functional-group-gap: var(--space-6);
+  --sidebar-functional-group-gap: var(--space-4);
   /* Parent and child rows belong to one tree: use the same separation as
    * sibling rows. The collapse body owns this gap; lists add no outer inset. */
   --sidebar-section-body-gap: var(--sidebar-row-gap);
@@ -846,17 +845,29 @@
 }
 
 .sidebar-brand {
-  /* Two tracks so the wordmark stays put when the bell mounts or unmounts.
-   * Column 2 is reserved even when the button is absent. */
+  /* Reserve the attention control even in read-only brand previews. */
   display: grid;
   flex-shrink: 0;
   grid-template-columns: minmax(0, 1fr) 32px;
   align-items: center;
   column-gap: 8px;
   min-height: 36px;
-  margin-top: calc(-1 * var(--space-2));
+  margin-top: 0;
   padding: 0 var(--sidebar-row-pad-x) var(--space-1);
   color: var(--sidebar-brand-wordmark-color);
+}
+
+.sidebar-brand:has(.conversation-search-trigger) {
+  grid-template-columns: minmax(0, 1fr) 32px 32px;
+  column-gap: var(--space-1);
+}
+
+.sidebar-brand .conversation-search-trigger {
+  grid-column: 3;
+  justify-self: end;
+  width: 32px;
+  height: 32px;
+  margin-right: calc((var(--sidebar-row-action-size) - 32px) / 2);
 }
 
 .sidebar-brand-wordmark {
@@ -1103,10 +1114,23 @@
   color: var(--sidebar-heading-ink);
 }
 
-.primary-nav {
+.primary-nav,
+.sidebar-app-navigation {
   display: flex;
   flex-direction: column;
   gap: var(--sidebar-functional-row-gap);
+}
+
+/* Keep installed app destinations reachable without displacing the session
+ * list. A large extension collection scrolls within its own footer region. */
+.sidebar-app-navigation {
+  max-height: 25vh;
+  overflow-y: auto;
+  flex-shrink: 1;
+}
+
+.sidebar-app-navigation > .nav-item {
+  flex-shrink: 0;
 }
 
 .primary-nav {

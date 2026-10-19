@@ -493,6 +493,7 @@ export const zhCN = {
   "sidebar.expandSection": "展开{section}",
   "sidebar.collapseSection": "收起{section}",
   "sidebar.addWorkspace": "添加工作区",
+  "sidebar.addOrganization": "添加工作区或文件夹",
   "sidebar.newBlankWorkspace": "新建空白工作区",
   "sidebar.useExistingFolder": "使用现有文件夹",
   "sidebar.pin": "置顶",

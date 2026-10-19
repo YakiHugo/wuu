@@ -23,6 +23,13 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 - Public process service for conversation-bound extension commands and event delivery,
   with process-tree cleanup and optional handoff from completed child sessions.
 
+### Changed
+
+- Prioritize conversation navigation with header search, app destinations in
+  the sidebar footer, and folder creation in the add menu. Show folder groups
+  when used, unify the window header, and clarify process summaries above answers.
+  Keep activity controls readable and shrink conversation gutters in narrow windows.
+
 ### Fixed
 
 - Match the DeepSeek Harness icon's visible size to peer agent icons in settings, runtime menus, and onboarding.

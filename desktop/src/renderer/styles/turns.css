@@ -44,9 +44,9 @@
   --reasoning-stream-cursor-color: var(--gray-500);
   --turn-process-entry-color: var(--ink-tertiary);
   --process-control-color-fallback: var(--ink-tertiary);
-  /* Tool activity and standalone reasoning summaries share the quiet ink
-     used by the composer placeholder, in every running/settled state. */
-  --process-summary-color: var(--ink-quiet);
+  /* Activity summaries are readable secondary controls, including after
+     streaming settles; placeholder ink is too faint for these destinations. */
+  --process-summary-color: var(--ink-tertiary);
   --process-active-highlight: var(--ink-muted);
   --activity-toggle-hover-color: var(--gray-650);
   --activity-toggle-hover-color-alt: var(--wuu-color-text-muted, var(--gray-600));
@@ -1868,6 +1868,10 @@
 }
 
 .turn-process-topline {
+  /* The status and its trail form one region above the reading body. Keep
+     the separator in both live and settled states so handoff cannot jump. */
+  padding-bottom: var(--space-2);
+  box-shadow: inset 0 -1px 0 var(--hairline-soft);
   display: flex;
   width: 100%;
   min-width: 0;
@@ -1906,6 +1910,12 @@
 
 .turn-process-toggle[role="button"] {
   cursor: pointer;
+}
+
+.turn-process-toggle[role="button"]:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+  border-radius: var(--radius-xs);
 }
 
 .turn-process-toggle svg {

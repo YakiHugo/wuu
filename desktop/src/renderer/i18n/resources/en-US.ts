@@ -496,6 +496,7 @@ export const enUS = {
   "sidebar.expandSection": "Expand {section}",
   "sidebar.collapseSection": "Collapse {section}",
   "sidebar.addWorkspace": "Add workspace",
+  "sidebar.addOrganization": "Add workspace or folder",
   "sidebar.newBlankWorkspace": "Create blank workspace",
   "sidebar.useExistingFolder": "Use existing folder",
   "sidebar.pin": "Pin",
