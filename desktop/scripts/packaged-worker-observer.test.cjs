@@ -77,3 +77,59 @@ test('failed workers, absent workers, wrong roots and spoofed blob wrappers fail
     assert.equal(findPackagedWorker(records(), 'pdf.worker', root), null);
   }
 });
+
+// This exercises our CDP orchestration contract, not a browser implementation.
+// Actual Electron injection and worker execution remain the packaged smoke gate.
+const { activateWorkerObserver, workerObserverStatus } = require('./packaged-runtime-smoke.cjs');
+function protocolFixture(fault) {
+  let enabled = false, script, loader = 'old', reloaded = false, reads = 0;
+  const { context } = fixture();
+  context.document = { readyState: 'complete' };
+  vm.runInContext("delete globalThis.__wuuPackagedWorkerObserver", context);
+  const calls = [];
+  const send = async (method, params) => {
+    calls.push(method);
+    if (method === 'Page.enable') enabled = true;
+    if (method === 'Page.addScriptToEvaluateOnNewDocument') { script = params.source; return { identifier: 'registration' }; }
+    if (method === 'Page.reload') reloaded = true;
+    if (method === 'Page.getFrameTree') {
+      if (reloaded && reads++ > 0 && fault !== 'stale') {
+        loader = 'new';
+        if (script && enabled && fault !== 'absent') {
+          vm.runInContext(script, context); script = null;
+          if (fault === 'wrong-token') context.__wuuPackagedWorkerObserver.token = 'old-run';
+          if (fault === 'replaced') context.Worker = class Replacement {};
+          if (fault === 'records') context.__wuuPackagedWorkers = null;
+        }
+      }
+      return { frameTree: { frame: { loaderId: loader } } };
+    }
+    return {};
+  };
+  const evaluate = async fn => JSON.parse(JSON.stringify(vm.runInContext(`(${fn.toString()})()`, context)));
+  const until = async (read, label) => { for (let i = 0; i < 4; i++) { const value = await read(); if (value) return value; } throw Error(label); };
+  return { send, evaluate, until, calls };
+}
+
+test('CDP observer setup enables Page and waits for a new document with its active proxy', async () => {
+  const f = protocolFixture();
+  const result = await activateWorkerObserver(f.send, f.evaluate, f.until, 'run-token');
+  assert.equal(result.loaderId, 'new');
+  assert.equal(result.previousLoaderId, 'old');
+  assert.equal(result.token, 'run-token');
+  assert.equal(result.installed, true);
+  assert.equal(result.proxyActive, true);
+  assert.deepEqual(f.calls.slice(0, 4), ['Page.enable', 'Page.getFrameTree', 'Page.addScriptToEvaluateOnNewDocument', 'Page.reload']);
+});
+
+test('CDP observer setup rejects stale documents, missing state and replaced proxies', async () => {
+  for (const fault of ['stale', 'absent', 'wrong-token', 'replaced', 'records']) {
+    const f = protocolFixture(fault);
+    await assert.rejects(activateWorkerObserver(f.send, f.evaluate, f.until, 'run-token'), /worker observer installed/, fault);
+  }
+  const { context } = fixture();
+  context.document = { readyState: 'complete' };
+  vm.runInContext("delete globalThis.__wuuPackagedWorkerObserver", context);
+  const missing = vm.runInContext(`(${workerObserverStatus.toString()})()`, context);
+  assert.equal(missing.installed, false, 'missing instrumentation is distinct from zero workers');
+});

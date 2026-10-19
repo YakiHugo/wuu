@@ -9,7 +9,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { createHash } = require("node:crypto");
+const { createHash, randomUUID } = require("node:crypto");
 const { pathToFileURL } = require("node:url");
 const { execFileSync, spawn } = require("node:child_process");
 const { once } = require("node:events");
@@ -60,9 +60,9 @@ function verifyArtifact(app) {
 
 // Serialized into the renderer before its first module runs. Observe only:
 // preserve native construction, messaging, event delivery and termination.
-function installWorkerObserver() {
+function installWorkerObserver(token) {
   const records = globalThis.__wuuPackagedWorkers = [];
-  globalThis.Worker = new Proxy(globalThis.Worker, {
+  const observedWorker = new Proxy(globalThis.Worker, {
     construct(target, args, newTarget) {
       const worker = Reflect.construct(target, args, newTarget);
       const url = new URL(String(args[0]), location.href).href;
@@ -99,6 +99,38 @@ function installWorkerObserver() {
       return worker;
     },
   });
+  globalThis.Worker = observedWorker;
+  globalThis.__wuuPackagedWorkerObserver = { token, worker: observedWorker };
+}
+
+function workerObserverStatus() {
+  const observer = globalThis.__wuuPackagedWorkerObserver;
+  return {
+    installed: Boolean(observer), token: observer?.token,
+    proxyActive: Boolean(observer && globalThis.Worker === observer.worker),
+    documentURL: location.href, readyState: document.readyState,
+    records: Array.isArray(globalThis.__wuuPackagedWorkers) ? globalThis.__wuuPackagedWorkers : null,
+  };
+}
+
+async function activateWorkerObserver(send, evaluate, until, token) {
+  // Registration succeeds without Page.enable, but Chromium does not dispatch
+  // new-document instrumentation until the Page agent has been enabled.
+  await send("Page.enable");
+  const previousLoader = (await send("Page.getFrameTree")).frameTree.frame.loaderId;
+  assert.ok(previousLoader, "Missing renderer document loader identity");
+  const registration = await send("Page.addScriptToEvaluateOnNewDocument", {
+    source: `(${installWorkerObserver.toString()})(${JSON.stringify(token)})`,
+  });
+  assert.ok(registration.identifier, "Worker observer registration was not acknowledged");
+  await send("Page.reload");
+  return until(async () => {
+    const loader = (await send("Page.getFrameTree")).frameTree.frame.loaderId;
+    if (!loader || loader === previousLoader) return null;
+    const status = await evaluate(workerObserverStatus);
+    return status.installed && status.token === token && status.proxyActive && Array.isArray(status.records)
+      ? { ...status, loaderId: loader, previousLoaderId: previousLoader, registration: registration.identifier } : null;
+  }, "worker observer installed in the reloaded main world");
 }
 
 function findPackagedWorker(records, name, assetRoot) {
@@ -225,8 +257,9 @@ async function main() {
       assert.equal(result.checks.core.updater.kind, "unsupported", "Ad-hoc package without app-update.yml must disable updates");
       result.checks.updater = "Dependency loaded by packaged main; controller disabled because app-update.yml is absent; update availability not verified";
     }
-    await send("Page.addScriptToEvaluateOnNewDocument", { source: `(${installWorkerObserver.toString()})()` });
-    await send("Page.reload");
+    const observerToken = randomUUID();
+    collectWorkerEvidence = async () => { result.workerObserver = await evaluate(workerObserverStatus); };
+    result.workerObserver = await activateWorkerObserver(send, evaluate, until, observerToken);
     await until(() => evaluate(() => Boolean(document.querySelector(".workspace-panel-add"))), "application workspace UI after onboarding");
     result.checks.terminal = await evaluate(async workspace => {
       let terminal;
@@ -261,7 +294,11 @@ async function main() {
     }
     const workerAssetRoot = pathToFileURL(path.join(copy, "Contents/Resources/app.asar/out/renderer/assets") + path.sep).href;
     async function worker(name) {
-      result.workerObservations = await evaluate(() => globalThis.__wuuPackagedWorkers || []);
+      result.workerObserver = await evaluate(workerObserverStatus);
+      assert.ok(result.workerObserver.installed && result.workerObserver.token === observerToken
+        && result.workerObserver.proxyActive && Array.isArray(result.workerObserver.records),
+      `Worker observer is absent or was replaced: ${JSON.stringify(result.workerObserver)}`);
+      result.workerObservations = result.workerObserver.records;
       // CDP's target URL can be empty on Electron/macOS; keep it as diagnostics.
       try { result.workerTargets = (await send("Target.getTargets")).targetInfos.filter(target => target.type === "worker"); }
       catch (error) { result.workerTargetError = error.message; }
@@ -314,4 +351,4 @@ async function main() {
 }
 
 if (require.main === module) main().catch(error => { console.error(error); process.exitCode = 1; });
-module.exports = { verifyArtifact, verifyResources, installWorkerObserver, findPackagedWorker };
+module.exports = { verifyArtifact, verifyResources, installWorkerObserver, findPackagedWorker, workerObserverStatus, activateWorkerObserver };
