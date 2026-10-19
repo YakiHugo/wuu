@@ -1,6 +1,11 @@
 /* The native ribbon and window chrome frame one shared workbench. Keep this
    surface on the shell so menus can leave either pane without being clipped
    by an extra wrapper, and replacement presenters retain their own layout. */
+:root {
+  /* Keep the reading canvas distinct from white controls and floating surfaces. */
+  --workbench-canvas-bg: var(--wuu-color-canvas, #fcfcfd);
+}
+
 :root:has(.app-shell.navigation-ribbon-layout:not(.popped-out-shell)) {
   /* This icon-only strip shares the native controls' fixed 22-DIP axis.
      Keep page zoom out of its geometry, including Linux caption buttons. */
@@ -26,7 +31,7 @@
   z-index: -1;
   border: 1px solid var(--hairline-soft);
   border-radius: var(--conversation-canvas-radius);
-  background: var(--wuu-color-canvas, var(--paper));
+  background: var(--workbench-canvas-bg);
   content: "";
   pointer-events: none;
 }
@@ -86,6 +91,21 @@ html[data-app-background] .app-shell.navigation-ribbon-layout:has(.sidebar-ribbo
 
 .navigation-ribbon-layout:has(.sidebar-ribbon) .conversation-pane::before {
   content: none;
+}
+
+html:not([data-app-background]) .navigation-ribbon-layout:has(.sidebar-ribbon) .dock-composer-wrap::before,
+html:not([data-app-background]) .navigation-ribbon-layout:has(.sidebar-ribbon) :is(
+  .conversation-split-pane,
+  .empty-home,
+  .project-empty-pane,
+  .view-switch-loading-conversation
+) {
+  background: var(--workbench-canvas-bg);
+}
+
+.navigation-ribbon-layout:has(.sidebar-ribbon) .plugin-workbench-view-primary,
+.navigation-ribbon-layout:has(.sidebar-ribbon) .plugin-workbench-view-primary .plugin-view-content {
+  background: var(--workbench-canvas-bg);
 }
 
 .navigation-ribbon-layout:has(.sidebar-ribbon).sidebar-collapsed .conversation-pane {
@@ -311,7 +331,7 @@ html[data-app-background] .app-shell.navigation-ribbon-layout:has(.sidebar-ribbo
 }
 
 .navigation-ribbon-layout:has(.sidebar-ribbon).sidebar-collapsed:is(.sidebar-drawer-open, .sidebar-drawer-closing) .sidebar-content {
-  background: var(--wuu-color-canvas, var(--paper));
+  background: var(--workbench-canvas-bg);
   box-shadow: var(--shadow-drawer-right);
 }
 
@@ -420,7 +440,7 @@ html[data-app-background] .app-shell.navigation-ribbon-layout:has(.sidebar-ribbo
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable both-edges;
-  background: var(--wuu-color-canvas, var(--paper));
+  background: var(--workbench-canvas-bg);
 }
 
 .navigation-ribbon-layout:has(.sidebar-section-navigation) .catalog-section-pane .catalog-tabs {

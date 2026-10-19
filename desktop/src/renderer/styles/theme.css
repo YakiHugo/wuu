@@ -15,6 +15,7 @@
  */
 
 :root[data-theme="dark"] {
+  --workbench-canvas-bg: var(--paper);
   --settings-canvas: var(--paper);
   --settings-card: var(--surface-1);
   /* --- Neutral gray ramp, dark declaration. Same slots as the light
