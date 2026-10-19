@@ -6,8 +6,7 @@ import type { AccountView } from "./AccountPanel";
 import { hostSupports } from "./HostCapabilities";
 import { ENABLE_ACCOUNT } from "./FeatureFlags";
 import { useI18n } from "./i18n";
-import { moveMenuFocus } from "./MenuKeyboardNavigation";
-import { composerMenuWidth, FloatingMenuPortal, useFloatingMenuFocus } from "./ComposerFloatingMenu";
+import { composerMenuWidth, FloatingMenuPortal, handleFloatingMenuKeyDown, useFloatingMenuFocus } from "./ComposerFloatingMenu";
 import "./SidebarAccountMenu.css";
 
 export function SidebarAccountMenu({ disabled, localOnly = false, compact = false, onOpenSettings, onOpenAccount }: {
@@ -94,10 +93,7 @@ export function SidebarAccountMenu({ disabled, localOnly = false, compact = fals
       width={composerMenuWidth(240)} matchAnchorWidth={!compact} flip>
       <div ref={panel} id={id} role="menu" aria-label={t("account.menu")} className="select-menu-panel sidebar-account-menu"
         onBlur={event => { if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node) && event.relatedTarget !== anchor.current) setOpen(false); }}
-        onKeyDown={event => {
-          if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); return; }
-          moveMenuFocus(event, panel.current);
-        }}>
+        onKeyDown={event => handleFloatingMenuKeyDown(event, () => setOpen(false), anchor.current)}>
         {/* Without an account the trigger already says local use; a profile
             header would only repeat it. */}
         {account.username ? <>

@@ -191,6 +191,27 @@ async function runWebsiteAcceptance(h, fixture) {
     xinput(['key', '--clearmodifiers', 'Escape']);
     await waitFor(() => !document.querySelector('.sidebar-account-menu'));
     if (wc) await until(() => !wc.isDestroyed() && win.contentView.children.some(view => view.webContents === wc && view.getVisible()), 'Profile dismissal restores the same native page');
+    if (wc) {
+      geometry.keyboardDepartures = [];
+      for (const [chord, direction] of [['Tab', 1], ['shift+Tab', -1]]) {
+        const expected = await evaluate(direction => {
+          const items = [...document.querySelectorAll('a[href],button,input,textarea,select,[tabindex]')].filter(node =>
+            node instanceof HTMLElement && node.tabIndex >= 0 && !node.matches(':disabled') && !node.closest('[inert]')
+            && node.getBoundingClientRect().width > 0 && node.getBoundingClientRect().height > 0 && getComputedStyle(node).visibility !== 'hidden');
+          const index = items.indexOf(document.querySelector('.sidebar-account-trigger'));
+          return items[(index + direction + items.length) % items.length].outerHTML;
+        }, direction);
+        await click('.sidebar-account-trigger', `profile-${chord}-departure`, false);
+        await waitFor(() => document.querySelector('.sidebar-account-menu')?.contains(document.activeElement));
+        xinput(['key', '--clearmodifiers', chord]);
+        await waitFor(() => !document.querySelector('.sidebar-account-menu'));
+        const actual = await evaluate(() => document.activeElement?.outerHTML);
+        assert.equal(actual, expected, `${chord} continues from the profile trigger, not the document-end portal`);
+        await until(() => !wc.isDestroyed() && win.contentView.children.some(view => view.webContents === wc && view.getVisible()), `${chord} restores the native page`);
+        geometry.keyboardDepartures.push({ chord, focus: actual.slice(0, 400), nativeContentsID: wc.id });
+      }
+      await capture('profile-keyboard-departures');
+    }
     return geometry;
   }
   async function openSite(name, pathname) {
