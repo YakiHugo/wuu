@@ -60,6 +60,8 @@ View 是注册的组件，可以放在 `navigation`、`primary`、`auxiliary`、
 
 `persistence=durable` 用于恢复视图布局状态，不会持久化任意组件状态。卸载后仍需保留的数据应放入命名空间存储。View props 包含访问存储、设置、命令和视图导航的 host API。
 
+网站页面可以在同一个已注册 View 内，将 `api.ui.WebPage({ url, title? })` 作为组件渲染。它复用 Wuu 桌面 Chromium 页面和共享浏览器登录会话，包括通过现有浏览器设置导入的 Cookie；不会自动读取其他浏览器的 Cookie 库。初始 `url` 必须使用 HTTP(S)，修改后会导航到新地址。宿主提供导航控件，并将原生页面限制在可见区域内。组件卸载、扩展禁用或 generation 替换时，会关闭页面及其弹窗，Cookie 保留在 Wuu 浏览器会话中。恢复 durable View 时打开配置的网址，不恢复之前的网页内部状态。不需要网站专用插件注册表或 manifest。参见[网站页面配方](plugin-recipes.md#添加网站页面)。
+
 会话和插件主视图使用侧栏导航，包括通过 API 打开、没有声明导航入口的视图。它们的标题栏不提供 `tabs`、`activeTabId` 或 tab 操作。插件主视图提供 `canNavigateBack` 和 `header.navigate-back`。只有关闭会把页面从侧栏移除时，宿主才另外提供关闭控件，即通过 API 打开的视图和额外实例；已声明导航入口的页面通过返回或侧栏离开。紧凑工作区标题栏同样提供返回，并为当前标签提供关闭控件。这些仍是 contract version 1 的可选字段和动作，应检查快照和 `host.actions`，不要从已保存视图重建顶部标签栏。辅助面板和插件内容内部仍可使用各自的标签页。
 
 会话卡片用于临时交互，不是保存的历史或持久页面；卡片句柄可以更新状态或关闭卡片。输入框状态源通过 `getSnapshot(context)` 返回结构化条目，通过 `subscribe` 通知变化，数据未变时应保持快照引用稳定。状态行、溢出和可选的 `open-session` 动作由 Wuu 渲染处理，不接收每个条目的任意 React 内容。

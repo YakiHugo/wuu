@@ -1,6 +1,8 @@
 import { AppContextCapture } from "./appContextCapture";
 import { SystemPermissions } from "./systemPermissions";
 import { createBrowserView } from "./browserView";
+import { WebWorkspaceHost } from "./webWorkspaceHost";
+import type { WebWorkspaceBounds, WebWorkspaceCommand } from "../shared/webWorkspace";
 import { importBrowserCookies, listBrowserProfiles } from "./browserCookieImport";
 import { BrowserExtensionManager } from "./browserExtensions";
 import { saveArtifactFile } from "./artifactSave";
@@ -342,6 +344,10 @@ const browserHostCoordinator = new BrowserHostCoordinator(
     (options) => createBrowserView(options) as unknown as BrowserViewHandle,
   ),
   (workdir) => broadcastToAll("wuu:browser-invalidate", { workdir }),
+);
+const webWorkspaceHost = new WebWorkspaceHost(
+  (owner, state) => sendToWindow(owner, "wuu:web-workspace-state", state),
+  (owner, id) => sendToWindow(owner, "wuu:web-workspace-focus-address", id),
 );
 // A workdir with a live agent tab counts as busy so pool idle-eviction cannot
 // yank the page out mid user-takeover (isBusy only sees pending requests +
@@ -1398,7 +1404,7 @@ app.whenReady().then(async () => {
         `[desktop] failed to configure embedded browser proxy: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    installBrowserSessionHandlers(browserSession, browserHostCoordinator);
+    installBrowserSessionHandlers(browserSession, browserHostCoordinator, webWorkspaceHost);
     if (process.env.WUU_SAFE_MODE === "1") {
       console.info("[desktop] embedded-browser extensions disabled by safe mode");
     } else {
@@ -2838,6 +2844,19 @@ app.whenReady().then(async () => {
       return { ok: true };
     },
   );
+  const webWorkspaceSender = (event: IpcMainInvokeEvent): BrowserWindow => {
+    if (!ENABLE_EMBEDDED_BROWSER) throw new Error("The embedded browser is disabled in this build.");
+    if (!isAppContextSender(event)) throw new Error("Website destinations are available from Wuu's main window only.");
+    return windowRegistry.mainWindow()!;
+  };
+  ipcMain.handle("wuu:web-workspace-open", (event, destination: { id: string; url: string }) =>
+    webWorkspaceHost.open(webWorkspaceSender(event), destination));
+  ipcMain.handle("wuu:web-workspace-bounds", (event, id: string, bounds: WebWorkspaceBounds | null) =>
+    webWorkspaceHost.reportBounds(webWorkspaceSender(event), id, bounds));
+  ipcMain.handle("wuu:web-workspace-command", (event, id: string, command: WebWorkspaceCommand, url?: string) =>
+    webWorkspaceHost.command(webWorkspaceSender(event), id, command, url));
+  ipcMain.handle("wuu:web-workspace-close", (event, id: string) =>
+    webWorkspaceHost.close(webWorkspaceSender(event), id));
   ipcMain.handle("wuu:browser-profiles", (event) => {
     requireBrowserSettingsSender(event);
     if (!ENABLE_EMBEDDED_BROWSER) {
@@ -2968,6 +2987,7 @@ function prepareToQuit(): Promise<void> {
     // Destroy every agent view + the hidden host window before the pool shuts
     // down so no WebContentsView leaks past quit.
     browserHostCoordinator.destroyAll();
+    webWorkspaceHost.destroyAll();
     return Promise.allSettled([observationCoordinator.shutdown(), appServerClientPool.shutdown(), phoneAccess.shutdown()]);
   })
     .then((results) => {

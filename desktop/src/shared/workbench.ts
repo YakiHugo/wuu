@@ -230,11 +230,17 @@ export interface PluginUILiveDurationProps extends Omit<React.HTMLAttributes<HTM
   active?: boolean;
 }
 
+export interface PluginUIWebPageProps {
+  readonly url: string;
+  readonly title?: string;
+}
+
 /**
  * Small host-owned component set for plugin surfaces. These components own the
  * common visual rhythm while plugins retain freedom inside their contribution.
  */
 export interface PluginUIKit {
+  readonly WebPage: React.ComponentType<PluginUIWebPageProps>;
   readonly ComposerDrawer: React.ComponentType<ComposerDrawerProps>;
   readonly Page: React.ComponentType<PluginUIPageProps>;
   readonly Panel: React.ComponentType<PluginUIContainerProps>;
@@ -254,7 +260,7 @@ export interface PluginUIKit {
   readonly LiveDuration: React.ComponentType<PluginUILiveDurationProps>;
 }
 
-export function createPluginUIKit(react: typeof React): PluginUIKit {
+export function createPluginUIKit(react: typeof React): Omit<PluginUIKit, "WebPage"> {
   const container = (
     tag: "section" | "article" | "div",
     name: string,

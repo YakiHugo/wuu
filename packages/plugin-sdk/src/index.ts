@@ -239,6 +239,13 @@ export interface PluginUILiveDurationProps extends PluginUIContainerProps {
   readonly active?: boolean;
 }
 
+/** A desktop Chromium page inside an existing plugin View. */
+export interface PluginUIWebPageProps {
+  /** Initial HTTP(S) destination. Changing it navigates this page. */
+  readonly url: string;
+  readonly title?: string;
+}
+
 export type HostUIComponent<Props> = (props: Props) => unknown;
 
 /** Composer accessory shell with shared sizing, scrolling and keyboard dismissal.
@@ -258,6 +265,8 @@ export interface PluginUIComposerDrawerProps extends PluginUIContainerProps {
 
 /** Stable host-owned primitives for plugin views. */
 export interface PluginUIKit {
+  /** Shares Wuu browser logins; closes when unmounted or the generation ends. */
+  readonly WebPage: HostUIComponent<PluginUIWebPageProps>;
   readonly ComposerDrawer: HostUIComponent<PluginUIComposerDrawerProps>;
   readonly Page: HostUIComponent<PluginUIPageProps>;
   readonly Panel: HostUIComponent<PluginUIContainerProps>;

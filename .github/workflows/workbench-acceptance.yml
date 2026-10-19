@@ -6,6 +6,7 @@ on:
     paths:
       - 'desktop/src/**'
       - 'desktop/scripts/workbench-acceptance-e2e.cjs'
+      - 'desktop/scripts/web-workspace-acceptance.cjs'
       - 'desktop/scripts/fixtures/conversation-corpus/**'
       - 'desktop/electron.vite.config.ts'
       - 'desktop/package*.json'
@@ -44,6 +45,7 @@ jobs:
       - name: Check acceptance syntax and test policy
         run: |
           node --check desktop/scripts/workbench-acceptance-e2e.cjs
+          node --check desktop/scripts/web-workspace-acceptance.cjs
           make test-policy-check
       - name: Build shipping app serially
         run: |
@@ -59,7 +61,7 @@ jobs:
         run: |
           mkdir -p "$WUU_WORKBENCH_OUTPUT"
           git rev-parse HEAD > "$WUU_WORKBENCH_OUTPUT/source-commit.txt"
-          git ls-files desktop/src desktop/electron.vite.config.ts desktop/scripts/workbench-acceptance-e2e.cjs | sort | xargs sha256sum > "$WUU_WORKBENCH_OUTPUT/source-sha256.txt"
+          git ls-files desktop/src desktop/electron.vite.config.ts desktop/scripts/workbench-acceptance-e2e.cjs desktop/scripts/web-workspace-acceptance.cjs | sort | xargs sha256sum > "$WUU_WORKBENCH_OUTPUT/source-sha256.txt"
           find desktop/out -type f -print0 | sort -z | xargs -0 sha256sum > "$WUU_WORKBENCH_OUTPUT/build-sha256.txt"
           set -o pipefail
           xvfb-run --auto-servernum --server-args='-screen 0 1600x1000x24 -nolisten tcp' bash <<'CAPTURE' 2>&1 | tee "$WUU_WORKBENCH_OUTPUT/run.log"

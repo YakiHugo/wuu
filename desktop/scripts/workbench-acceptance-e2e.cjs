@@ -13,6 +13,7 @@ const { createHash } = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const { app, ipcMain } = require('electron');
 const { validateCorpus } = require('./conversation-corpus.cjs');
+const { createWebsiteFixture, runWebsiteAcceptance } = require('./web-workspace-acceptance.cjs');
 
 const desktop = path.resolve(__dirname, '..');
 const output = path.resolve(process.env.WUU_WORKBENCH_OUTPUT || path.join(desktop, 'out/e2e/workbench-acceptance'));
@@ -33,8 +34,10 @@ for (const name of Object.keys(process.env)) {
 }
 process.env.WUU_HOME = home;
 process.env.WUU_DESKTOP_CORE = path.resolve(process.env.WUU_DESKTOP_CORE || path.join(desktop, 'build/bin/wuu-core'));
-process.env.WUU_SAFE_MODE = '1';
-process.env.WUU_ENABLE_BROWSER = '0';
+// Only the authored local fixture extension can execute in this isolated home.
+process.env.WUU_SAFE_MODE = '0';
+process.env.WUU_ENABLE_BROWSER = '1';
+app.commandLine.appendSwitch('use-fake-device-for-media-stream');
 process.env.WUU_DESKTOP_DISABLE_DEV_CACHE_CLEANUP = '1';
 delete process.env.ELECTRON_RENDERER_URL;
 
@@ -74,10 +77,11 @@ const report = {
   status: 'running', startedAt: new Date().toISOString(),
   commit: spawnSync('git', ['rev-parse', 'HEAD'], { cwd: desktop, encoding: 'utf8' }).stdout.trim(),
   versions: { electron: process.versions.electron, chromium: process.versions.chrome, platform: process.platform },
-  fixture: { corpusSha256: createHash('sha256').update(corpusBytes).digest('hex'), noInference: true, isolatedHome: true, safeMode: true },
+  fixture: { corpusSha256: createHash('sha256').update(corpusBytes).digest('hex'), noInference: true, isolatedHome: true, safeMode: false, authoredExtensionsOnly: true },
   checks: [], screenshots: [], actions: [], errors: [],
   exclusions: ['Native macOS traffic lights (Linux capture)', 'Live provider/account authentication',
-    'Third-party plugin replacement/unload and dynamic plugin settings (safe-mode fixture)', 'Native browser PiP (browser integration disabled)'],
+    'Third-party plugin compatibility and dynamic plugin settings (authored fixture only)', 'Agent browser PiP pixels',
+    'Live camera/microphone hardware and allow-grant escalation (permission denial uses fake devices)' ],
 };
 const save = () => fs.writeFileSync(path.join(output, 'report.json'), JSON.stringify(report, null, 2) + '\n');
 save();
@@ -96,6 +100,7 @@ ipcMain.handle = (channel, handler) => originalHandle(channel, async (...args) =
   catch (error) { entry.error = String(error); throw error; }
 });
 let win;
+let websiteFixture;
 app.on('browser-window-created', (_event, window) => {
   win ||= window;
   window.webContents.on('console-message', event => {
@@ -348,6 +353,7 @@ for s in json.loads(sys.argv[3]):
 db.commit()
 `, home, project, JSON.stringify(sessions)], { encoding: 'utf8', timeout: 30000 });
   assert.equal(seed.status, 0, seed.stderr || String(seed.error));
+  websiteFixture = await createWebsiteFixture(home);
   await import(pathToFileURL(path.join(desktop, 'out/main/index.js')).href);
   const until = Date.now() + 30000;
   while (!win && Date.now() < until) await delay(40);
@@ -682,6 +688,8 @@ db.commit()
     assert.ok(await evaluate(selector => document.activeElement === document.querySelector(selector), composer));
     await capture('final-recovered-window');
   });
+  await runWebsiteAcceptance({ win, report, output, started, save, evaluate, waitFor, settle, delay, point, fill, key, pick, test,
+    goConversations, goSettings, appearance, plugins, conversations }, websiteFixture);
   await test('no renderer errors or accidental inference', async () => {
     assert.deepEqual(report.errors, []);
     assert.ok(!rpc.some(r => ['wuu:turn-start', 'wuu:turn-queue', 'wuu:turn-steer'].includes(r.channel)));
@@ -693,14 +701,14 @@ db.commit()
   console.log(`WORKBENCH ${report.status}: ${report.checks.filter(c => c.status === 'passed').length}/${report.checks.length} checks, ${report.screenshots.length} real-window captures`);
 }
 run().then(async () => {
-  clearTimeout(watchdog);
+  clearTimeout(watchdog); websiteFixture?.close();
   const code = report.status === 'passed' ? 0 : 1;
   // The real app's quit hook shuts down its Go child; preserve failing status.
   app.on('will-quit', () => { process.exitCode = code; });
   app.quit();
   setTimeout(() => app.exit(code), 1000).unref();
 }).catch(async error => {
-  clearTimeout(watchdog); report.status = 'failed'; report.fatal = String(error.stack || error);
+  clearTimeout(watchdog); websiteFixture?.close(); report.status = 'failed'; report.fatal = String(error.stack || error);
   console.error(error);
   if (win && !win.isDestroyed()) { try { await capture('fatal'); } catch {} }
   save(); app.exit(1);

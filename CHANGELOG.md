@@ -10,6 +10,9 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Added
 
+- Experimental workbench website destinations share the desktop browser profile, retain navigation state, and can be added, edited, removed, and reordered alongside conversations and extension pages.
+- Desktop extensions can render a native website through the existing view API, with page lifecycle tied to the mounted extension view.
+
 - Let external agent engines use Wuu browser and enabled computer-control tools through turn-scoped MCP, with shared permissions, activity previews, screenshots, and Stop/Takeover controls.
 - Experimental Linux x64 AppImage and Debian packages with sandbox-preserving X11 launchers and CI artifact verification. Public releases remain macOS-only.
 - Linux MCP OAuth credential storage through Secret Service, with no plaintext fallback.

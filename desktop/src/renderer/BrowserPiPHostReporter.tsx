@@ -118,7 +118,7 @@ export function BrowserPiPHostReporter(): null {
     mutationObserver.observe(document.body, {
       childList: true, subtree: true, attributes: true,
       attributeFilter: [
-        "aria-modal", "open", "hidden", "data-settings-open", "data-native-section", "data-primary-plugin-view",
+        "aria-modal", "open", "hidden", "data-settings-open", "data-native-section", "data-primary-plugin-view", "data-web-workspace-open",
       ],
     });
     window.addEventListener("resize", schedule);

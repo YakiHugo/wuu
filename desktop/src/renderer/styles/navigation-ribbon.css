@@ -265,6 +265,119 @@ html:not([data-app-background]) .navigation-ribbon-layout:has(.sidebar-ribbon) :
   opacity: 0.45;
 }
 
+.sidebar-ribbon-button[aria-disabled="true"] {
+  color: var(--ink-tertiary);
+  opacity: 0.45;
+}
+
+.sidebar-ribbon-button[data-dragging="true"] {
+  z-index: 1;
+  background: var(--workbench-canvas-bg);
+  box-shadow: var(--shadow-card);
+  cursor: grabbing;
+}
+
+.sidebar-ribbon-website-icon {
+  display: grid;
+  width: var(--sidebar-ribbon-icon-size, var(--icon-size-xl));
+  height: var(--sidebar-ribbon-icon-size, var(--icon-size-xl));
+  place-items: center;
+  font-size: var(--font-ui);
+  font-weight: var(--weight-medium);
+  line-height: 1;
+}
+
+.sidebar-ribbon-add {
+  margin-top: var(--space-2);
+}
+
+.environment-dialog.ribbon-manager {
+  width: min(520px, calc(100vw - var(--space-4) * 2));
+}
+
+.ribbon-manager-list,
+.ribbon-website-form {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.ribbon-manager-list {
+  max-height: min(60vh, 520px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.ribbon-manager-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-3);
+  padding-block: var(--space-2);
+}
+
+.ribbon-manager-icon {
+  display: grid;
+  flex: 0 0 var(--icon-size-xl);
+  width: var(--icon-size-xl);
+  height: var(--icon-size-xl);
+  place-items: center;
+  color: var(--ink-secondary);
+}
+
+.ribbon-manager-icon > :is(svg, .plugin-icon-asset, .plugin-icon-themed) {
+  width: 100%;
+  height: 100%;
+}
+
+.ribbon-manager-label {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.ribbon-manager-label > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ribbon-manager-url {
+  color: var(--ink-secondary);
+}
+
+.ribbon-manager-actions,
+.ribbon-website-suggestions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.ribbon-website-form {
+  gap: var(--space-4);
+}
+
+.ribbon-website-form label {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.ribbon-website-suggestions {
+  flex-wrap: wrap;
+}
+
+@media (max-width: 480px) {
+  .ribbon-manager-row { flex-wrap: wrap; }
+  .ribbon-manager-label { flex-basis: calc(100% - var(--icon-size-xl) - var(--space-3)); }
+  .ribbon-manager-actions { margin-left: auto; }
+}
+
 .sidebar-ribbon-divider {
   width: 20px;
   height: 1px;

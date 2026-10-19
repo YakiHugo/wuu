@@ -77,6 +77,43 @@ Merge this contribution into the package's `plugin.json`:
 
 `view` must match the registered ID in the same plugin. Use `settingsPages` for a settings page or `navigation` for a navigation entry. Add `registerViewPlacement` only when an initial open placement is useful, rather than forcing every optional tool onto the workbench.
 
+## Add a website page
+
+A website uses the existing View and navigation contracts. This optional Notion example opens only after the user chooses its navigation entry; change the URL to a Feishu or another HTTP(S) website for a different extension.
+
+```ts
+import type { PluginGenerationApi } from "@wuu/plugin-sdk";
+
+export function activate(api: PluginGenerationApi): void {
+  const WebPage = api.ui.WebPage as unknown as
+    (props: Readonly<Record<string, unknown>>) => unknown;
+  api.registerViewType({
+    id: "website",
+    title: "Notion",
+    defaultRegion: "primary",
+    persistence: "durable",
+    render: () => api.react.createElement(WebPage, {
+      url: "https://www.notion.so/",
+      title: "Notion",
+    }),
+  });
+}
+```
+
+Use the ordinary navigation contribution in the package's `plugin.json`:
+
+```json
+{
+  "contributes": {
+    "navigation": [
+      { "id": "website-entry", "view": "website", "title": "Notion" }
+    ]
+  }
+}
+```
+
+For a single local TypeScript file without a manifest, add `api.registerViewPlacement({ id: "website-entry", view: "website", region: "primary" })` during activation to open the same View. The host owns its ribbon entry, placement, browser session, and cleanup. The site uses the same imported browser cookies as other Wuu browser pages; sign in when the session does not already contain a valid login. Unmounting or disabling the plugin closes its page and popups. No site is installed by this recipe. Older hosts can be detected with `typeof api.ui.WebPage === "function"`; non-desktop clients show the unavailable-browser state.
+
 ## Connect a page to its runtime
 
 `api.invokeRuntime(method, input, { workspaceId })` calls the same plugin's active runtime generation. The runtime must implement the `plugin.client.request` capability; the method name is your plugin's own dispatch key, not an arbitrary app-server method. Check workspace availability with `listWorkspaces`, handle request failures in the UI, and use `onHostEvent` when changes should refresh a view.

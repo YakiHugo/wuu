@@ -1,6 +1,7 @@
 import type * as React from "react";
 import type { ExtensionIconDescriptor, PluginVisibleHistoryRequest, PluginVisibleHistoryResult } from "../../shared/protocol";
 import { settleOnAbort } from "./activation";
+import { createPluginWebPage } from "./PluginWebPage";
 
 import type {
   CSSSnippet,
@@ -575,7 +576,7 @@ export class PluginGenerationSupersededError extends Error {
  */
 export class PluginHost {
   readonly react: typeof React;
-  readonly ui: PluginUIKit;
+  private readonly ui: Omit<PluginUIKit, "WebPage">;
 
   private readonly activationTimeoutMs: number;
   private readonly styleContainer?: PluginHostOptions["styleContainer"];
@@ -1039,7 +1040,18 @@ export class PluginHost {
 
     return Object.freeze({
       react: this.react,
-      ui: this.ui,
+      ui: Object.freeze({
+        ...this.ui,
+        WebPage: createPluginWebPage(this.react, state.lifetime.signal, (error) => {
+          this.addDiagnostic({
+            pluginId: state.pluginId,
+            generation: state.generation,
+            kind: "cleanup",
+            message: `Plugin web page cleanup failed: ${errorMessage(error)}`,
+            cause: error,
+          });
+        }),
+      }),
       pluginId: state.pluginId,
       generation: state.generation,
       signal: state.lifetime.signal,

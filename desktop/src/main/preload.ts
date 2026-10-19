@@ -28,6 +28,7 @@ import {
 } from "../shared/protocol";
 
 import type { ActivityPreviewAppearance } from "../shared/activityPreview";
+import type { WebWorkspaceApi, WebWorkspaceState } from "../shared/webWorkspace";
 import { initializeDesktopPageZoom, type DesktopZoomAction } from "../shared/DesktopPageZoom";
 
 // Restore shell zoom independently of font preferences.
@@ -703,6 +704,22 @@ browserApi.onBrowserDock = (handler) => {
   return () => ipcRenderer.removeListener("wuu:browser-dock", listener);
 };
 if (!process.argv.includes("--wuu-browser-disabled")) {
+  (api as WuuDesktopApi & { webWorkspace: WebWorkspaceApi }).webWorkspace = {
+    open: (destination) => ipcRenderer.invoke("wuu:web-workspace-open", destination),
+    reportBounds: (id, bounds) => ipcRenderer.invoke("wuu:web-workspace-bounds", id, bounds),
+    command: (id, command, url) => ipcRenderer.invoke("wuu:web-workspace-command", id, command, url),
+    close: (id) => ipcRenderer.invoke("wuu:web-workspace-close", id),
+    onState: (handler) => {
+      const listener = (_event: Electron.IpcRendererEvent, state: WebWorkspaceState) => handler(state);
+      ipcRenderer.on("wuu:web-workspace-state", listener);
+      return () => ipcRenderer.removeListener("wuu:web-workspace-state", listener);
+    },
+    onFocusAddress: (handler) => {
+      const listener = (_event: Electron.IpcRendererEvent, id: string) => handler(id);
+      ipcRenderer.on("wuu:web-workspace-focus-address", listener);
+      return () => ipcRenderer.removeListener("wuu:web-workspace-focus-address", listener);
+    },
+  };
   browserApi.listBrowserProfiles = () =>
     ipcRenderer.invoke("wuu:browser-profiles") as Promise<BrowserProfile[]>;
   browserApi.importBrowserCookies = (profilePath) =>

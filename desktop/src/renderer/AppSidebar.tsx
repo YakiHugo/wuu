@@ -1,5 +1,7 @@
 import { hostSupports } from "./HostCapabilities";
 import { SidebarAccountMenu } from "./SidebarAccountMenu";
+import { NavigationRibbon } from "./NavigationRibbon";
+import type { RibbonWebsite } from "./NavigationRibbonPreferences";
 import {
   ChevronRight,
   Folder,
@@ -460,6 +462,8 @@ export function AppSidebar({
   onRibbonPresenceChange,
   catalogSection = "plugins",
   onSelectCatalogSection,
+  activeWebsiteId,
+  onSelectWebsite,
 }: {
   state: AppState;
   // The sidebar renders scratch conversations through the same WorkspaceList
@@ -540,6 +544,8 @@ export function AppSidebar({
   onRibbonPresenceChange?: (present: boolean) => void;
   catalogSection?: SkillsCatalogSection;
   onSelectCatalogSection?: (section: SkillsCatalogSection) => void;
+  activeWebsiteId?: string | null;
+  onSelectWebsite?: (website: RibbonWebsite) => void;
 }): JSX.Element {
   const { t } = useI18n();
   const ribbonRef = useCallback((element: HTMLElement | null) => {
@@ -618,10 +624,10 @@ export function AppSidebar({
   );
   const activePluginMain = visibleWorkbenchView(workbenchSnapshot, "primary");
   const activePluginMainView = activePluginMain?.view;
-  const pluginCatalogActive = !settingsActive && !activePluginMainView && (catalogActive ?? state.sessionTabs.some(
+  const pluginCatalogActive = !settingsActive && !activeWebsiteId && !activePluginMainView && (catalogActive ?? state.sessionTabs.some(
     (tab) => tab.id === state.activeSessionTabID && tab.kind === "skills",
   ));
-  const conversationsActive = !settingsActive && !activePluginMainView && !pluginCatalogActive;
+  const conversationsActive = !settingsActive && !activeWebsiteId && !activePluginMainView && !pluginCatalogActive;
   const activeThreadID = conversationsActive ? nativeActiveThreadID : undefined;
   const pluginNavigationEntries = useMemo(
     () => primaryViewNavigation(declaredPluginNavigationEntries, workbenchSnapshot),
@@ -1778,53 +1784,38 @@ export function AppSidebar({
   const nativeSidebar = (
     <>
       <HoverRevealScopeContext.Provider value={null}>
-      <nav ref={ribbonRef} className="sidebar-ribbon" aria-label={t("sidebar.mainNavigation")}>
-        <div className="sidebar-ribbon-main scrollbar-hidden">
-          <Tooltip content={t("sidebar.conversations")}>
-            <button
-              className="sidebar-ribbon-button"
-              type="button"
-              aria-label={t("sidebar.conversations")}
-              aria-current={conversationsActive ? "page" : undefined}
-              data-wuu-component="conversations-section"
-              onClick={() => activateNative(() => onShowConversations?.())}
-            >
-              <MessagesSquare aria-hidden="true" />
-            </button>
-          </Tooltip>
-          <div className="sidebar-ribbon-divider" role="separator" />
-          <Tooltip content={t("skills.sectionSkills")}>
-            <button
-              className="sidebar-ribbon-button"
-              type="button"
-              aria-label={t("skills.sectionSkills")}
-              aria-current={pluginCatalogActive ? "page" : undefined}
-              onClick={() => activateNative(onOpenSkillsTab)}
-              disabled={!hasRuntimeContext}
-            >
-              <PluginBlocksIcon aria-hidden="true" />
-            </button>
-          </Tooltip>
-          {pluginNavigationEntries.map((entry) => {
-            const active = activePluginMainView !== undefined && activePluginMainView.id === entry.instanceId;
-            return (
-              <Tooltip key={`${entry.pluginId}:${entry.id}`} content={entry.title}>
-                <button
-                  type="button"
-                  className={`sidebar-ribbon-button plugin-navigation-item${active ? " active" : ""}`}
-                  data-wuu-component="plugin-navigation-item"
-                  data-wuu-plugin={entry.pluginId}
-                  aria-label={entry.title}
-                  aria-current={active ? "page" : undefined}
-                  onClick={() => openPluginNavigation(entry.pluginId, entry.view, entry.instanceId)}
-                >
-                  <PluginIcon icon={entry.icon} pluginId={entry.pluginId} fingerprint={entry.generation} />
-                </button>
-              </Tooltip>
-            );
-          })}
-        </div>
-        <div className="sidebar-ribbon-footer">
+      <NavigationRibbon
+        ribbonRef={ribbonRef}
+        activeWebsiteId={activeWebsiteId}
+        onSelectWebsite={onSelectWebsite ? (website) => activateNative(() => onSelectWebsite(website)) : undefined}
+        items={[
+          {
+            id: "conversations",
+            title: t("sidebar.conversations"),
+            icon: <MessagesSquare aria-hidden="true" />,
+            active: conversationsActive,
+            component: "conversations-section",
+            onSelect: () => activateNative(() => onShowConversations?.()),
+          },
+          {
+            id: "catalog",
+            title: t("skills.sectionSkills"),
+            icon: <PluginBlocksIcon aria-hidden="true" />,
+            active: pluginCatalogActive,
+            disabled: !hasRuntimeContext,
+            onSelect: () => activateNative(onOpenSkillsTab),
+          },
+          ...pluginNavigationEntries.map((entry) => ({
+            id: `plugin:${JSON.stringify([entry.pluginId, entry.navigationId ?? entry.id])}`,
+            title: entry.title,
+            icon: <PluginIcon icon={entry.icon} pluginId={entry.pluginId} fingerprint={entry.generation} />,
+            active: !activeWebsiteId && activePluginMainView !== undefined && activePluginMainView.id === entry.instanceId,
+            component: "plugin-navigation-item",
+            pluginId: entry.pluginId,
+            onSelect: () => openPluginNavigation(entry.pluginId, entry.view, entry.instanceId),
+          })),
+        ]}
+        footer={<>
           <Tooltip content={t("sidebar.settings")}>
             <button
               className="sidebar-ribbon-button"
@@ -1844,8 +1835,8 @@ export function AppSidebar({
             onOpenAccount={onOpenAccount ? () => activateNative(onOpenAccount) : undefined}
             onOpenSettings={(page) => activateNative(() => onOpenSettings(page))}
           />
-        </div>
-      </nav>
+        </>}
+      />
       </HoverRevealScopeContext.Provider>
       <div className="sidebar-content" inert={!sidebarVisible || settingsActive} aria-hidden={settingsActive || undefined}>
         <div className="traffic-spacer" />

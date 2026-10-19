@@ -91,7 +91,7 @@ export function Tooltip({
       return;
     }
     const rect = trigger.getBoundingClientRect();
-    const tip = layer.getBoundingClientRect();
+    let tip = layer.getBoundingClientRect();
 
     let placement: TooltipSide = side;
     const spaceAbove = rect.top - TRIGGER_GAP - VIEWPORT_MARGIN;
@@ -111,14 +111,49 @@ export function Tooltip({
       VIEWPORT_MARGIN,
       window.innerWidth - tip.width - VIEWPORT_MARGIN,
     );
-    const left = Math.min(
+    let left = Math.min(
       Math.max(rect.left + rect.width / 2 - tip.width / 2, VIEWPORT_MARGIN),
       maxLeft,
     );
-    const top =
+    let top =
       placement === "top"
         ? rect.top - TRIGGER_GAP - tip.height
         : rect.bottom + TRIGGER_GAP;
+
+    // Native web surfaces composite above renderer portals. Move an intersecting
+    // hint into nearby app chrome instead of hiding the page during a hover.
+    const nativeSurfaces = [...document.querySelectorAll<HTMLElement>("[data-wuu-native-surface]")]
+      .filter((element) => !element.closest("[hidden], [inert]")
+        && getComputedStyle(element).visibility !== "hidden"
+        && getComputedStyle(element).display !== "none")
+      .map((element) => element.getBoundingClientRect())
+      .filter((surface) => surface.width > 0 && surface.height > 0);
+    const intersectsNative = (x: number, y: number) => nativeSurfaces.some((surface) =>
+      x < surface.right && x + tip.width > surface.left && y < surface.bottom && y + tip.height > surface.top);
+    if (intersectsNative(left, top)) {
+      // A one-line label fits the toolbar at large UI sizes too. The trigger's
+      // accessible name still contains the complete label.
+      layer.style.whiteSpace = "nowrap";
+      layer.style.overflow = "hidden";
+      layer.style.textOverflow = "ellipsis";
+      layer.style.maxWidth = `${Math.min(280, window.innerWidth - VIEWPORT_MARGIN * 2)}px`;
+      tip = layer.getBoundingClientRect();
+      left = Math.min(left, Math.max(VIEWPORT_MARGIN, window.innerWidth - tip.width - VIEWPORT_MARGIN));
+      const maxTop = Math.max(VIEWPORT_MARGIN, window.innerHeight - tip.height - VIEWPORT_MARGIN);
+      const positions = nativeSurfaces.flatMap((surface) => [
+        { left, top: surface.top - tip.height - TRIGGER_GAP },
+        { left, top: surface.bottom + TRIGGER_GAP },
+      ]).filter((candidate) => candidate.top >= VIEWPORT_MARGIN && candidate.top <= maxTop
+        && !intersectsNative(candidate.left, candidate.top))
+        .sort((first, second) => Math.abs(first.top - top) - Math.abs(second.top - top));
+      const safe = positions[0];
+      if (!safe) {
+        setPosition({ visibility: "hidden" });
+        return;
+      }
+      top = safe.top;
+      placement = top < rect.top ? "top" : "bottom";
+    }
 
     layer.dataset.side = placement;
     setPosition({ left, top, visibility: "visible" });

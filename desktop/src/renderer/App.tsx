@@ -267,6 +267,9 @@ import {
 } from "./plugins/DesktopPluginRuntime";
 import { DesktopWorkbench } from "./plugins";
 import { usePrimaryPluginViewCover } from "./PrimaryPluginViewCover";
+import { WebWorkspacePanel } from "./WebWorkspace";
+import { useNavigationRibbonPreferences, type RibbonWebsite } from "./NavigationRibbonPreferences";
+import type { WebWorkspaceApi } from "../shared/webWorkspace";
 import { releaseWindowResizeClass, WINDOW_RESIZING_CLASS } from "./WindowResizeState";
 import { useComposerDraftState } from "./ComposerDraftState";
 import { useComposerPendingState } from "./ComposerPendingState";
@@ -714,6 +717,20 @@ export function App(): JSX.Element {
   });
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
   const [nativeSection, setNativeSection] = useState<"conversations" | "catalog">("conversations");
+  const ribbonPreferences = useNavigationRibbonPreferences();
+  const [activeWebsiteID, setActiveWebsiteID] = useState<string>();
+  const activeWebsite = ribbonPreferences.websites.find((website) => website.id === activeWebsiteID);
+  const showingWebsite = Boolean(activeWebsite);
+  const previousWebsiteIDs = useRef(new Set(ribbonPreferences.websites.map((website) => website.id)));
+  useEffect(() => {
+    const ids = new Set(ribbonPreferences.websites.map((website) => website.id));
+    const api = (window.wuu as typeof window.wuu & { webWorkspace?: WebWorkspaceApi }).webWorkspace;
+    for (const id of previousWebsiteIDs.current) {
+      if (!ids.has(id)) void api?.close(id).catch((error: unknown) => showErrorToast(error));
+    }
+    previousWebsiteIDs.current = ids;
+    if (activeWebsiteID && !ids.has(activeWebsiteID)) setActiveWebsiteID(undefined);
+  }, [ribbonPreferences.websites, activeWebsiteID]);
   const [catalogSection, setCatalogSection] = useState<SkillsCatalogSection>("plugins");
   const [catalogVisited, setCatalogVisited] = useState(false);
   const showingPrimaryPluginView = usePrimaryPluginViewCover();
@@ -826,6 +843,7 @@ export function App(): JSX.Element {
     workspaceRightPanelDockableWithoutSidebar,
   ]);
   const revealConversationFromFocusedWorkspace = useCallback((): void => {
+    setActiveWebsiteID(undefined);
     desktopWorkbenchController.deactivateRegion("primary");
     setSettingsOpen(false);
     setNativeSection("conversations");
@@ -1749,7 +1767,7 @@ export function App(): JSX.Element {
   // ad-hoc modals/portals (e.g. participant panels) are not yet
   // enumerated here; extend this predicate as more full-window overlays land.
   const browserOverlaySuppressed =
-    settingsOpen || accountOpen || nativeSection === "catalog" || showingPrimaryPluginView ||
+    settingsOpen || accountOpen || showingWebsite || nativeSection === "catalog" || showingPrimaryPluginView ||
     environmentDialog !== null ||
     Boolean(pendingFork) ||
     conversationSearch.open;
@@ -2485,10 +2503,11 @@ export function App(): JSX.Element {
     // Text is input-local until idle. Publish it before the new surface paints.
     setPrompt(currentPrimaryComposerDraft().prompt);
   }, [documentComposerVisible, setPrompt, currentPrimaryComposerDraft]);
-  const conversationVisible = !showingManagementCatalog && !showingPrimaryPluginView &&
+  const conversationVisible = !showingWebsite && !showingManagementCatalog && !showingPrimaryPluginView &&
     !settingsOpen && !accountOpen && !workspaceToolsCoverConversation;
   const mainConversationDockVisible =
     Boolean(state.initialized) &&
+    !showingWebsite &&
     !splitConversation &&
     !showingManagementCatalog &&
     !workspaceToolsCoverConversation &&
@@ -3926,9 +3945,22 @@ export function App(): JSX.Element {
   });
 
   function closePrimaryPluginView(): void {
+    setActiveWebsiteID(undefined);
     desktopWorkbenchController.deactivateRegion("primary");
     setSettingsOpen(false);
     setNativeSection("conversations");
+  }
+
+  function showWebsite(website: RibbonWebsite): void {
+    desktopWorkbenchController.deactivateRegion("primary");
+    closeWorkspaceMenus();
+    closeConversationSearch({ immediate: true });
+    setEnvironmentDialog(null);
+    setPendingFork(undefined);
+    setSettingsOpen(false);
+    setAccountOpen(false);
+    closeSidebarDrawer();
+    setActiveWebsiteID(website.id);
   }
 
   function showConversations(): void {
@@ -3942,6 +3974,7 @@ export function App(): JSX.Element {
 
   function openSkillsTab(): void {
     if (!appStateRef.current.activeContext) return;
+    setActiveWebsiteID(undefined);
     desktopWorkbenchController.deactivateRegion("primary");
     setSettingsOpen(false);
     setCatalogVisited(true);
@@ -5351,15 +5384,16 @@ export function App(): JSX.Element {
     const back = (event: Event): void => {
       if (accountOpen) { event.preventDefault(); setAccountOpen(false); }
       else if (settingsOpen) { event.preventDefault(); setSettingsOpen(false); }
+      else if (showingWebsite) { event.preventDefault(); setActiveWebsiteID(undefined); }
       else if (sidebarDrawerVisible) { event.preventDefault(); closeSidebarDrawer(); }
       else if (rightPanelOpen) { event.preventDefault(); setRightPanelOpenWithMotion(false); }
       else if (nativeSection === "catalog" && !showingPrimaryPluginView) { event.preventDefault(); setNativeSection("conversations"); }
     };
     window.addEventListener("wuu:workbench-back", back);
     return () => window.removeEventListener("wuu:workbench-back", back);
-  }, [accountOpen, settingsOpen, sidebarDrawerVisible, closeSidebarDrawer, rightPanelOpen, setRightPanelOpenWithMotion, nativeSection, showingPrimaryPluginView]);
+  }, [accountOpen, settingsOpen, showingWebsite, sidebarDrawerVisible, closeSidebarDrawer, rightPanelOpen, setRightPanelOpenWithMotion, nativeSection, showingPrimaryPluginView]);
 
-  useAppContextDraftTarget(submissionTargetPending || !state.initialized || showingManagementCatalog || showingPrimaryPluginView ? undefined : JSON.stringify([
+  useAppContextDraftTarget(submissionTargetPending || !state.initialized || showingWebsite || showingManagementCatalog || showingPrimaryPluginView ? undefined : JSON.stringify([
     state.activeContext ? runtimeContextKey(state.activeContext) : undefined, state.activeSessionTabID, state.activePane, state.thread?.id, state.secondaryThread?.id,
   ]), (image, context) => {
     // A workspace panel may cover split panes without changing their draft
@@ -5473,6 +5507,7 @@ export function App(): JSX.Element {
           style={shellStyle}
           data-wuu-component="app-shell"
           data-settings-open={settingsOpen ? "" : undefined}
+          data-web-workspace-open={showingWebsite && !settingsOpen ? "" : undefined}
           data-wuu-sidebar-mode={sidebarDrawerVisible ? "drawer" : sidebarDrawerMode ? "collapsed" : "docked"}
         >
           <BrowserPiPHostReporter />
@@ -5511,9 +5546,11 @@ export function App(): JSX.Element {
           <HoverRevealScopeContext.Provider value={sidebarHoverScope}>
             <AppSidebar
               onShowConversations={showConversations}
+              activeWebsiteId={settingsOpen ? undefined : activeWebsite?.id}
+              onSelectWebsite={showWebsite}
               catalogActive={showingSkillsCatalog}
               settingsActive={settingsOpen}
-              onLeaveSettings={() => setSettingsOpen(false)}
+              onLeaveSettings={() => { setSettingsOpen(false); setActiveWebsiteID(undefined); }}
               onRibbonPresenceChange={setNativeRibbonPresent}
               catalogSection={catalogSection}
               onSelectCatalogSection={setCatalogSection}
@@ -5676,7 +5713,7 @@ export function App(): JSX.Element {
           ) : null}
 
       <main
-        inert={workspaceToolsCoverConversation || settingsOpen}
+        inert={workspaceToolsCoverConversation || settingsOpen || showingWebsite}
         data-wuu-component="conversation-pane"
         data-primary-plugin-view={showingPrimaryPluginView ? "" : undefined}
         data-native-section={showingManagementCatalog ? "catalog" : "conversations"}
@@ -5968,7 +6005,7 @@ export function App(): JSX.Element {
       ) : null}
       {poppedOutMode ? null : (
         <WorkspaceRightPanel
-          covered={settingsOpen}
+          covered={settingsOpen || showingWebsite}
           open={rightPanelOpen}
           present={rightPanelOpen || rightPanelAnimating}
           prewarm={Boolean(state.initialized)}
@@ -6165,6 +6202,11 @@ export function App(): JSX.Element {
         />
         </div>
       ) : null}
+      {!poppedOutMode ? (
+        <section className="web-workspace-stage" hidden={!showingWebsite || settingsOpen} aria-label={activeWebsite?.title}>
+          <WebWorkspacePanel site={activeWebsite} active={showingWebsite && !settingsOpen && !accountOpen} />
+        </section>
+      ) : null}
       <DesktopWorkbench
         settingsOnly={settingsOpen}
         host={desktopPluginHost}
@@ -6193,7 +6235,10 @@ export function App(): JSX.Element {
           requestRegionVisible: (region) => {
             if (region === "settings") openSettingsPage("providers");
             else setSettingsOpen(false);
-            if (region === "primary" && rightPanelGlobalized) setRightPanelOpenWithMotion(false);
+            if (region === "primary") {
+              setActiveWebsiteID(undefined);
+              if (rightPanelGlobalized) setRightPanelOpenWithMotion(false);
+            }
             if (region === "auxiliary") setRightPanelOpenWithMotion(true);
           },
         }}

@@ -77,6 +77,43 @@ export function activate(api: PluginGenerationApi): void {
 
 `view` 必须匹配同一插件注册的 ID。设置页使用 `settingsPages`，导航入口使用 `navigation`。只有确实需要初始打开位置时才添加 `registerViewPlacement`，不要把每个可选工具都强制打开在工作台上。
 
+## 添加网站页面
+
+网站复用现有 View 和导航契约。下面是可选的 Notion 示例，只有用户选择其导航入口后才打开页面；将 URL 改为飞书或其他 HTTP(S) 网站，即可用于其他扩展。
+
+```ts
+import type { PluginGenerationApi } from "@wuu/plugin-sdk";
+
+export function activate(api: PluginGenerationApi): void {
+  const WebPage = api.ui.WebPage as unknown as
+    (props: Readonly<Record<string, unknown>>) => unknown;
+  api.registerViewType({
+    id: "website",
+    title: "Notion",
+    defaultRegion: "primary",
+    persistence: "durable",
+    render: () => api.react.createElement(WebPage, {
+      url: "https://www.notion.so/",
+      title: "Notion",
+    }),
+  });
+}
+```
+
+在包的 `plugin.json` 中使用普通导航贡献：
+
+```json
+{
+  "contributes": {
+    "navigation": [
+      { "id": "website-entry", "view": "website", "title": "Notion" }
+    ]
+  }
+}
+```
+
+对于没有 manifest 的单个本地 TypeScript 文件，可在激活时添加 `api.registerViewPlacement({ id: "website-entry", view: "website", region: "primary" })`，打开同一个 View。其 Ribbon 入口、布局、浏览器会话和清理由宿主管理。网站与 Wuu 其他浏览器页面共用已导入的 Cookie；会话中没有有效登录时，需要重新登录。卸载组件或禁用插件会关闭其页面与弹窗。此配方不会安装任何网站。兼容旧宿主时可检查 `typeof api.ui.WebPage === "function"`；非桌面客户端显示浏览器不可用状态。
+
 ## 连接页面和运行时
 
 `api.invokeRuntime(method, input, { workspaceId })` 调用同一插件当前活动的运行时 generation。运行时需要实现 `plugin.client.request` 能力；方法名是插件自己的分派键，不是任意 app-server 方法。通过 `listWorkspaces` 检查工作区可用性，在 UI 中处理请求失败；需要随变化刷新视图时，使用 `onHostEvent`。

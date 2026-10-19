@@ -1,4 +1,4 @@
-import type { HandlerDetails, LoadURLOptions, Rectangle, Session, WebContents, WebContentsViewConstructorOptions, WindowOpenHandlerResponse } from "electron";
+import type { FilesystemPermissionRequest, MediaAccessPermissionRequest, OpenExternalPermissionRequest, PermissionRequest, HandlerDetails, LoadURLOptions, Rectangle, Session, WebContents, WebContentsViewConstructorOptions, WindowOpenHandlerResponse } from "electron";
 import type { ActivitySession, BrowserListedTab, BrowserSurfaceSnapshot, BrowserTabStatus, BrowserTurnEndedResult, JsonValue, ServerEvent } from "../shared/protocol";
 import { activityTimestamp } from "../shared/activityTimestamp";
 import {
@@ -2334,15 +2334,42 @@ export function browserPermissionDecision(isAgentOwned: boolean, permission: str
   return !BROWSER_AGENT_DENIED_PERMISSIONS.has(permission);
 }
 
-// Wire the persist:wuu-browser session handlers. Called once from
-// app.whenReady with the real partition session. Contents this coordinator
-// does not own keep the default permission and download path.
-export function installBrowserSessionHandlers(session: Session, coordinator: BrowserHostCoordinator): void {
-  session.setPermissionRequestHandler((webContents, permission, callback) => {
+export type BrowserPermissionRequestDetails = PermissionRequest | FilesystemPermissionRequest
+  | MediaAccessPermissionRequest | OpenExternalPermissionRequest;
+
+export interface BrowserSessionPermissionDelegate {
+  ownsWebContents(id: number): boolean;
+  requestPermission(
+    contents: WebContents,
+    permission: string,
+    callback: (allowed: boolean) => void,
+    details: BrowserPermissionRequestDetails,
+  ): void;
+  checkPermission(contents: WebContents, permission: string, requestingOrigin: string): boolean;
+}
+
+// Keep the existing agent policy and legacy user-browser path. Full-page website
+// destinations share this profile but ask users about their own permissions.
+export function installBrowserSessionHandlers(
+  session: Session,
+  coordinator: BrowserHostCoordinator,
+  websites?: BrowserSessionPermissionDelegate,
+): void {
+  session.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    if (webContents && websites?.ownsWebContents(webContents.id)) {
+      websites.requestPermission(webContents, permission, callback, details);
+      return;
+    }
     const owned = webContents ? coordinator.ownsWebContents(webContents.id) : false;
     callback(browserPermissionDecision(owned, permission));
   });
-  session.setPermissionCheckHandler((webContents, permission) => {
+  session.setPermissionCheckHandler((webContents, permission, requestingOrigin) => {
+    // Background contexts without a tab cannot borrow the legacy user-surface
+    // grant and bypass the website host's explicit permission decision.
+    if (!webContents && websites) return false;
+    if (webContents && websites?.ownsWebContents(webContents.id)) {
+      return websites.checkPermission(webContents, permission, requestingOrigin);
+    }
     const owned = webContents ? coordinator.ownsWebContents(webContents.id) : false;
     return browserPermissionDecision(owned, permission);
   });
