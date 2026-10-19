@@ -23,7 +23,6 @@
   flex-direction: column;
   align-items: center;
   padding: calc(var(--window-titlebar-height) + var(--space-1)) 6px var(--space-2);
-  border-right: 1px solid var(--hairline-soft);
   background: var(--wuu-color-surface-muted, var(--sidebar-material-fill));
   pointer-events: auto;
   -webkit-app-region: no-drag;

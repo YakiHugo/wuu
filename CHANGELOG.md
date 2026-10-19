@@ -25,10 +25,10 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Changed
 
-- Separate global search, plugins, settings, and account controls into a persistent
-  icon ribbon beside the collapsible conversation tree, within the existing sidebar
-  width. Show folder groups when used, unify the window header, and clarify process
-  summaries above answers. Keep activity controls readable and adapt conversation
+- Separate plugins, settings, and account controls into a persistent icon ribbon
+  beside the collapsible conversation tree, within the existing sidebar width.
+  Keep search beside the Wuu wordmark. Show folder groups when used, unify the
+  window header, and clarify process summaries above answers. Keep activity controls readable and adapt conversation
   gutters to the reading pane.
 
 ### Fixed

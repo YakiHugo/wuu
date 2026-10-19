@@ -1778,19 +1778,6 @@ export function AppSidebar({
               <MessagesSquare aria-hidden="true" />
             </button>
           </Tooltip>
-          <Tooltip content={t("sidebar.searchConversations")}>
-            <button
-              className="sidebar-ribbon-button conversation-search-trigger"
-              type="button"
-              aria-label={t("sidebar.searchConversations")}
-              aria-haspopup="dialog"
-              aria-expanded={searchOpen}
-              onClick={() => activateNative(onToggleConversationSearch)}
-              disabled={!hasRuntimeContext}
-            >
-              <Search aria-hidden="true" />
-            </button>
-          </Tooltip>
           <div className="sidebar-ribbon-divider" role="separator" />
           <Tooltip content={t("skills.sectionSkills")}>
             <button
@@ -1853,7 +1840,20 @@ export function AppSidebar({
           hasUnread={unreadThreads.length > 0}
           onToggleUnreadView={onToggleUnreadView}
           onClearUnread={() => onMarkThreadsViewed(unreadThreads)}
-        />
+        >
+          <button
+            className="icon-button conversation-search-trigger"
+            type="button"
+            aria-label={t("sidebar.searchConversations")}
+            title={t("sidebar.searchConversations")}
+            aria-haspopup="dialog"
+            aria-expanded={searchOpen}
+            onClick={() => activateNative(onToggleConversationSearch)}
+            disabled={!hasRuntimeContext}
+          >
+            <Search className="icon-lg" />
+          </button>
+        </SidebarBrand>
         {unreadViewOpen ? (
           <section
             className="sidebar-unread-view scrollbar-hidden"
