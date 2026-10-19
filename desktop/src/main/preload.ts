@@ -710,6 +710,7 @@ if (!process.argv.includes("--wuu-browser-disabled")) {
   (api as WuuDesktopApi & { webWorkspace: WebWorkspaceApi }).webWorkspace = {
     initializeTabs: (destinations) => ipcRenderer.invoke("wuu:web-workspace-tabs-initialize", destinations),
     open: (destination) => ipcRenderer.invoke("wuu:web-workspace-open", destination),
+    showOptions: (id, request) => ipcRenderer.invoke("wuu:web-workspace-options", id, request),
     capture: (id) => ipcRenderer.invoke("wuu:web-workspace-capture", id),
     onReveal: handler => {
       const listener = (_event: Electron.IpcRendererEvent, id: string) => handler(id);

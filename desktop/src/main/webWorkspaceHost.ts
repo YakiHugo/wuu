@@ -1,7 +1,7 @@
 import { BrowserWindow, Menu, clipboard, dialog, shell, type DownloadItem, type WebContents, type WebContentsView, type WebContentsViewConstructorOptions } from "electron";
 import { randomUUID } from "node:crypto";
 import { WEB_WORKSPACE_ZOOM_MIN, WEB_WORKSPACE_ZOOM_MAX, WEB_WORKSPACE_TAB_LIMIT, WEB_WORKSPACE_RIBBON_ID } from "../shared/webWorkspace";
-import type { WebWorkspaceBounds, WebWorkspaceCommand, WebWorkspaceDestination, WebWorkspaceLegacyDestination, WebWorkspaceInitializationState, WebWorkspaceFindOptions, WebWorkspaceFindResult, WebWorkspaceState, WebWorkspaceTabState } from "../shared/webWorkspace";
+import type { WebWorkspaceMenuAction, WebWorkspaceMenuRequest, WebWorkspaceBounds, WebWorkspaceCommand, WebWorkspaceDestination, WebWorkspaceLegacyDestination, WebWorkspaceInitializationState, WebWorkspaceFindOptions, WebWorkspaceFindResult, WebWorkspaceState, WebWorkspaceTabState } from "../shared/webWorkspace";
 import { BROWSER_PARTITION, BROWSER_WORKSPACE_TAB_PREFIX, type BrowserWorkspaceSource, type BrowserWorkspaceAttachment, type BrowserViewHandle, type BrowserParentWindowHandle, type BrowserPermissionRequestDetails, type BrowserSessionPermissionDelegate } from "./browserHostWindows";
 import { createBrowserView } from "./browserView";
 import type { WebWorkspaceLibrary } from "./webWorkspaceLibrary";
@@ -205,6 +205,35 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     this.ensurePage(group, this.activeTab(group)!);
     this.emit(group);
     return this.state(group);
+  }
+
+  showOptions(owner: BrowserWindow, id: string, request: WebWorkspaceMenuRequest): Promise<WebWorkspaceMenuAction | null> {
+    const group = this.group(owner, id), tab = this.activeTab(group);
+    if (!tab || !owner.isVisible() || owner.isMinimized()) return Promise.resolve(null);
+    if (![request.x, request.y].every(Number.isFinite)) throw new Error("Menu coordinates must be finite numbers.");
+    const state = this.tabState(tab), labels = request.labels;
+    const blank = state.url === "about:blank" && state.startPage !== false;
+    return new Promise(resolve => {
+      let selected: WebWorkspaceMenuAction | null = null;
+      const item = (action: WebWorkspaceMenuAction, enabled = true) => ({
+        label: action === "resetZoom" ? `${labels[action]} (${Math.round(tab.zoomFactor * 100)}%)` : labels[action],
+        enabled, click: () => { selected = action; },
+      });
+      const menu = Menu.buildFromTemplate([
+        item("find", !blank),
+        { type: "separator" },
+        item("zoomOut", tab.zoomFactor > WEB_WORKSPACE_ZOOM_MIN),
+        item("resetZoom"),
+        item("zoomIn", tab.zoomFactor < WEB_WORKSPACE_ZOOM_MAX),
+        { type: "separator" },
+        ...(group.tabbed ? [item("reopenTab", group.closedTabs.length > 0 && group.tabs.length < WEB_WORKSPACE_TAB_LIMIT)] : []),
+        item("openExternal", !blank),
+      ]);
+      const zoom = owner.webContents.getZoomFactor();
+      // Menu coordinates are relative to the owner's content view, in DIPs.
+      menu.popup({ window: owner, x: Math.round(request.x * zoom), y: Math.round(request.y * zoom),
+        callback: () => resolve(this.groups.get(id) === group && this.activeTab(group) === tab ? selected : null) });
+    });
   }
 
   /** One bounded, in-memory backdrop for chrome overlays; no capture subscription. */

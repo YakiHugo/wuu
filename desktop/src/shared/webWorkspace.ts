@@ -45,6 +45,14 @@ export type WebWorkspaceLegacyDestination = { id: string; url: string; title?: s
 export type WebWorkspaceInitializationState = WebWorkspaceState & { migratedTabGroups?: Record<string, string[]> };
 export type WebWorkspaceCommand = "back" | "forward" | "reload" | "reloadIgnoringCache" | "stop" | "navigate" | "focus" | "takeOver";
 
+export type WebWorkspaceMenuAction = "find" | "zoomOut" | "resetZoom" | "zoomIn" | "reopenTab" | "openExternal";
+export type WebWorkspaceMenuRequest = {
+  /** Anchor in shell CSS pixels. */
+  x: number;
+  y: number;
+  labels: Record<WebWorkspaceMenuAction, string>;
+};
+
 export type WebWorkspaceApi = {
   /** Restore the ribbon and migrate legacy website sessions once, without losing their child tabs. */
   initializeTabs: (destinations: WebWorkspaceLegacyDestination[]) => Promise<WebWorkspaceInitializationState>;
@@ -54,6 +62,8 @@ export type WebWorkspaceApi = {
   open: (destination: WebWorkspaceDestination) => Promise<WebWorkspaceState>;
   /** One current-page JPEG backdrop; null when hidden, stale, or unavailable. */
   capture: (id: string) => Promise<string | null>;
+  /** Native popup keeps the live page composited; null means dismissed. */
+  showOptions: (id: string, request: WebWorkspaceMenuRequest) => Promise<WebWorkspaceMenuAction | null>;
   /** CSS-pixel geometry; null hides this destination without closing its pages. */
   reportBounds: (id: string, bounds: WebWorkspaceBounds | null) => Promise<void>;
   setShortcutTarget: (id: string, active: boolean) => Promise<void>;

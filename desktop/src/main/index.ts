@@ -5,7 +5,7 @@ import { WebWorkspaceHost } from "./webWorkspaceHost";
 import { WebWorkspaceLibrary } from "./webWorkspaceLibrary";
 import { WebWorkspaceDownloads } from "./webWorkspaceDownloads";
 import type { WebWorkspaceDownloadCommand } from "../shared/webWorkspaceDownloads";
-import type { WebWorkspaceBounds, WebWorkspaceCommand, WebWorkspaceDestination, WebWorkspaceLegacyDestination, WebWorkspaceFindOptions } from "../shared/webWorkspace";
+import type { WebWorkspaceMenuRequest, WebWorkspaceBounds, WebWorkspaceCommand, WebWorkspaceDestination, WebWorkspaceLegacyDestination, WebWorkspaceFindOptions } from "../shared/webWorkspace";
 import { importBrowserCookies, listBrowserProfiles } from "./browserCookieImport";
 import { BrowserExtensionManager } from "./browserExtensions";
 import { saveArtifactFile } from "./artifactSave";
@@ -2872,6 +2872,8 @@ app.whenReady().then(async () => {
     webWorkspaceHost.initializeTabs(webWorkspaceSender(event), destinations));
   ipcMain.handle("wuu:web-workspace-open", (event, destination: WebWorkspaceDestination) =>
     webWorkspaceHost.open(webWorkspaceSender(event), destination));
+  ipcMain.handle("wuu:web-workspace-options", (event, id: string, request: WebWorkspaceMenuRequest) =>
+    webWorkspaceHost.showOptions(webWorkspaceSender(event), id, request));
   ipcMain.handle("wuu:web-workspace-capture", (event, id: string) => webWorkspaceHost.capture(webWorkspaceSender(event), id));
   ipcMain.handle("wuu:web-workspace-bounds", (event, id: string, bounds: WebWorkspaceBounds | null) =>
     webWorkspaceHost.reportBounds(webWorkspaceSender(event), id, bounds));

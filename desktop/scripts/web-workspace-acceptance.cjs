@@ -253,9 +253,9 @@ async function runWebsiteAcceptance(h, fixture) {
         'Native toolbar drag cleanup restores original window bounds');
     }
     await click(toolbar('Browser options'), 'options-remains-clickable-after-drag', false);
-    await waitFor(() => document.querySelector('.web-workspace-menu[role="dialog"]'));
+    await waitFor(() => document.querySelector('button[aria-label="Browser options"]')?.getAttribute('aria-expanded') === 'true');
     xinput(['key', '--clearmodifiers', 'Escape']);
-    await waitFor(() => !document.querySelector('.web-workspace-menu[role="dialog"]'));
+    await waitFor(() => document.querySelector('button[aria-label="Browser options"]')?.getAttribute('aria-expanded') === 'false');
     await click(address, 'address-remains-editable-after-drag', false);
     await until(() => win.webContents.isFocused(), 'Real address click retains shell keyboard focus');
     xinput(['key', '--clearmodifiers', 'ctrl+a']);
@@ -767,10 +767,11 @@ async function runWebsiteAcceptance(h, fixture) {
     await capture('tabs-and-native-find');
     await click(`${liveStage} button[aria-label="Close find"]`, 'close-native-find');
     await click(`${liveStage} button[aria-label="Browser options"]`, 'browser-options');
-    await click('.web-workspace-menu button[aria-label="Zoom in"]', 'zoom-website-in');
+    xinput(['key', 'Home', 'key', 'Down', 'key', 'Down', 'key', 'Down', 'key', 'Return']);
     await until(() => wc.getZoomFactor() > 1, 'actual native website zoom increased');
     const zoom = wc.getZoomFactor();
-    await click('.web-workspace-menu button[aria-label="Reset zoom"]', 'reset-website-zoom');
+    await click(`${liveStage} button[aria-label="Browser options"]`, 'reopen-browser-options');
+    xinput(['key', 'Home', 'key', 'Down', 'key', 'Down', 'key', 'Return']);
     await until(() => wc.getZoomFactor() === 1, 'actual native zoom reset'); xinput(['key', 'Escape']);
     await pageClick(wc, '#draft', 'native-close-tab-focus'); xinput(['key', '--clearmodifiers', 'ctrl+w']);
     await until(async () => !win.isDestroyed() && (await readSite()).tabs.length === before, 'native Ctrl+W closes one tab only');

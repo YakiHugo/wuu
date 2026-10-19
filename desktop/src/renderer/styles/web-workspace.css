@@ -209,62 +209,6 @@
   color: var(--ink);
 }
 
-.web-workspace-menu {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  max-height: min(65vh, 420px);
-  overflow-y: auto;
-  padding: var(--space-1);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-md);
-  background: var(--surface-1);
-  box-shadow: var(--shadow-card);
-}
-
-.web-workspace-menu-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: calc(var(--control-size-toolbar) + var(--space-2));
-  padding: var(--space-1) var(--space-2);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--ink);
-  font: inherit;
-  font-size: var(--font-ui);
-  text-align: left;
-  cursor: pointer;
-}
-
-.web-workspace-menu-item > .icon {
-  flex: none;
-  color: var(--ink-tertiary);
-}
-
-.web-workspace-menu-item:hover:not(:disabled) {
-  background: var(--surface-3);
-}
-
-.web-workspace-menu-item:disabled {
-  color: var(--ink-faint);
-  cursor: default;
-}
-
-.web-workspace-menu-zoom {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  padding: var(--space-1) var(--space-2);
-  font-size: var(--font-ui);
-}
-
-.web-workspace-menu-zoom > span {
-  flex: 1;
-  margin-right: var(--space-3);
-}
-
 .web-workspace-findbar {
   display: flex;
   align-items: center;
