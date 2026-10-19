@@ -421,7 +421,6 @@ export function WebWorkspacePanel({
           <button type="button" className="web-workspace-menu-item" disabled={blank || !currentURL} onClick={openExternal}><ArrowUpRight className="icon" aria-hidden="true" /><span>{t("webWorkspace.openExternal")}</span></button>
         </div></FloatingMenuPortal> : null}
         {addressError ? <p className="web-workspace-address-error" id={addressErrorID} role="alert">{addressError}</p> : null}
-        <div className="workspace-browser-loading-bar" data-active={current?.loading ? "true" : "false"} aria-hidden="true" />
       </div>
       {findOpen ? <div className="web-workspace-findbar" role="search" aria-label={t("webWorkspace.find")}>
         <Search className="icon" aria-hidden="true" />
@@ -447,7 +446,7 @@ export function WebWorkspacePanel({
               <button type="button" className="settings-button settings-button-ghost" disabled={blank} onClick={openExternal}>{t("webWorkspace.openExternal")}</button>
             </div>
           </div>
-        ) : blank ? <WebWorkspaceStartPage searchField={
+        ) : blank ? <WebWorkspaceStartPage active={active} searchField={
           <WebWorkspaceAddress className="web-workspace-start-address" api={api} destinationId={site?.id} pageKey={`${site?.id}/${current?.activeTabId}`} active={active}
             inputRef={startInputRef} value={address} disabled={!site || !api} invalid={Boolean(addressError)} errorID={addressErrorID}
             onChange={changeAddress} onSubmit={openAddress} onEscape={restoreAddress} leading={<Search className="icon" aria-hidden="true" />}>

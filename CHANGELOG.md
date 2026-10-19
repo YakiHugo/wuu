@@ -35,6 +35,7 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Changed
 
+- Remove the redundant full-width browser loading line while retaining ribbon tab loading feedback and Stop/Reload controls.
 - Represent each browser page as one ribbon tab, with direct new-tab creation, drag ordering, and a compact pin/close menu instead of nested tab rows and navigation management.
 
 - Refine browser tab sizing, selection surfaces, and close/new-tab alignment across font sizes.
@@ -52,6 +53,9 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Restore window dragging from empty browser toolbar space while keeping its address field and buttons interactive.
+- Center the compact account control with settings and the other ribbon icons.
+- Restore pointer-following eyes on the browser start page without background animation work.
 - Avoid remeasuring covered conversation inputs during website window resizing, and refit retained drafts when their workspace becomes visible again.
 - Keep full-workspace websites attached to the native window edges during live resizing, including when the shell renderer is busy.
 - Keep the account menu above browser pages while preserving native website visibility on dismissal.

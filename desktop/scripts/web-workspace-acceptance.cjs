@@ -22,6 +22,14 @@ async function createWebsiteFixture(home) {
       requests.push({ method: request.method, path: url.pathname, body, cookie: request.headers.cookie || '' });
       if (serveMediaFixture(request, response, url, media)) return;
       if (url.pathname === '/offline' && controls.offline) { response.destroy(); return; }
+      if (url.pathname === '/loading-hold') {
+        response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+        response.write('<!doctype html><title>Controlled loading fixture</title><body style="font:24px system-ui;padding:48px;background:#edf4fa;color:#17354a"><h1>Loading fixture</h1><p>This local response stays open until Stop is clicked.</p>');
+        controls.finishLoading = () => response.end('</body>');
+        const timer = setTimeout(controls.finishLoading, 20000);
+        response.once('close', () => { clearTimeout(timer); controls.finishLoading = null; });
+        return;
+      }
       if (url.pathname === '/download') {
         response.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Disposition': 'attachment; filename="fixture.txt"', 'Content-Length': downloadBytes.length });
         response.end(downloadBytes); return;
@@ -122,6 +130,60 @@ async function runWebsiteAcceptance(h, fixture) {
     await settle();
     if (evidence) await capture(`after-${label}`);
   }
+  async function mascotGaze() {
+    const selector = '.web-workspace-stage:not([hidden]) .web-workspace-start-mascot';
+    await waitFor(selector => document.querySelector(selector)?.querySelector('.web-workspace-start-mascot-eyes'), selector);
+    await evaluate(selector => {
+      const svg = document.querySelector(selector), eyes = svg.querySelector('.web-workspace-start-mascot-eyes');
+      const rect = svg.getBoundingClientRect, computed = window.getComputedStyle;
+      const probe = { svg, eyes, reads: 0, mutations: 0 };
+      svg.getBoundingClientRect = function (...args) { probe.reads++; return rect.apply(this, args); };
+      window.getComputedStyle = function (element, ...args) { if (element === svg || svg.contains(element)) probe.reads++; return computed.call(this, element, ...args); };
+      const observer = new MutationObserver(records => { probe.mutations += records.length; });
+      observer.observe(svg, { subtree: true, attributes: true, attributeFilter: ['transform', 'd', 'style'] });
+      probe.cleanup = () => { observer.disconnect(); delete svg.getBoundingClientRect; window.getComputedStyle = computed; delete window.__wuuMascotAcceptance; };
+      window.__wuuMascotAcceptance = probe;
+    }, selector);
+    const states = [];
+    for (const direction of [-1, 1]) {
+      const target = await evaluate(({ selector, direction }) => {
+        const r = document.querySelector(selector).getBoundingClientRect();
+        return { x: Math.max(64, Math.min(innerWidth - 24, r.x + r.width / 2 + direction * 180)), y: r.y + r.height / 2 };
+      }, { selector, direction });
+      const bounds = win.getContentBounds(), zoom = win.webContents.getZoomFactor();
+      xinput(['mousemove', String(Math.round(bounds.x + target.x * zoom)), String(Math.round(bounds.y + target.y * zoom))]);
+      await waitFor(direction => {
+        const eyes = window.__wuuMascotAcceptance.eyes;
+        return eyes.transform.baseVal.consolidate()?.matrix.e * direction > 0;
+      }, direction);
+      await capture(direction < 0 ? 'mascot-pointer-left' : 'mascot-pointer-right');
+      states.push(await evaluate(() => {
+        const { eyes } = window.__wuuMascotAcceptance, r = eyes.getBoundingClientRect();
+        return { transform: eyes.getAttribute('transform'), centerX: r.x + r.width / 2 };
+      }));
+    }
+    assert.ok(states[1].centerX > states[0].centerX + 0.5, 'Actual eye geometry follows left and right native pointer input');
+    await evaluate(() => { const p = window.__wuuMascotAcceptance; p.reads = p.mutations = 0; });
+    await delay(400);
+    const idle = await evaluate(() => ({ reads: window.__wuuMascotAcceptance.reads, mutations: window.__wuuMascotAcceptance.mutations }));
+    assert.deepEqual(idle, { reads: 0, mutations: 0 }, 'Settled mascot does not poll geometry/styles or mutate eye artwork while idle');
+    return { states, idle, idleMs: 400 };
+  }
+  async function mascotUnmount() {
+    await waitFor(() => !window.__wuuMascotAcceptance.svg.isConnected);
+    await delay(80);
+    await evaluate(() => { const p = window.__wuuMascotAcceptance; p.reads = p.mutations = 0; });
+    const bounds = win.getContentBounds();
+    xinput(['mousemove', String(bounds.x + 100), String(bounds.y + 60)]);
+    await delay(120);
+    const result = await evaluate(() => {
+      const p = window.__wuuMascotAcceptance;
+      return { detached: !p.svg.isConnected, reads: p.reads, mutations: p.mutations };
+    });
+    assert.deepEqual(result, { detached: true, reads: 0, mutations: 0 }, 'Navigating away releases mascot pointer work');
+    await evaluate(() => window.__wuuMascotAcceptance.cleanup());
+    return result;
+  }
   async function pageClick(wc, selector, label) {
     const view = win.contentView.children.find(view => view.webContents === wc);
     await until(() => view?.getVisible() && !wc.isDestroyed(), 'Native website is actually visible before page input');
@@ -160,6 +222,49 @@ async function runWebsiteAcceptance(h, fixture) {
     assert.ok(geometry.leftTabs > 0, 'Live website tabs remain reachable from the ribbon');
     return geometry;
   }
+  async function dragBrowserToolbar() {
+    const before = win.getBounds(), outer = win.getContentBounds(), zoom = win.webContents.getZoomFactor();
+    const drag = await evaluate(() => {
+      const bar = document.querySelector('.web-workspace-stage:not([hidden]) .web-workspace-toolbar');
+      const r = bar.getBoundingClientRect(), actions = bar.querySelector('.web-workspace-actions').getBoundingClientRect();
+      const x = (actions.right + r.right) / 2, y = r.top + r.height / 2, hit = document.elementFromPoint(x, y);
+      return { x, y, gap: r.right - actions.right, region: getComputedStyle(hit).getPropertyValue('-webkit-app-region'),
+        safe: bar.contains(hit) && !hit.closest('button,input,form,a,[role="button"]') };
+    });
+    assert.ok(drag.safe && drag.gap >= 4 && drag.region === 'drag', `Toolbar padding is a safe native drag target: ${JSON.stringify(drag)}`);
+    const x = Math.round(outer.x + drag.x * zoom), y = Math.round(outer.y + drag.y * zoom);
+    try {
+      await capture('before-toolbar-padding-drag');
+      report.actions.push({ label: 'native-toolbar-drag-start', input: 'native-x11', before, point: { x, y }, drag, atMs: Date.now() - started }); save();
+      xinput(['mousemove', String(x), String(y), 'mousedown', '1']); await delay(100);
+      for (let step = 1; step <= 5; step++) {
+        xinput(['mousemove', String(x + step * 10), String(y + step * 8)]); await delay(40);
+      }
+      await until(() => Math.abs(win.getBounds().x - before.x) >= 20 || Math.abs(win.getBounds().y - before.y) >= 20,
+        'Dragging empty browser toolbar padding moves the actual native window', 4000);
+      xinput(['mouseup', '1']); await settle();
+      report.actions.push({ label: 'native-toolbar-drag', input: 'native-x11', before, after: win.getBounds(), atMs: Date.now() - started }); save();
+      await capture('after-toolbar-padding-drag');
+    } finally {
+      xinput(['mouseup', '1']); await delay(40);
+      xinput(['key', '--clearmodifiers', 'Escape']); await settle();
+      win.setBounds(before);
+      await until(() => ['x', 'y', 'width', 'height'].every(key => Math.abs(win.getBounds()[key] - before[key]) <= 1),
+        'Native toolbar drag cleanup restores original window bounds');
+    }
+    await click(toolbar('Browser options'), 'options-remains-clickable-after-drag', false);
+    await waitFor(() => document.querySelector('.web-workspace-menu[role="dialog"]'));
+    xinput(['key', '--clearmodifiers', 'Escape']);
+    await waitFor(() => !document.querySelector('.web-workspace-menu[role="dialog"]'));
+    await click(address, 'address-remains-editable-after-drag', false);
+    await until(() => win.webContents.isFocused(), 'Real address click retains shell keyboard focus');
+    xinput(['key', '--clearmodifiers', 'ctrl+a']);
+    assert.ok(await evaluate(selector => { const input = document.querySelector(selector); return document.activeElement === input && input.selectionStart === 0 && input.selectionEnd === input.value.length; }, address), 'URL text remains selectable inside draggable toolbar');
+    xinput(['type', '--clearmodifiers', '--delay', '0', origin + '/alpha']);
+    await waitFor(({ selector, url }) => document.querySelector(selector).value === url, { selector: address, url: origin + '/alpha' });
+    xinput(['key', '--clearmodifiers', 'Return']);
+    await until(() => nativeView('/alpha')?.getVisible() && !nativeView('/alpha').webContents.isLoading(), 'Editable URL submits after toolbar drag');
+  }
   async function assertMenuBackdrop(label) {
     await hidden(label);
     const selector = '.web-workspace-stage:not([hidden]) .web-workspace-backdrop';
@@ -176,6 +281,17 @@ async function runWebsiteAcceptance(h, fixture) {
     save();
   }
   async function profileMenu(label, wc) {
+    if (label === 'narrow-new-tab') {
+      const alignment = await evaluate(() => {
+        const center = selector => { const r = document.querySelector(selector).getBoundingClientRect(); return r.x + r.width / 2; };
+        return { upper: center('.sidebar-ribbon-main .sidebar-ribbon-button'),
+          settings: center('.sidebar-ribbon-footer .sidebar-ribbon-button'), settingsIcon: center('.sidebar-ribbon-footer .sidebar-ribbon-button > svg'),
+          account: center('.sidebar-ribbon-footer .sidebar-account-trigger'), accountIcon: center('.sidebar-ribbon-footer .sidebar-account-avatar') };
+      });
+      assert.ok(Object.values(alignment).every(x => Math.abs(x - alignment.upper) <= 0.5),
+        `Narrow large-type footer controls and icons share the upper ribbon centerline: ${JSON.stringify(alignment)}`);
+      report.actions.push({ label: 'narrow-ribbon-footer-alignment', atMs: Date.now() - started, alignment }); save();
+    }
     await click('.sidebar-account-trigger', `open-profile-${label}`);
     await waitFor(() => document.querySelector('.sidebar-account-menu[role="menu"]'));
     if (wc) await assertMenuBackdrop(`profile-${label}`);
@@ -285,7 +401,7 @@ async function runWebsiteAcceptance(h, fixture) {
         if (popup !== win && (popup.webContents.getURL().startsWith(origin) || popup.webContents.getURL() === 'about:blank')) popup.close();
       }
       win.focus(); throw error;
-    }
+    } finally { await evaluate(() => window.__wuuMascotAcceptance?.cleanup()); }
   });
   let alphaID, savedOrder;
 
@@ -501,6 +617,17 @@ async function runWebsiteAcceptance(h, fixture) {
     await pageClick(wc, '#draft', 'focus-before-native-address-shortcut');
     xinput(['key', 'ctrl+l']);
     await waitFor(selector => document.activeElement?.matches(selector), address, 'native Ctrl+L focuses shell address');
+    try {
+      await fill(address, origin + '/loading-hold'); xinput(['key', '--clearmodifiers', 'Return']);
+      await until(() => wc.getURL() === origin + '/loading-hold' && wc.isLoading(), 'Controlled local document remains loading');
+      await waitFor(() => document.querySelector('.web-workspace-toolbar button[aria-label="Stop loading"]')
+        && document.querySelector('[data-wuu-component="website-navigation-item"][aria-current="page"] .sidebar-ribbon-tab-loading'));
+      assert.equal(await evaluate(() => Boolean(document.querySelector('.web-workspace-toolbar .workspace-browser-loading-bar'))), false, 'Loading has no redundant full-width blue progress strip');
+      await capture('controlled-loading-ribbon-spinner-and-stop');
+      await click(toolbar('Stop loading'), 'stop-controlled-loading');
+      await until(() => !wc.isLoading(), 'Stop cancels the controlled loading document');
+      await waitFor(() => document.querySelector('.web-workspace-toolbar button[aria-label="Reload"]'));
+    } finally { fixture.controls.finishLoading?.(); }
     await navigateAddress('/alpha', 'return-from-history');
     assert.equal(wc.getURL(), origin + '/alpha');
     await capture('native-page-loaded'); return { preferences, cookie: 'synthetic-session', contentsId: wc.id };
@@ -547,6 +674,7 @@ async function runWebsiteAcceptance(h, fixture) {
         const bounds = view.getBounds(), [w, h] = win.getContentSize();
         assert.ok(bounds.x >= 0 && bounds.y >= 0 && bounds.x + bounds.width <= w && bounds.y + bounds.height <= h);
         const chrome = await chromeGeometry();
+        if (width === 700) await dragBrowserToolbar();
         await capture(`bounds-${theme}-${width}-zoom-${zoom}`);
         if (width === 440 || theme === 'dark') {
           await blankTab(`new-tab-${theme}-${width}`);
@@ -704,6 +832,7 @@ async function runWebsiteAcceptance(h, fixture) {
       return mascot?.getBoundingClientRect().width > 0 && (!(mascot instanceof HTMLImageElement) || mascot.complete && mascot.naturalWidth > 0);
     });
     await capture('mascot-new-tab-ready');
+    const gaze = await mascotGaze();
     await fill(startInput, 'fixture');
     const suggestion = url => `[data-address-suggestion-url="${url}"]`;
     await waitFor(({ alpha, history }) => document.querySelector(`[data-address-suggestion-url="${alpha}"]`)?.dataset.addressSuggestionSource === 'bookmark'
@@ -717,6 +846,7 @@ async function runWebsiteAcceptance(h, fixture) {
     await waitFor(url => document.querySelector(`[data-address-suggestion-url="${url}"]`)?.getAttribute('aria-selected') === 'true', origin + '/alpha');
     xinput(['key', '--clearmodifiers', 'Return']);
     await until(() => nativeView('/alpha')?.getVisible() && !nativeView('/alpha').webContents.isLoading(), 'Keyboard selection opens the saved bookmark');
+    gaze.unmount = await mascotUnmount();
     // The page now owns native focus. A renderer-only sendInputEvent can edit
     // its DOM address field without moving OS focus from the WebContentsView.
     // Exercise the real user's click and typing before judging autocomplete.
@@ -759,7 +889,7 @@ async function runWebsiteAcceptance(h, fixture) {
     assert.ok(state.bookmarks.some(bookmark => bookmark.url === origin + '/alpha'), 'Clearing history retains bookmarks');
     clearedHistoryURL = origin + '/history-target';
     await capture('cleared-history-retained-bookmark'); xinput(['key', 'Escape']);
-    return { history: state.history.length, bookmarks: state.bookmarks.length, keyboardAndPointerSuggestions: true, profile };
+    return { history: state.history.length, bookmarks: state.bookmarks.length, keyboardAndPointerSuggestions: true, profile, gaze };
   });
 
   await testNative('failed website navigation retries requested destination', async () => {

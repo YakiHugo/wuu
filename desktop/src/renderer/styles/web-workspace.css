@@ -47,6 +47,12 @@
   -webkit-app-region: no-drag;
 }
 
+/* Only the full-workspace browser is window chrome; embedded plugin pages
+   retain ordinary pointer behavior. Controls below carve out the drag region. */
+.web-workspace-stage .workspace-browser-toolbar.web-workspace-toolbar {
+  -webkit-app-region: drag;
+}
+
 .workspace-browser-url-form.web-workspace-address {
   justify-self: stretch;
   width: 100%;
@@ -168,13 +174,7 @@
   gap: var(--space-2);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .web-workspace-toolbar .workspace-browser-loading-bar[data-active="true"] {
-    animation: none;
-  }
-}
-
-.web-workspace-toolbar :is(button, input) {
+.web-workspace-toolbar :is(button, input, .web-workspace-address) {
   -webkit-app-region: no-drag;
 }
 

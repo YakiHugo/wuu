@@ -368,6 +368,9 @@ html:not([data-app-background]) .navigation-ribbon-layout:has(.sidebar-ribbon) :
 
 .sidebar-account-compact .sidebar-account-trigger {
   grid-template-columns: 1fr;
+  /* The account wrapper spans the rail; center its fixed-size hitbox like
+     the settings and destination buttons instead of inheriting the row inset. */
+  margin-inline: auto;
 }
 
 .sidebar-account-compact .sidebar-account-name,
