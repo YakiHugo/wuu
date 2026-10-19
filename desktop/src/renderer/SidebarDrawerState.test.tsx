@@ -129,7 +129,11 @@ describe("useSidebarDrawerState", () => {
 
     expect(hook.get().sidebarDrawerPhase).toBe("open");
 
-    // A true leave (including the pointer leaving the window) closes it.
+    const control = document.createElement("button");
+    hook.sidebar.appendChild(control);
+    await act(async () => control.focus());
+
+    // Pointer exit must not hide the control that still owns keyboard focus.
     elementFromPointTarget = document.body;
     await act(async () => {
       hook.get().scheduleSidebarDrawerCloseFromPointerLeave(
@@ -138,6 +142,12 @@ describe("useSidebarDrawerState", () => {
       vi.advanceTimersByTime(1);
     });
 
+    expect(hook.get().sidebarDrawerPhase).toBe("open");
+    expect(document.activeElement).toBe(control);
+
+    const outside = document.createElement("button");
+    container.appendChild(outside);
+    await act(async () => outside.focus());
     expect(hook.get().sidebarDrawerPhase).toBe("closing");
   });
 

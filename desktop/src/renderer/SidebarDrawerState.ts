@@ -118,11 +118,17 @@ export function useSidebarDrawerState({
   const sidebarDrawerPointerHovered = useCallback((): boolean | undefined => {
     // A card owns its gap grace period and focus retention even outside the rail.
     if (hoverLayerCount > 0) return true;
+    const sidebar = appShellRef.current?.querySelector(sidebarSelector);
+    const active = document.activeElement;
+    // Keyboard focus in the secondary pane retains it even after pointer exit.
+    // The persistent ribbon remains available without retaining the drawer.
+    if (active instanceof Element && sidebar?.contains(active) && !active.closest(".sidebar-ribbon")) {
+      return true;
+    }
     const point = sidebarPointerPositionRef.current;
     if (!point) {
       return undefined;
     }
-    const sidebar = appShellRef.current?.querySelector(sidebarSelector);
     const hoverTriggers = appShellRef.current?.querySelectorAll(
       SIDEBAR_DRAWER_HOVER_TRIGGER_SELECTOR,
     );
@@ -339,8 +345,18 @@ export function useSidebarDrawerState({
     function handlePointerEvent(event: Event): void {
       if ("pointerType" in event && event.pointerType === "touch") return;
       rememberSidebarPointerPosition(event);
+      const target = event.target;
+      if (sidebarCollapsed && sidebarDrawerPhase === "open" && hoverLayerCount === 0
+        && (event.type === "pointerdown" || event.type === "mousedown")
+        && target instanceof Element
+        && !appShellRef.current?.querySelector(sidebarSelector)?.contains(target)
+        && !target.closest(SIDEBAR_DRAWER_HOVER_TRIGGER_SELECTOR)) {
+        closeSidebarDrawer();
+        return;
+      }
       syncSidebarDrawerHover();
     }
+    window.addEventListener("focusin", syncSidebarDrawerHover);
     window.addEventListener("pointermove", handlePointerEvent, true);
     window.addEventListener("pointerover", handlePointerEvent, true);
     window.addEventListener("pointerdown", handlePointerEvent, true);
@@ -348,6 +364,7 @@ export function useSidebarDrawerState({
     window.addEventListener("mouseover", handlePointerEvent, true);
     window.addEventListener("mousedown", handlePointerEvent, true);
     return () => {
+      window.removeEventListener("focusin", syncSidebarDrawerHover);
       window.removeEventListener("pointermove", handlePointerEvent, true);
       window.removeEventListener("pointerover", handlePointerEvent, true);
       window.removeEventListener("pointerdown", handlePointerEvent, true);
@@ -355,7 +372,8 @@ export function useSidebarDrawerState({
       window.removeEventListener("mouseover", handlePointerEvent, true);
       window.removeEventListener("mousedown", handlePointerEvent, true);
     };
-  }, [rememberSidebarPointerPosition, syncSidebarDrawerHover]);
+  }, [appShellRef, sidebarSelector, sidebarCollapsed, sidebarDrawerPhase, hoverLayerCount,
+    closeSidebarDrawer, rememberSidebarPointerPosition, syncSidebarDrawerHover]);
 
   useLayoutEffect(() => {
     const sidebarWasCollapsed = sidebarWasCollapsedRef.current;

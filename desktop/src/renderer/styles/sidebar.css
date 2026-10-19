@@ -2678,7 +2678,11 @@ html[data-focus-modality="keyboard"] .thread-row-context-menu:focus-visible {
 
 /* Only the overlaid project add button needs a reserved grid slot. Other
  * actions occupy their own space beside the toggle. */
-.sidebar-section-header-group:not(:has(.project-row-new-thread)) .sidebar-section-row {
+/* Idle headers can use the space of their hidden new-thread action. Keep the
+ * trailing track whenever an action or a status indicator is visible. */
+.sidebar-section-header-group:not(:has(.project-row-new-thread)) .sidebar-section-row,
+.project-group:not(:hover):not(:focus-within) > .sidebar-section-header-group >
+  .sidebar-section-row:not(:has(.project-row-loading, .project-row-unread)) {
   grid-template-columns:
     var(--sidebar-nav-icon-col)
     minmax(0, 1fr);

@@ -910,7 +910,7 @@ describe("collapsed sidebar hover drawer", () => {
     expect(container.querySelector(".conversation-pane")?.hasAttribute("inert")).toBe(false);
   });
 
-  it("clears mouse-click focus when a session switch drawer closes after pointer exit", async () => {
+  it("retains focused drawer controls after pointer exit until an outside press", async () => {
     installWuuApi([
       threadFixture(
         "thread-active",
@@ -934,6 +934,14 @@ describe("collapsed sidebar hover drawer", () => {
 
     await movePointerOver(document.body);
     await act(async () => {
+      vi.advanceTimersByTime(sidebarDrawerExitMs());
+    });
+
+    expect(appShell()?.classList.contains("sidebar-drawer-open")).toBe(true);
+    expect(sidebarContainsFocus()).toBe(true);
+
+    await act(async () => {
+      document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, clientX: 320, clientY: 80 }));
       vi.advanceTimersByTime(sidebarDrawerExitMs());
     });
 

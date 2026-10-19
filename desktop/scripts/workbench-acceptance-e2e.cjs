@@ -217,9 +217,28 @@ async function test(name, fn) {
     report.checks.push({ name, status: 'passed', durationMs: Date.now() - start, detail });
     console.log(`PASS ${name}`);
   } catch (error) {
-    report.checks.push({ name, status: 'failed', durationMs: Date.now() - start, error: String(error.stack || error) });
+    const failure = { name, status: 'failed', durationMs: Date.now() - start, error: String(error.stack || error) };
+    report.checks.push(failure);
     console.error(`FAIL ${name}: ${error.stack || error}`);
     try { await capture(`failure-${name}`); } catch (captureError) { report.errors.push({ kind: 'capture', message: String(captureError) }); }
+    // Preserve the original failure and its pixels before using real dismissal
+    // controls, so one failed modal does not contaminate independent journeys.
+    try {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        key('Escape');
+        await settle();
+        if (await evaluate(() => ![...document.querySelectorAll('[role="dialog"][aria-modal="true"]')]
+          .some(node => node.getBoundingClientRect().width > 0))) break;
+        await delay(250);
+      }
+      await waitFor(() => ![...document.querySelectorAll('[role="dialog"][aria-modal="true"]')]
+        .some(node => node.getBoundingClientRect().width > 0), undefined, 'failed-journey modal dismissed', 3000);
+      await goConversations();
+      await dockSidebar();
+      failure.recovery = 'Returned to Conversations through Escape and ribbon controls';
+    } catch (recoveryError) {
+      failure.recovery = String(recoveryError.stack || recoveryError);
+    }
   }
   save();
 }
@@ -345,6 +364,14 @@ db.commit()
 
   await test('shared workbench and contextual navigation', async () => {
     await selectThread('acceptance-reading');
+    win.webContents.sendInputEvent({ type: 'mouseMove', x: 800, y: 500 });
+    await settle();
+    const conversationsLabel = await evaluate(() => {
+      const label = [...document.querySelectorAll('.project-row-name')].find(node => node.textContent.trim() === 'Conversations');
+      return label && { text: label.textContent, width: label.clientWidth, contentWidth: label.scrollWidth };
+    });
+    assert.ok(conversationsLabel && conversationsLabel.width > 0 && conversationsLabel.contentWidth <= conversationsLabel.width + 1,
+      `Built-in Conversations label fits at default size: ${JSON.stringify(conversationsLabel)}`);
     const reading = await geometry('conversations');
     await click(plugins, 'plugins');
     await waitFor(() => document.querySelector('.skills-catalog'));
@@ -358,7 +385,7 @@ db.commit()
     const settings = await geometry('settings');
     await goConversations();
     assert.equal(await evaluate(() => document.querySelector('.cached-conversation-pane[data-active="true"]')?.dataset.threadId), 'acceptance-reading');
-    return { reading, catalog, settings };
+    return { reading, catalog, settings, conversationsLabel };
   });
 
   await test('production PiP host IPC suspends beneath Settings and catalog', async () => {
@@ -438,7 +465,8 @@ db.commit()
     await click('.conversation-search-trigger', 'open-search-mouse');
     await waitFor(() => document.querySelector('.conversation-search-dialog input') === document.activeElement);
     await fill('.conversation-search-dialog input', 'second conversation');
-    await waitFor(() => document.querySelector('.conversation-search-result-title')?.textContent.includes('second conversation'));
+    await waitFor(() => document.querySelector('.conversation-search-results')?.getAttribute('aria-busy') === 'false'
+      && document.querySelector('.conversation-search-result[aria-selected="true"] .conversation-search-result-title')?.textContent.includes('second conversation'));
     await capture('search-before-enter'); key('Enter');
     await waitFor(() => !document.querySelector('.conversation-search-dialog')
       && document.querySelector('.cached-conversation-pane[data-active="true"]')?.dataset.threadId === 'acceptance-second');
@@ -449,7 +477,8 @@ db.commit()
     await waitFor(selector => !document.querySelector('.conversation-search-dialog') && document.activeElement === document.querySelector(selector), composer);
     key('P', ['control']); await waitFor(() => document.querySelector('.conversation-search-dialog input') === document.activeElement);
     await fill('.conversation-search-dialog input', 'long reading');
-    await waitFor(() => document.querySelector('.conversation-search-result-title')?.textContent.includes('long reading'));
+    await waitFor(() => document.querySelector('.conversation-search-results')?.getAttribute('aria-busy') === 'false'
+      && document.querySelector('.conversation-search-result[aria-selected="true"] .conversation-search-result-title')?.textContent.includes('long reading'));
     await click('.conversation-search-result', 'search-mouse-result');
     await waitFor(() => document.querySelector('.cached-conversation-pane[data-active="true"]')?.dataset.threadId === 'acceptance-reading'
       && !document.querySelector('.conversation-search-dialog'));
@@ -522,9 +551,13 @@ db.commit()
       const hovered = await point(leftToggle, false);
       assert.equal(hovered.x, before.x); assert.equal(hovered.y, before.y);
       const focusTarget = section === 'settings' ? '.settings-search input' : '.conversation-search-trigger';
-      // Focus the control without activating its action (clicking Search
-      // would correctly move focus into a separate modal instead).
-      await evaluate(selector => document.querySelector(selector).focus(), focusTarget);
+      // Traverse with real keyboard input without activating Search, whose
+      // click correctly transfers focus into a separate modal instead.
+      for (let step = 0; step < 32; step++) {
+        if (await evaluate(selector => document.activeElement === document.querySelector(selector), focusTarget)) break;
+        key('Tab');
+        await delay(40);
+      }
       await waitFor(selector => document.activeElement === document.querySelector(selector), focusTarget);
       win.webContents.sendInputEvent({ type: 'mouseMove', x: 800, y: 500 });
       await settle();
