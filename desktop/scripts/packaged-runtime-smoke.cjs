@@ -10,6 +10,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { createHash } = require("node:crypto");
+const { pathToFileURL } = require("node:url");
 const { execFileSync, spawn } = require("node:child_process");
 const { once } = require("node:events");
 const { createServer } = require("node:net");
@@ -55,6 +56,60 @@ function verifyResources(resources) {
 
 function verifyArtifact(app) {
   return verifyResources(path.join(app, "Contents/Resources"));
+}
+
+// Serialized into the renderer before its first module runs. Observe only:
+// preserve native construction, messaging, event delivery and termination.
+function installWorkerObserver() {
+  const records = globalThis.__wuuPackagedWorkers = [];
+  globalThis.Worker = new Proxy(globalThis.Worker, {
+    construct(target, args, newTarget) {
+      const worker = Reflect.construct(target, args, newTarget);
+      const url = new URL(String(args[0]), location.href).href;
+      const record = { url, sourceURL: url, responses: 0, pdfDocument: false, pdfRenderPage: false, errors: [], terminated: false };
+      records.push(record);
+      worker.addEventListener("message", event => {
+        record.responses++;
+        // A ready/test response can precede PDF.js fake-worker fallback. Require
+        // document parsing and page-render traffic from this native worker.
+        // Keep only protocol booleans, never document/message payloads.
+        if (event.data?.action === "GetDoc") record.pdfDocument = true;
+        if (event.data?.action === "StartRenderPage") record.pdfRenderPage = true;
+      });
+      for (const type of ["error", "messageerror"]) {
+        worker.addEventListener(type, event => { record.errors.push(`${type}: ${event.message || "worker event"}`); });
+      }
+      const terminate = worker.terminate;
+      worker.terminate = function (...parameters) {
+        const result = Reflect.apply(terminate, this, parameters);
+        if (this === worker) record.terminated = true;
+        return result;
+      };
+      if (url.startsWith("blob:")) {
+        record.sourceURL = null;
+        // PDF.js uses precisely this single-import wrapper for opaque file origins.
+        // Resolve its contents independently; never inject messages into the worker.
+        fetch(url).then(response => response.text()).then(wrapper => {
+          record.wrapper = wrapper;
+          const match = /^\s*await\s+import\(("(?:[^"\\]|\\.)*")\);?\s*$/.exec(wrapper);
+          if (match) record.sourceURL = new URL(JSON.parse(match[1]), location.href).href;
+          else record.errors.push("Unrecognized worker blob wrapper");
+        }).catch(error => { record.errors.push(`Worker blob inspection: ${error.message}`); });
+      }
+      return worker;
+    },
+  });
+}
+
+function findPackagedWorker(records, name, assetRoot) {
+  return records.find(record => {
+    if (!record.sourceURL || !record.responses || record.terminated || record.errors.length) return false;
+    if (name === "pdf.worker" && (!record.pdfDocument || !record.pdfRenderPage)) return false;
+    const url = new URL(record.sourceURL);
+    if (url.protocol !== "file:" || url.search || url.hash || !url.href.startsWith(assetRoot)) return false;
+    const file = decodeURIComponent(url.href.slice(assetRoot.length));
+    return !file.includes("/") && !file.includes("\\") && file.startsWith(`${name}-`) && /\.(?:m?js)$/.test(file);
+  }) || null;
 }
 
 function makePDF() {
@@ -106,6 +161,7 @@ async function main() {
   child.on("error", error => { launchError = error; });
   let socket;
   let captureScreenshot;
+  let collectWorkerEvidence;
   const protocolEvents = [];
   try {
     async function until(read, label, timeout = 45000) {
@@ -169,6 +225,7 @@ async function main() {
       assert.equal(result.checks.core.updater.kind, "unsupported", "Ad-hoc package without app-update.yml must disable updates");
       result.checks.updater = "Dependency loaded by packaged main; controller disabled because app-update.yml is absent; update availability not verified";
     }
+    await send("Page.addScriptToEvaluateOnNewDocument", { source: `(${installWorkerObserver.toString()})()` });
     await send("Page.reload");
     await until(() => evaluate(() => Boolean(document.querySelector(".workspace-panel-add"))), "application workspace UI after onboarding");
     result.checks.terminal = await evaluate(async workspace => {
@@ -202,23 +259,17 @@ async function main() {
       await until(() => evaluate(name => Boolean(document.querySelector("file-tree-container")?.shadowRoot?.querySelector(`[data-item-path="${name}"]`)), name), `${name} in fixture tree`);
       await evaluate(name => document.querySelector("file-tree-container").shadowRoot.querySelector(`[data-item-path="${name}"]`).click(), name);
     }
+    const workerAssetRoot = pathToFileURL(path.join(copy, "Contents/Resources/app.asar/out/renderer/assets") + path.sep).href;
     async function worker(name) {
-      const targets = (await send("Target.getTargets")).targetInfos;
-      for (const target of targets.filter(target => target.type === "worker")) {
-        if (target.url.includes(name) && decodeURIComponent(target.url).includes(copy)) return target;
-        // PDF.js wraps file: imports in blob: module workers (opaque origin).
-        if (target.url.startsWith("blob:")) {
-          const wrapper = await evaluate(async url => {
-            try { return await (await fetch(url)).text(); } catch { return ""; }
-          }, target.url);
-          if (wrapper.includes(name) && decodeURIComponent(wrapper).includes(copy)) return { ...target, wrapper };
-        }
-      }
-      return null;
+      result.workerObservations = await evaluate(() => globalThis.__wuuPackagedWorkers || []);
+      // CDP's target URL can be empty on Electron/macOS; keep it as diagnostics.
+      try { result.workerTargets = (await send("Target.getTargets")).targetInfos.filter(target => target.type === "worker"); }
+      catch (error) { result.workerTargetError = error.message; }
+      return findPackagedWorker(result.workerObservations, name, workerAssetRoot);
     }
+    collectWorkerEvidence = () => worker("ts.worker");
     await openFile("smoke.ts");
     await until(() => evaluate(() => Boolean(document.querySelector(".monaco-editor .view-lines")?.textContent.includes("packagedSmoke"))), "real Monaco editor text");
-    result.checks.typescriptWorker = await until(() => worker("ts.worker"), "packaged TypeScript worker");
     // Read-only previews suppress inline validation decorations. F8 still opens
     // Monaco's real problem navigator, proving a semantic worker response.
     await evaluate(() => document.querySelector(".monaco-editor textarea").focus());
@@ -227,6 +278,7 @@ async function main() {
       await send("Input.dispatchKeyEvent", { type: "keyUp", key: "F8", code: "F8", windowsVirtualKeyCode: 119 });
       return evaluate(() => /not assignable to type/.test(document.querySelector(".monaco-editor .message")?.textContent || ""));
     }, "TypeScript worker semantic diagnostic");
+    result.checks.typescriptWorker = await until(() => worker("ts.worker"), "packaged TypeScript worker provenance and responses");
     await screenshot("monaco-typescript");
     await openFile("smoke.pdf");
     await until(() => evaluate(() => {
@@ -247,6 +299,7 @@ async function main() {
     console.log(`Updater: ${result.checks.updater}`);
   } catch (error) {
     result.error = error.stack;
+    try { await collectWorkerEvidence?.(); } catch { /* Preserve the primary failure. */ }
     try { await captureScreenshot?.("failure"); } catch { /* Preserve the original failure if Chromium is gone. */ }
     throw error;
   } finally {
@@ -261,4 +314,4 @@ async function main() {
 }
 
 if (require.main === module) main().catch(error => { console.error(error); process.exitCode = 1; });
-module.exports = { verifyArtifact, verifyResources };
+module.exports = { verifyArtifact, verifyResources, installWorkerObserver, findPackagedWorker };

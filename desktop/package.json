@@ -86,7 +86,7 @@
     "dist:linux": "npm run build:core && npm run build:cua-linux && npm run build:ripgrep && npm run build && electron-builder --linux AppImage deb --x64 --publish=never --config.electronDist=node_modules/electron/dist",
     "release:linux": "node scripts/release-linux.cjs",
     "test:e2e:linux-package": "node scripts/linux-package-e2e.cjs",
-    "test:release-packaging": "node --experimental-strip-types --test scripts/bundled-dependency-licenses.test.mjs",
+    "test:release-packaging": "node --experimental-strip-types --test scripts/bundled-dependency-licenses.test.mjs scripts/packaged-worker-observer.test.cjs",
     "test:e2e:packaged": "node scripts/packaged-runtime-smoke.cjs"
   },
   "dependencies": {
