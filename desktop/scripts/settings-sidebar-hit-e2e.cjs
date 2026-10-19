@@ -361,14 +361,21 @@ async function verifyRibbonControlFocus(win, page) {
       assert.deepEqual(expanded.title, before.title);
       assert.deepEqual(expanded.content, before.content);
       // A genuine pointer exit must collapse naturally, with no blur or focus reset.
-      await preparePointerInput(win, async () => {
-        const closing = await closingControlOwnership(win);
+      await armClosingControlOwnership(win);
+      let closing;
+      try {
+        await preparePointerInput(win);
+      } finally {
+        closing = await evaluate(win, () => window.__wuuClosingOwnership.stop());
         results.push({ scenario: `ribbon-closing-hit-${page}-${layout}-${owner}`, closing });
         saveResults();
-        assert.ok(closing.controls.some(control => control.target === "sidebar-toggle"), "The restored toggle is sampled before motion settles");
-        for (const control of closing.controls) assert.ok(control.samples.every(sample => sample.owned),
-          `Restored controls own their interior during ribbon closing: ${JSON.stringify(closing)}`);
-      });
+      }
+      assert.ok(closing.frames.length > 0, 'Renderer observes the closing state');
+      for (const frame of closing.frames) {
+        assert.ok(frame.controls.some(control => control.target === 'sidebar-toggle'), 'Restored toggle is sampled during closing');
+        for (const control of frame.controls) assert.ok(control.samples.every(sample => sample.owned),
+          `Restored controls own their interior during ribbon closing: ${JSON.stringify(frame)}`);
+      }
       await settleChrome(win);
       const restored = await snapshot();
       assert.ok(!restored.toggle.hidden && !restored.toggle.inert && !restored.ribbonExpanded);
@@ -427,27 +434,54 @@ async function settleRibbonMotion(win) {
   }, 3000);
 }
 
-async function closingControlOwnership(win) {
-  return evaluate(win, () => {
+async function armClosingControlOwnership(win) {
+  await evaluate(win, () => {
     const ribbon = document.querySelector('.sidebar-ribbon');
-    const bounds = ribbon.getBoundingClientRect().toJSON();
-    const motionActive = ribbon.getAnimations().some(animation => animation.pending || animation.playState === 'running');
-    const controls = [...document.querySelectorAll('.section-sidebar-toggle, .shell-page-history-controls button')]
-      .filter(element => element.checkVisibility({ checkVisibilityCSS: true, checkOpacity: true }))
-      .map(element => {
-        const rect = element.getBoundingClientRect();
-        return { target: element.dataset.wuuComponent, bounds: rect.toJSON(), samples:
-          [[0.5, 0.5], [0.2, 0.2], [0.8, 0.2], [0.2, 0.8], [0.8, 0.8]].map(([x, y]) => {
-            const point = { x: rect.left + rect.width * x, y: rect.top + rect.height * y };
-            const hit = document.elementFromPoint(point.x, point.y);
-            return { ...point, owned: hit === element || element.contains(hit), hit: hit?.getAttribute('class') };
-          }) };
-      });
-    return { bounds, motionActive, coverage: motionActive ? 'closing-transition' : 'transition-already-finished', controls };
+    if (window.__wuuClosingOwnership) throw new Error('Closing observer already armed');
+    const frames = [];
+    let raf = 0;
+    let stopped = false;
+    const sample = () => {
+      const bounds = ribbon.getBoundingClientRect().toJSON();
+      const motionActive = ribbon.getAnimations().some(animation => animation.pending || animation.playState === 'running');
+      const controls = [...document.querySelectorAll('.section-sidebar-toggle, .shell-page-history-controls button')]
+        .filter(element => element.checkVisibility({ checkVisibilityCSS: true, checkOpacity: true }))
+        .map(element => {
+          const rect = element.getBoundingClientRect();
+          return { target: element.dataset.wuuComponent, bounds: rect.toJSON(), samples:
+            [[0.5, 0.5], [0.2, 0.2], [0.8, 0.2], [0.2, 0.8], [0.8, 0.8]].map(([x, y]) => {
+              const point = { x: rect.left + rect.width * x, y: rect.top + rect.height * y };
+              const hit = document.elementFromPoint(point.x, point.y);
+              return { ...point, owned: hit === element || element.contains(hit), hit: hit?.getAttribute('class') };
+            }) };
+        });
+      return { bounds, motionActive, controls };
+    };
+    const capture = () => {
+      if (stopped || ribbon.dataset.expanded === 'true') return;
+      frames.push(sample());
+    };
+    const tick = () => { capture(); if (!stopped) raf = requestAnimationFrame(tick); };
+    const observer = new MutationObserver(capture);
+    observer.observe(ribbon, { attributes: true, attributeFilter: ['data-expanded'] });
+    const stop = () => {
+      stopped = true;
+      observer.disconnect();
+      cancelAnimationFrame(raf);
+      clearTimeout(timer);
+      delete window.__wuuClosingOwnership;
+      return { frames, motionActive: frames.some(frame => frame.motionActive),
+        coverage: frames.some(frame => frame.motionActive) ? 'closing-transition' : 'transition-already-finished' };
+    };
+    // Bound collection using the existing interaction timeout. This timer only
+    // cleans up observation; it never modifies animation or ribbon state.
+    const timer = setTimeout(() => { stopped = true; observer.disconnect(); cancelAnimationFrame(raf); }, 3000);
+    window.__wuuClosingOwnership = { stop };
+    raf = requestAnimationFrame(tick);
   });
 }
 
-async function preparePointerInput(win, beforeMotionSettles) {
+async function preparePointerInput(win) {
   // These interactions run in the CI-owned Electron window. CDP focus
   // emulation alone does not satisfy sendInputEvent's native-window contract.
   win.show();
@@ -467,7 +501,6 @@ async function preparePointerInput(win, beforeMotionSettles) {
   results.push({ scenario: "neutral-pointer-precondition", zoom, point, focused: win.isFocused(), state });
   saveResults();
   await waitFor(win, () => !document.querySelector('.sidebar-ribbon[data-expanded="true"]'), 3000);
-  if (beforeMotionSettles) await beforeMotionSettles();
   await settleRibbonMotion(win);
 }
 
