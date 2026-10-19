@@ -3,6 +3,7 @@ import { closestCenter, DndContext, useSensor, useSensors } from "@dnd-kit/core"
 import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { arrayMove, SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { Globe, Pin, PinOff, Plus, RotateCw, X } from "./WuuIcons";
+import { SIDEBAR_RIBBON_WIDTH } from "./AppLayoutState";
 import { readFocusModality } from "./FocusModality";
 import { HoverRevealScopeContext } from "./HoverReveal";
 import {
@@ -57,6 +58,7 @@ export function NavigationRibbon({ items, websites = [], activeWebsiteId, onSele
   const preferences = useNavigationRibbonPreferences();
   const navRef = useRef<HTMLElement | null>(null);
   const [nativeOpen, setNativeOpen] = useState(false);
+  const [nativeClosing, setNativeClosing] = useState(false);
   const [nativeBounds, setNativeBounds] = useState<ChromeOverlayRect | null>(null);
   const [accountTrigger, setAccountTrigger] = useState<ChromeAccountTrigger>();
   const accountOpen = useRef<((bounds: ChromeOverlayRect) => void) | undefined>(undefined);
@@ -75,6 +77,8 @@ export function NavigationRibbon({ items, websites = [], activeWebsiteId, onSele
   const [announcement, setAnnouncement] = useState("");
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [pointerInside, setPointerInside] = useState(false);
+  const enterTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(enterTimer.current), []);
   const [keyboardFocusWithin, setKeyboardFocusWithin] = useState(false);
   const [nativeFocusTarget, setNativeFocusTarget] = useState<ChromeRibbonFocus>();
   const rememberFocus = (target: EventTarget | null) => {
@@ -175,7 +179,7 @@ export function NavigationRibbon({ items, websites = [], activeWebsiteId, onSele
     setNativeBounds({ x: rect.x, y: rect.y + top, width: rect.width, height: rect.height - top });
     setNativeOpen(true);
   }, [nativeAvailable, expanded]);
-  const nativeModel: ChromeRibbonModel = { kind: "ribbon", items: ordered.map(item => ({ id: item.id, title: item.title, icon: item.nativeIcon,
+  const nativeModel: ChromeRibbonModel = { kind: "ribbon", collapsedWidth: SIDEBAR_RIBBON_WIDTH, items: ordered.map(item => ({ id: item.id, title: item.title, icon: item.nativeIcon,
     active: item.active, disabled: item.disabled, pinned: item.pinned, closable: Boolean(item.onClose), website: websiteIDs.has(item.id), component: item.component, pluginId: item.pluginId })),
     label: t("sidebar.mainNavigation"), newTabLabel: t("webWorkspace.newTab"), canCreateTab: Boolean(onNewTab), closeTabLabel: t("webWorkspace.closeCurrentTab"),
     pinTabLabel: t("webWorkspace.pinTab"), unpinTabLabel: t("webWorkspace.unpinTab"), reorderHint: t("ribbon.reorderHint"),
@@ -184,9 +188,13 @@ export function NavigationRibbon({ items, websites = [], activeWebsiteId, onSele
     scrollTop: scrollTop.current, focusTarget: nativeFocusTarget,
     footer: footerSettings ? { settings: { id: "settings", title: footerSettings.title, icon: { kind: "settings" }, active: footerSettings.active, disabled: footerSettings.disabled }, account: accountTrigger, update: updateModel } : undefined,
   };
-  const closeNative = () => { setNativeOpen(false); setPointerInside(false); setKeyboardFocusWithin(false); setDragging(false); };
+  const closeNative = () => { clearTimeout(enterTimer.current); enterTimer.current = undefined; setNativeClosing(false); setNativeOpen(false); setPointerInside(false); setKeyboardFocusWithin(false); setDragging(false); };
   const nativePresented = useChromeOverlay(nativeAvailable && nativeOpen, nativeBounds, nativeModel, command => {
-    if (command.type === "dismiss") dismissedUnderPointer.current = command.reason === "escape" || command.reason === "tab";
+    if (command.type === "pointer") {
+      setNativeClosing(!command.inside);
+      if (command.inside) { setPointerInside(true); setNativeOpen(true); }
+    }
+    else if (command.type === "dismiss") dismissedUnderPointer.current = command.reason === "escape" || command.reason === "tab";
     else if (command.type === "select") destinationByID.get(command.id)?.onSelect();
     // The native ribbon owns its focus; focusing its duplicate shell button
     // would steal keyboard input while the native surface is still open.
@@ -199,19 +207,23 @@ export function NavigationRibbon({ items, websites = [], activeWebsiteId, onSele
     else if (command.type === "account-open") accountOpen.current?.(command.anchor);
     else if (command.type === "scroll") { scrollTop.current = command.top; const main = navRef.current?.querySelector(".sidebar-ribbon-main"); if (main) main.scrollTop = command.top; }
   }, closeNative, keyboardFocusWithin, navRef.current);
+  const enterRibbon = () => {
+    if (dismissedUnderPointer.current || pointerInside || enterTimer.current) return;
+    enterTimer.current = setTimeout(() => { enterTimer.current = undefined; setPointerInside(true); }, 120);
+  };
   return <>
     <NativeRibbonFooterContext.Provider value={accountContext}>
     <HoverRevealScopeContext.Provider value={{ disabled: false, retain: retainLayer }}>
     <nav ref={node => { navRef.current = node; if (typeof ribbonRef === "function") ribbonRef(node); else if (ribbonRef) ribbonRef.current = node; }} className="sidebar-ribbon" aria-label={t("sidebar.mainNavigation")}
-      data-expanded={expanded || undefined}
+      data-expanded={(expanded && !nativeClosing) || undefined}
+      data-native-supported={nativeAvailable || undefined}
       data-wuu-layer={expanded && !nativeAvailable ? "popover" : undefined}
       data-native-overlay={nativePresented || undefined}
-      onPointerOver={(event) => {
-        if (!dismissedUnderPointer.current && event.currentTarget.contains(event.target as Node)) setPointerInside(true);
-      }}
+      onPointerOver={enterRibbon}
+      onPointerMove={enterRibbon}
       onPointerOut={(event) => {
         if (event.currentTarget.contains(event.target as Node)
-          && (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget))) { setPointerInside(false); dismissedUnderPointer.current = false; }
+          && (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget))) { clearTimeout(enterTimer.current); enterTimer.current = undefined; setPointerInside(false); dismissedUnderPointer.current = false; }
       }}
       onPointerDownCapture={() => setKeyboardFocusWithin(false)}
       onFocus={event => { rememberFocus(event.target); setKeyboardFocusWithin(readFocusModality() === "keyboard"); }}

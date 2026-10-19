@@ -8,7 +8,7 @@ import { CHROME_OVERLAY_VERSION } from "../shared/chromeOverlay";
 export const chromeOverlayScheme = { scheme: "wuu-chrome", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } };
 const ORIGIN = "wuu-chrome://ui";
 const PARTITION = "wuu-chrome-overlays";
-type Surface = { owner: BrowserWindow; view: WebContentsView; kind: ChromeOverlaySurface; request?: ChromeOverlayRequest; loaded: boolean; retained: boolean; focusPending?: boolean; menu?: Menu; leaveTimer?: ReturnType<typeof setTimeout>; focusBefore?: WebContents };
+type Surface = { reveal?: number; closing?: boolean; owner: BrowserWindow; view: WebContentsView; kind: ChromeOverlaySurface; request?: ChromeOverlayRequest; loaded: boolean; retained: boolean; focusPending?: boolean; menu?: Menu; leaveTimer?: ReturnType<typeof setTimeout>; focusBefore?: WebContents };
 
 /** Bounded, trusted UI views. Transparent pixels still hit-test inside these rectangles. */
 export class ChromeOverlayHost {
@@ -105,7 +105,10 @@ export class ChromeOverlayHost {
       surface.focusBefore = owner.contentView.children.map(child => (child as WebContentsView).webContents).find(contents => contents && contents !== surface!.view.webContents && !contents.isDestroyed() && contents.isFocused()) ?? owner.webContents;
     }
     if (request.focus && (!previous || previous.token !== request.token || !previous.focus)) { surface.focusPending = true; surface.retained = true; }
+    if (!previous && kind === "ribbon") surface.reveal = 0;
+    const reopening = surface.closing && (previous?.token !== request.token || (request.focus && !previous.focus));
     surface.request = request;
+    if (reopening) this.resumeReveal(surface);
     // Hidden Chromium renderers suspend rAF. Unthrottle only the finite paint
     // handshake; once visible (or dismissed), normal visibility throttling resumes.
     if (!surface.view.getVisible()) surface.view.webContents.setBackgroundThrottling(false);
@@ -125,7 +128,7 @@ export class ChromeOverlayHost {
       || request.generation < 1 || !request.bounds || ![request.bounds.x, request.bounds.y, request.bounds.width, request.bounds.height].every(Number.isFinite)
       || request.bounds.width <= 0 || request.bounds.height <= 0 || request.bounds.width > 640
       || JSON.stringify(request).length > 512 * 1024) throw new Error("Invalid browser chrome surface.");
-    if (request.model.kind === "ribbon" && (!Array.isArray(request.model.items) || request.model.items.length > 256
+    if (request.model.kind === "ribbon" && (!Number.isFinite(request.model.collapsedWidth) || request.model.collapsedWidth <= 0 || request.model.collapsedWidth > request.bounds.width || !Array.isArray(request.model.items) || request.model.items.length > 256
       || new Set(request.model.items.map(item => item.id)).size !== request.model.items.length)) throw new Error("Invalid browser chrome destinations.");
     if (request.model.kind === "capsule" && (typeof request.model.draft !== "string" || request.model.draft.length > 8000)) throw new Error("Invalid browser capsule draft.");
     if (request.model.kind === "account" && (!Array.isArray(request.model.panel.rows) || request.model.panel.rows.some(row => !["devices", "usage", "account", "providers", "logout"].includes(row.action)))) throw new Error("Invalid browser account actions.");
@@ -192,9 +195,16 @@ export class ChromeOverlayHost {
     if (!command || typeof command.type !== "string") return;
     // Pointer/focus ownership belongs to this opening, not a title/progress
     // revision. Dropping a leave during a model update strands the native rail.
-    const lifecycle = command.type === "pointer" || command.type === "retain" || command.type === "dismiss";
+    const lifecycle = command.type === "pointer" || command.type === "retain" || command.type === "dismiss" || command.type === "reveal";
     if (!Number.isSafeInteger(message.generation) || message.generation < 1
       || (lifecycle ? message.generation > request.generation : message.generation !== request.generation)) return;
+    if (command.type === "reveal" && surface.kind === "ribbon") {
+      if (!Number.isFinite(command.fraction) || command.fraction < 0 || command.fraction > 1) return;
+      surface.reveal = command.fraction;
+      if (surface.closing && command.fraction === 0) this.dismiss(surface, "leave", false, true);
+      else this.layout(surface);
+      return;
+    }
     if (command.type === "dismiss") {
       if (["escape", "tab"].includes(command.reason)) this.dismiss(surface, command.reason, true);
       return;
@@ -203,7 +213,7 @@ export class ChromeOverlayHost {
       if (typeof command.inside !== "boolean") return;
       // A queued renderer enter must not cancel a newer native outside move.
       if (surface.kind === "ribbon" && (!command.inside || !this.pointerInside(surface))) this.scheduleLeave(surface);
-      else this.cancelLeave(surface);
+      else { this.cancelLeave(surface); this.resumeReveal(surface); }
       return;
     }
     if (command.type === "retain") { if (typeof command.active === "boolean") surface.retained = command.active; return; }
@@ -270,6 +280,7 @@ export class ChromeOverlayHost {
   }
 
   private scheduleLeave(surface: Surface): void {
+    if (surface.closing) return;
     if (!surface.leaveTimer) surface.leaveTimer = setTimeout(() => {
       surface.leaveTimer = undefined;
       this.dismissOutsideRibbon(surface);
@@ -308,11 +319,34 @@ export class ChromeOverlayHost {
     // enter/leave in that renderer. Real input delivered to the shell or a
     // sibling is equally authoritative; keep the same bounds and leave grace.
     // This observes native input only and never intercepts the page's event.
-    if (this.pointerInside(ribbon)) this.cancelLeave(ribbon);
-    else this.scheduleLeave(ribbon);
+    if (this.pointerInside(ribbon)) { this.cancelLeave(ribbon); this.resumeReveal(ribbon); }
+    else {
+      if (mouse.type === "mouseDown") ribbon.retained = false;
+      this.scheduleLeave(ribbon);
+    }
   };
 
-  private dismiss(surface: Surface, reason?: Extract<ChromeOverlayCommand, { type: "dismiss" }>["reason"], restoreFocus = false): void {
+  private resumeReveal(surface: Surface): void {
+    if (!surface.closing) return;
+    surface.closing = false;
+    surface.view.webContents.send("wuu:chrome-overlay-visibility", true);
+    this.emitCurrent(surface, { type: "pointer", inside: true });
+  }
+
+  private dismiss(surface: Surface, reason?: Extract<ChromeOverlayCommand, { type: "dismiss" }>["reason"], restoreFocus = false, immediate = false): void {
+    if (surface.kind === "ribbon" && surface.request && surface.view.getVisible() && !immediate) {
+      if (reason === "leave") {
+        if (!surface.closing) {
+          surface.closing = true;
+          this.emitCurrent(surface, { type: "pointer", inside: false });
+          surface.view.webContents.send("wuu:chrome-overlay-visibility", false);
+        }
+        return;
+      }
+      if (surface.closing && !reason) return;
+    }
+    surface.closing = false;
+    surface.reveal = undefined;
     this.cancelLeave(surface);
     if (surface.kind === "ribbon") this.stopObservingPointerSources();
     const menu = surface.menu;
@@ -374,8 +408,13 @@ export class ChromeOverlayHost {
     if (!request) return;
     const zoom = surface.owner.webContents.getZoomFactor(), [width, height] = surface.owner.getContentSize();
     const x = Math.max(0, Math.min(width, Math.round(request.bounds.x * zoom))), y = Math.max(0, Math.min(height, Math.round(request.bounds.y * zoom)));
-    surface.view.webContents.setZoomFactor(zoom);
-    surface.view.setBounds({ x, y, width: Math.max(0, Math.min(width - x, Math.ceil(request.bounds.width * zoom))), height: Math.max(0, Math.min(height - y, Math.ceil(request.bounds.height * zoom))) });
+    const revealedWidth = request.model.kind === "ribbon"
+      ? request.model.collapsedWidth + (request.bounds.width - request.model.collapsedWidth) * (surface.reveal ?? 1)
+      : request.bounds.width;
+    if (surface.view.webContents.getZoomFactor() !== zoom) surface.view.webContents.setZoomFactor(zoom);
+    const bounds = { x, y, width: Math.max(0, Math.min(width - x, Math.ceil(revealedWidth * zoom))), height: Math.max(0, Math.min(height - y, Math.ceil(request.bounds.height * zoom))) };
+    const previous = surface.view.getBounds();
+    if (Object.keys(bounds).some(key => previous[key as keyof typeof bounds] !== bounds[key as keyof typeof bounds])) surface.view.setBounds(bounds);
   }
 
   private observe(owner: BrowserWindow): void {

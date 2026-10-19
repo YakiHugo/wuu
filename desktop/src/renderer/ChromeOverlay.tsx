@@ -28,7 +28,7 @@ export function useChromeOverlay(enabled: boolean, bounds: ChromeOverlayRect | n
     if (!active) return;
     const changed = () => setAppearanceRevision(value => value + 1);
     const observer = new MutationObserver(changed);
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "style", "class"] });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "data-appearance-motion", "style", "class"] });
     return () => observer.disconnect();
   }, [active]);
   useLayoutEffect(() => {
@@ -37,7 +37,8 @@ export function useChromeOverlay(enabled: boolean, bounds: ChromeOverlayRect | n
       if (!token.current || event.token !== token.current) return;
       // Dismissal ends this opening, even if a presentation update crossed it.
       // Business commands still require the exact currently displayed model.
-      if (event.command.type === "dismiss" ? event.generation > generation.current : event.generation !== generation.current) return;
+      const lifecycle = event.command.type === "dismiss" || event.command.type === "pointer";
+      if (lifecycle ? event.generation > generation.current : event.generation !== generation.current) return;
       callbacks.current.onCommand(event.command);
       if (event.command.type === "dismiss") callbacks.current.onDismiss();
     });

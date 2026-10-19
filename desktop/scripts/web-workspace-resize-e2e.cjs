@@ -116,13 +116,13 @@ async function run(){
   }, origin);
   await until(() => evaluate(tabs => Object.values(tabs).every(tab => document.querySelector(`[data-ribbon-id="${tab.id}"]`)), fixtureTabs), 'resize fixture tabs');
   await settle();
-  if (process.env.WUU_TOOLBAR_ACCEPTANCE === '1') {
+  if (process.env.WUU_TOOLBAR_ACCEPTANCE === '1' || process.env.WUU_RIBBON_MOTION === '1') {
     await click(`.sidebar-ribbon-main button[data-ribbon-id="${fixtureTabs.animated.id}"]`);
     const views = parent => parent.children.flatMap(view => [view, ...views(view)]);
     let view;
     await until(() => { view = views(win.contentView).find(view => view.webContents?.getURL() === origin + '/animated' && view.getVisible()); return view && !view.webContents.isLoading(); }, 'animated toolbar fixture');
-    await require('./web-workspace-toolbar-acceptance.cjs')({ win, view, output, report, evaluate, until, settle, click, nativeInput, capture, delay });
-    report.status = 'passed'; save(); server.close(); app.quit(); return;
+    await require(process.env.WUU_RIBBON_MOTION === '1' ? './ribbon-motion-acceptance.cjs' : './web-workspace-toolbar-acceptance.cjs')({ win, view, output, report, evaluate, until, settle, click, nativeInput, capture, delay });
+    report.status = 'passed'; save(); server.close(); app.quit(); setTimeout(() => app.exit(0), 1000).unref(); return;
   }
   for(let repeat=0;repeat<(process.env.WUU_RESIZE_ACCEPTANCE==='1'?0:report.repeats);repeat++)for(const [left,right] of [[false,false],[true,false],[false,true],[true,true]])for(const kind of ['none','static','scroll','animated']){
     if(process.env.WUU_RESIZE_KINDS&&!process.env.WUU_RESIZE_KINDS.split(',').includes(kind))continue;

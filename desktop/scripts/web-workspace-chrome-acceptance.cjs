@@ -69,7 +69,7 @@ module.exports = async function acceptChrome(h, view) {
     sample.account = { bounds: account.getBounds(), beforeTicks: accountBefore, afterTicks: await wc.executeJavaScript('window.ticks'), visible: view.getVisible(),
       authority: await account.webContents.executeJavaScript('({wuu:typeof window.wuu,require:typeof require,bridge:Object.keys(window.wuuChromeOverlay).sort()})') };
     assert.ok(sample.account.visible && sample.account.afterTicks > accountBefore, 'Account menu keeps the webpage animating');
-    assert.deepEqual(sample.account.authority, { wuu: 'undefined', require: 'undefined', bridge: ['command','onState','painted','ready'] }, 'Native chrome has only its narrow bridge');
+    assert.deepEqual(sample.account.authority, { wuu: 'undefined', require: 'undefined', bridge: ['command','onState','onVisibility','painted','ready'] }, 'Native chrome has only its narrow bridge');
     // Stale messages and commands for another surface must have no effect.
     await account.webContents.executeJavaScript(`(async()=>{const state=await window.wuuChromeOverlay.ready();window.wuuChromeOverlay.command({token:state.token,generation:state.generation-1,command:{type:'account-action',action:'providers'}});window.wuuChromeOverlay.command({token:state.token,generation:state.generation,command:{type:'new-tab'}})})()`);
     await settle();

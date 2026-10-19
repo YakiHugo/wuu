@@ -146,6 +146,7 @@ finally:
     const before = (await readSite()).tabs.length;
     await pageClick(original, '#draft', 'new-unsaved-fixture-tab'); xinput(['key', '--clearmodifiers', 'ctrl+t']);
     await until(async () => (await readSite()).tabs.length === before + 1, 'dirty-form test tab created');
+    await until(() => evaluate(() => document.activeElement?.matches('.web-workspace-stage:not([hidden]) .web-workspace-start-search input')), 'New blank tab receives native shortcut focus');
     await navigateAddress('/dirty', 'dirty-form');
     const wc = nativeView('/dirty').webContents;
     try {

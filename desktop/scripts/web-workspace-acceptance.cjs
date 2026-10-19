@@ -214,6 +214,8 @@ async function runWebsiteAcceptance(h, fixture) {
     xinput(['mousemove', String(Math.round(outer.x + 26 * zoom)), String(Math.round(outer.y + p.y * zoom))]);
     await waitFor(() => document.querySelector('.sidebar-ribbon')?.dataset.expanded === 'true');
     await until(() => chromeView('ribbon')?.getVisible(), 'Native expanded ribbon paints');
+    const width = await evaluate(() => document.querySelector('.sidebar-ribbon').getBoundingClientRect().width);
+    await until(() => Math.abs(chromeView('ribbon').getBounds().width - width * zoom) <= 1, 'Native hover reveal reaches the click targets');
   }
   async function finishRailInteraction(wc, label) {
     await leaveRail(false);
@@ -336,7 +338,15 @@ async function runWebsiteAcceptance(h, fixture) {
     return Promise.all(views().map(async view => ({ url: view.webContents.getURL(), visible: view.getVisible(), visibility: await view.webContents.executeJavaScript('document.visibilityState') })));
   }
   async function verticalTabGeometry(expanded = false) {
-    if (expanded) await until(() => chromeView('ribbon')?.getVisible(), 'Expanded native ribbon is visible');
+    await waitFor(expanded => {
+      const bar = document.querySelector('.sidebar-ribbon');
+      return (bar?.dataset.expanded === 'true') === expanded
+        && bar.getAnimations({ subtree: true }).every(animation => animation.playState !== 'running');
+    }, expanded, 'Ribbon reaches its requested interaction state');
+    const expectedWidth = await evaluate(() => document.querySelector('.sidebar-ribbon').getBoundingClientRect().width);
+    await until(() => expanded
+      ? chromeView('ribbon')?.getVisible() && Math.abs(chromeView('ribbon').getBounds().width - expectedWidth * win.webContents.getZoomFactor()) <= 1
+      : !chromeView('ribbon')?.getVisible(), 'Native ribbon finishes its reveal or dismissal');
     const geometry = await evaluateRibbon(() => {
       const bar = document.querySelector('.sidebar-ribbon'), r = bar.getBoundingClientRect();
       const rows = [...bar.querySelectorAll('.sidebar-ribbon-tab-row')].map(row => {
@@ -350,7 +360,7 @@ async function runWebsiteAcceptance(h, fixture) {
       return { width: r.width, expanded: bar.dataset.expanded === 'true', viewportWidth: innerWidth, rows };
     });
     assert.equal(geometry.expanded, expanded, `Rail expansion follows the current interaction: ${JSON.stringify(geometry)}`);
-    assert.ok(Math.abs(geometry.width - (expanded ? 200 : 52)) <= 1, `Rail is52px at rest and200px only while expanded: ${JSON.stringify(geometry)}`);
+    assert.ok(Math.abs(geometry.width - expectedWidth) <= 1, `Native ribbon matches the shell interaction bounds: ${JSON.stringify(geometry)}`);
     assert.ok(geometry.rows.every(row => row.title && (expanded ? row.titleVisible && row.titleWidth >= 20 : !row.titleVisible)), 'Destination labels appear only in the expanded overlay');
     assert.ok(geometry.rows.some(row => row.id === 'conversations' && !row.close), 'Built-in Chat has no close button');
     assert.ok(geometry.rows.every(row => row.close === row.web), 'Only real website tabs have direct close controls');

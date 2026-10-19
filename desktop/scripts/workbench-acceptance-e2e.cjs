@@ -220,9 +220,10 @@ async function capture(label) {
   await delay(160);
 }
 async function click(target, label, evidence = true) {
+  if (evidence) { await point(target); await capture(`before-${label}`); }
+  // Capturing can finish a transition; never click its earlier midpoint.
   const p = await point(target);
   const inRail = p.nativeChrome || await evaluate(p => Boolean(document.elementFromPoint(p.x, p.y)?.closest('.sidebar-ribbon')), p);
-  if (evidence) await capture(`before-${label}`);
   // Route through the OS so a native chrome view cannot be bypassed by a
   // renderer-only event sent to the placeholder underneath it.
   const zoom = win.webContents.getZoomFactor();
@@ -249,6 +250,7 @@ async function click(target, label, evidence = true) {
         if (Date.now() >= deadline) throw new Error('Native hover rail remains visible after pointer leave');
         await delay(40);
       }
+      await settle();
     }
   }
 }
@@ -770,7 +772,7 @@ run().then(async () => {
   clearTimeout(watchdog); websiteFixture?.close();
   const code = report.status === 'passed' ? 0 : 1;
   // The real app's quit hook shuts down its Go child; preserve failing status.
-  app.on('will-quit', () => { process.exitCode = code; });
+  app.once('will-quit', () => app.exit(code));
   app.quit();
   setTimeout(() => app.exit(code), 1000).unref();
 }).catch(async error => {
