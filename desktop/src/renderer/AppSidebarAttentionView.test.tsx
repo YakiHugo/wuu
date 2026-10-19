@@ -228,7 +228,7 @@ describe("sidebar attention view", () => {
     const accountTrigger = container.querySelector<HTMLButtonElement>(".sidebar-account-trigger");
     expect(accountTrigger?.disabled).toBe(false);
     act(() => accountTrigger!.click());
-    const settingsItem = container.querySelector<HTMLButtonElement>(
+    const settingsItem = document.querySelector<HTMLButtonElement>(
       '[role="menuitem"][data-settings-page="providers"]',
     );
     expect(settingsItem).not.toBeNull();

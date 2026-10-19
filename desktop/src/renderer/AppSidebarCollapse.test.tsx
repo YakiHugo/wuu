@@ -206,7 +206,7 @@ describe("sidebar collapse-state independence", () => {
     const accountTrigger = () => container.querySelector<HTMLButtonElement>(".sidebar-account-trigger");
     expect(accountTrigger()).not.toBeNull();
     await act(async () => accountTrigger()?.click());
-    expect(container.querySelector(".sidebar .sidebar-account-menu")).not.toBeNull();
+    expect(document.querySelector(".sidebar-account-menu")).not.toBeNull();
 
     const toggle = container.querySelector<HTMLButtonElement>(".sidebar-toggle-button");
     expect(toggle).not.toBeNull();
@@ -245,7 +245,7 @@ describe("sidebar collapse-state independence", () => {
 
     for (const theme of [null, "dark", "light"] as const) {
       await click(container.querySelector(".sidebar-account-trigger"));
-      await click(container.querySelector('[data-settings-page="providers"]'));
+      await click(document.querySelector('[data-settings-page="providers"]'));
       await act(async () => { await import("./SettingsView"); });
       expect(container.querySelector(".settings-embedded")).not.toBeNull();
       if (theme) {

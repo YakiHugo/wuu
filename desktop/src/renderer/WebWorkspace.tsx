@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { WEB_WORKSPACE_ZOOM_MIN, WEB_WORKSPACE_ZOOM_MAX, WEB_WORKSPACE_TAB_LIMIT, type WebWorkspaceApi, type WebWorkspaceBounds, type WebWorkspaceCommand, type WebWorkspaceState } from "../shared/webWorkspace";
 import { ArrowLeft, ArrowRight, ArrowUpRight, ChevronDown, ChevronUp, Ellipsis, Globe, Hand, Minus, Plus, RotateCcw, RotateCw, Search, X } from "./WuuIcons";
 import { useI18n } from "./i18n";
@@ -7,6 +7,8 @@ import { rawErrorMessage } from "./UserFacingErrors";
 import { showActionErrorToast } from "./Toast";
 import { WebWorkspaceDownloadsMenu } from "./WebWorkspaceDownloadsMenu";
 import { BrowserLibrary } from "./BrowserLibrary";
+import { WebWorkspaceAddress } from "./WebWorkspaceAddress";
+import { WebWorkspaceStartPage } from "./WebWorkspaceStartPage";
 import { WebsiteIcon } from "./WebsiteIcon";
 import { composerMenuWidth, FloatingMenuPortal, handleFloatingMenuKeyDown, menuOpeningKey, useFloatingMenuFocus } from "./ComposerFloatingMenu";
 import "./styles/web-workspace.css";
@@ -34,6 +36,8 @@ export function WebWorkspacePanel({
   const panelRef = useRef<HTMLDivElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const startInputRef = useRef<HTMLInputElement>(null);
+  const [focusNewTab, setFocusNewTab] = useState<string>();
   const findInputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
@@ -87,6 +91,7 @@ export function WebWorkspacePanel({
   }, [captureBackdrop, current?.loading, snapshotKey]);
 
   const focusAddress = useCallback(() => {
+    setFocusNewTab(undefined);
     setMenuOpen(false);
     inputRef.current?.focus();
     inputRef.current?.select();
@@ -119,7 +124,11 @@ export function WebWorkspacePanel({
   useEffect(() => {
     if (!api || !active) return;
     const visible = (id: string): boolean => id === currentSiteID.current && Boolean(hostRef.current && visibleElementRect(hostRef.current));
-    const offAddress = api.onFocusAddress((id) => { if (visible(id)) focusAddress(); });
+    const offAddress = api.onFocusAddress((id, newTabId) => {
+      if (!visible(id)) return;
+      if (newTabId) { setMenuOpen(false); setFocusNewTab(newTabId); }
+      else focusAddress();
+    });
     const offFind = api.onFocusFind((id) => {
       if (!visible(id)) return;
       setMenuOpen(false);
@@ -148,7 +157,7 @@ export function WebWorkspacePanel({
     const changedPage = lastAddressPage.current !== addressPage;
     lastAddressPage.current = addressPage;
     // Redirects must not replace a new address while the user is typing it.
-    if (!changedPage && addressEdited.current && document.activeElement === inputRef.current) return;
+    if (!changedPage && addressEdited.current && (document.activeElement === inputRef.current || document.activeElement === startInputRef.current)) return;
     addressEdited.current = false;
     setAddress(blank ? "" : currentURL);
     setAddressError("");
@@ -159,6 +168,8 @@ export function WebWorkspacePanel({
     setFindOpen(false);
     setFindText("");
   }, [site?.id, current?.activeTabId, active]);
+
+  useEffect(() => { setFocusNewTab(undefined); }, [site?.id]);
 
   useLayoutEffect(() => {
     if (findOpen) { findInputRef.current?.focus(); findInputRef.current?.select(); }
@@ -180,8 +191,25 @@ export function WebWorkspacePanel({
   const addTab = useCallback(async (): Promise<void> => {
     const id = site?.id;
     const next = await update((browser, destination) => browser.createTab(destination));
-    if (next && currentSiteID.current === id) focusAddress();
-  }, [update, site?.id, focusAddress]);
+    if (next && currentSiteID.current === id) {
+      setFocusNewTab(next.activeTabId);
+      setMenuOpen(false);
+    }
+  }, [update, site?.id]);
+
+  useLayoutEffect(() => {
+    if (!focusNewTab) return;
+    if (!active) { setFocusNewTab(undefined); return; }
+    // Native shortcut state and focus requests arrive separately. Keep the
+    // request until its tab has rendered instead of focusing stale chrome.
+    if (focusNewTab !== current?.activeTabId) {
+      // Once the new tab exists, another selected tab is a newer user choice.
+      if (pageTabs.some(tab => tab.id === focusNewTab)) setFocusNewTab(undefined);
+      return;
+    }
+    setFocusNewTab(undefined);
+    if (blank) startInputRef.current?.focus();
+  }, [active, blank, current?.activeTabId, focusNewTab, pageTabs]);
 
   const closeFind = useCallback(() => {
     setFindOpen(false);
@@ -328,18 +356,30 @@ export function WebWorkspacePanel({
     return () => window.removeEventListener("pointerdown", pointerDown);
   }, [menuOpen]);
 
-  const submitAddress = (event: FormEvent): void => {
-    event.preventDefault();
-    const value = address.trim();
+  const changeAddress = (value: string): void => {
+    addressEdited.current = true;
+    setAddress(value);
+    setAddressError("");
+  };
+
+  const restoreAddress = (): void => {
+    addressEdited.current = false;
+    setAddress(blank ? "" : currentURL);
+    setAddressError("");
+    void run("focus");
+  };
+
+  const openAddress = (input: string): boolean => {
+    const value = input.trim();
     const hasScheme = /^[a-z][a-z\d+.-]*:/i.test(value) && !/^(?:localhost|[^\s/:]+\.[^\s/:]+|\[[\da-f:]+\]):\d+(?:[/#?]|$)/i.test(value);
     const isAddress = hasScheme || /^(?:localhost|\[[\da-f:]+\])(?:[:/\?#]|$)/i.test(value) || /^[^\s]+[./][^\s]*$/.test(value);
     const url = !value || /[\u0000-\u001f\u007f]/.test(value) ? null : isAddress ? normalizeWebsiteURL(value) : `https://www.google.com/search?q=${encodeURIComponent(value)}`;
-    if (!url) { setAddressError(t("webWorkspace.invalidURL")); return; }
+    if (!url) { setAddressError(t("webWorkspace.invalidURL")); return false; }
     addressEdited.current = false;
     setAddress(url);
     setAddressError("");
-    inputRef.current?.blur();
     void run("navigate", url);
+    return true;
   };
 
   const openExternal = (): void => {
@@ -386,12 +426,11 @@ export function WebWorkspacePanel({
           <button type="button" className="icon-button workspace-browser-nav" aria-label={t("webWorkspace.forward")} title={t("webWorkspace.forward")} disabled={!api || !current?.canGoForward} onClick={() => void run("forward")}><ArrowRight className="icon" aria-hidden="true" /></button>
           <button type="button" className="icon-button workspace-browser-nav" aria-label={t(current?.loading ? "webWorkspace.stop" : "webWorkspace.reload")} title={t(current?.loading ? "webWorkspace.stop" : "webWorkspace.reload")} disabled={!api || !site || blank} onClick={() => void run(current?.loading ? "stop" : "reload")}>{current?.loading ? <X className="icon" aria-hidden="true" /> : <RotateCw className="icon" aria-hidden="true" />}</button>
         </div>
-        <form className="workspace-browser-url-form web-workspace-address" onSubmit={submitAddress}>
-          <input ref={inputRef} className="workspace-browser-url-input" value={address} type="text" inputMode="url" spellCheck={false} autoCorrect="off" autoCapitalize="off" placeholder={t("webWorkspace.addressSearch")} aria-label={t("webWorkspace.address")} disabled={!site || !api} aria-invalid={Boolean(addressError)} aria-describedby={addressError ? addressErrorID : undefined} onChange={(event) => { addressEdited.current = true; setAddress(event.target.value); setAddressError(""); }} onFocus={(event) => event.currentTarget.select()} onKeyDown={(event) => {
-            if (event.key === "Escape") { addressEdited.current = false; setAddress(blank ? "" : currentURL); setAddressError(""); event.currentTarget.blur(); void run("focus"); }
-          }} />
+        <WebWorkspaceAddress api={api} destinationId={site?.id} pageKey={`${site?.id}/${current?.activeTabId}`} active={active}
+          inputRef={inputRef} value={address} disabled={!site || !api} invalid={Boolean(addressError)} errorID={addressErrorID}
+          onChange={changeAddress} onSubmit={openAddress} onEscape={restoreAddress}>
           {zoomFactor !== 1 ? <button type="button" className="web-workspace-zoom-badge" title={t("webWorkspace.resetZoom")} aria-label={t("webWorkspace.resetZoom")} onClick={() => changeZoom(1)}>{Math.round(zoomFactor * 100)}%</button> : null}
-        </form>
+        </WebWorkspaceAddress>
         <div className="web-workspace-actions">
           {current?.agentControlled ? <button type="button" className="icon-button workspace-browser-nav" aria-label={t("webWorkspace.takeOver")} title={t("webWorkspace.takeOver")} onClick={() => void run("takeOver")}><Hand className="icon" aria-hidden="true" /></button> : null}
           <BrowserLibrary api={api} destinationId={site?.id} currentURL={currentURL} currentTitle={current?.title || site?.title || ""} onOpen={(url) => void run("navigate", url)} active={active} />
@@ -438,7 +477,13 @@ export function WebWorkspacePanel({
               <button type="button" className="settings-button settings-button-ghost" disabled={blank} onClick={openExternal}>{t("webWorkspace.openExternal")}</button>
             </div>
           </div>
-        ) : blank ? <div className="web-workspace-message web-workspace-new-page"><Globe className="icon" aria-hidden="true" /><button type="button" className="settings-button settings-button-ghost" onClick={focusAddress}>{t("webWorkspace.addressSearch")}</button></div>
+        ) : blank ? <WebWorkspaceStartPage searchField={
+          <WebWorkspaceAddress className="web-workspace-start-address" api={api} destinationId={site?.id} pageKey={`${site?.id}/${current?.activeTabId}`} active={active}
+            inputRef={startInputRef} value={address} disabled={!site || !api} invalid={Boolean(addressError)} errorID={addressErrorID}
+            onChange={changeAddress} onSubmit={openAddress} onEscape={restoreAddress} leading={<Search className="icon" aria-hidden="true" />}>
+            <button type="submit" className="icon-button workspace-browser-nav web-workspace-start-submit" disabled={!address.trim()} aria-label={t("webWorkspace.addressSearch")} title={t("webWorkspace.addressSearch")}><ArrowRight className="icon" aria-hidden="true" /></button>
+          </WebWorkspaceAddress>
+        } />
           : !current ? <div className="web-workspace-message" role="status"><p>{t("webWorkspace.loading")}</p></div> : null}
       </div>
     </div>

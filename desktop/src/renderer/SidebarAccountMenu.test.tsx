@@ -18,7 +18,10 @@ async function mount(driver?: AccountDriver, onOpenAccount = vi.fn()) {
   return navigate;
 }
 const trigger = () => container.querySelector("button")!;
-async function open() { await act(async () => trigger().click()); }
+async function open() {
+  await act(async () => trigger().click());
+  await act(async () => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
+}
 function item(key: Parameters<typeof translateCurrent>[0]) {
   const result = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')).find(button => button.textContent === translateCurrent(key));
   if (!result) throw new Error(`Missing menu item ${key}`);
@@ -33,6 +36,14 @@ describe("SidebarAccountMenu", () => {
     expect(document.activeElement).toBe(item("sidebar.settings"));
     act(() => document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     expect(document.querySelector('[role="menu"]')).toBeNull(); expect(document.activeElement).toBe(trigger());
+    for (const shiftKey of [false, true]) {
+      await open();
+      const tab = new KeyboardEvent("keydown", { key: "Tab", shiftKey, bubbles: true, cancelable: true });
+      act(() => document.activeElement?.dispatchEvent(tab));
+      expect(document.querySelector('[role="menu"]')).toBeNull();
+      expect(document.activeElement).toBe(trigger());
+      expect(tab.defaultPrevented).toBe(false);
+    }
     await open(); act(() => item("sidebar.settings").click()); expect(navigate).toHaveBeenLastCalledWith("providers");
     await open(); act(() => item("settings.usage").click()); expect(navigate).toHaveBeenLastCalledWith("usage");
   });

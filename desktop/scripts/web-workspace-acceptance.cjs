@@ -6,7 +6,7 @@ const path = require('node:path');
 const http = require('node:http');
 const { spawnSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
-const { BrowserWindow, dialog, nativeImage, session, webContents } = require('electron');
+const { app, BrowserWindow, dialog, nativeImage, session, webContents } = require('electron');
 const { prepareMediaFixture, serveMediaFixture, runBrowserMediaAcceptance } = require('./browser-media-acceptance.cjs');
 
 async function createWebsiteFixture(home) {
@@ -74,7 +74,8 @@ async function runWebsiteAcceptance(h, fixture) {
   const formName = '.ribbon-website-form label:first-child input';
   const formURL = '.ribbon-website-form label:nth-child(2) input';
   const webRoot = '[data-wuu-component="web-workspace"]';
-  const address = `${webRoot} .workspace-browser-url-input`;
+  const address = `${webRoot} .web-workspace-toolbar .workspace-browser-url-input`;
+  const startInput = '.web-workspace-stage:not([hidden]) .web-workspace-start-search input';
   const toolbar = name => `${webRoot} button[aria-label="${name}"]`;
   const ribbon = name => `.sidebar-ribbon-main button[aria-label="${name}"]`;
   const prefs = () => evaluate(() => JSON.parse(localStorage.getItem('wuu.navigation-ribbon.v1')));
@@ -170,6 +171,49 @@ async function runWebsiteAcceptance(h, fixture) {
     report.actions.push({ label: `${label}-snapshot`, atMs: Date.now() - started, image: image.getSize(), sampledColors: colors.size, sha256: createHash('sha256').update(image.toPNG()).digest('hex') });
     save();
   }
+  async function profileMenu(label, wc) {
+    await click('.sidebar-account-trigger', `open-profile-${label}`);
+    await waitFor(() => document.querySelector('.sidebar-account-menu[role="menu"]'));
+    if (wc) await assertMenuBackdrop(`profile-${label}`);
+    const geometry = await evaluate(() => {
+      const menu = document.querySelector('.sidebar-account-menu'), r = menu.getBoundingClientRect();
+      return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, viewport: { width: innerWidth, height: innerHeight },
+        hit: [r.left + 8, r.right - 8].every(x => menu.contains(document.elementFromPoint(x, r.top + r.height / 2))),
+        items: [...menu.querySelectorAll('[role="menuitem"]')].map(item => {
+          const b = item.getBoundingClientRect();
+          return { text: item.textContent, hit: item.contains(document.elementFromPoint(b.right - 8, b.top + b.height / 2)) };
+        }) };
+    });
+    assert.ok(geometry.left >= 0 && geometry.top >= 0 && geometry.right <= geometry.viewport.width
+      && geometry.bottom <= geometry.viewport.height && geometry.hit && geometry.items.every(item => item.hit),
+    `Full account panel stays above the browser and is hit-testable: ${JSON.stringify(geometry)}`);
+    await capture(`profile-over-${label}`);
+    xinput(['key', '--clearmodifiers', 'Escape']);
+    await waitFor(() => !document.querySelector('.sidebar-account-menu'));
+    if (wc) await until(() => !wc.isDestroyed() && win.contentView.children.some(view => view.webContents === wc && view.getVisible()), 'Profile dismissal restores the same native page');
+    if (wc) {
+      geometry.keyboardDepartures = [];
+      for (const [chord, direction] of [['Tab', 1], ['shift+Tab', -1]]) {
+        const expected = await evaluate(direction => {
+          const items = [...document.querySelectorAll('a[href],button,input,textarea,select,[tabindex]')].filter(node =>
+            node instanceof HTMLElement && node.tabIndex >= 0 && !node.matches(':disabled') && !node.closest('[inert]')
+            && node.getBoundingClientRect().width > 0 && node.getBoundingClientRect().height > 0 && getComputedStyle(node).visibility !== 'hidden');
+          const index = items.indexOf(document.querySelector('.sidebar-account-trigger'));
+          return items[(index + direction + items.length) % items.length].outerHTML;
+        }, direction);
+        await click('.sidebar-account-trigger', `profile-${chord}-departure`, false);
+        await waitFor(() => document.querySelector('.sidebar-account-menu')?.contains(document.activeElement));
+        xinput(['key', '--clearmodifiers', chord]);
+        await waitFor(() => !document.querySelector('.sidebar-account-menu'));
+        const actual = await evaluate(() => document.activeElement?.outerHTML);
+        assert.equal(actual, expected, `${chord} continues from the profile trigger, not the document-end portal`);
+        await until(() => !wc.isDestroyed() && win.contentView.children.some(view => view.webContents === wc && view.getVisible()), `${chord} restores the native page`);
+        geometry.keyboardDepartures.push({ chord, focus: actual.slice(0, 400), nativeContentsID: wc.id });
+      }
+      await capture('profile-keyboard-departures');
+    }
+    return geometry;
+  }
   async function openSite(name, pathname) {
     await click(ribbon(name), `open-${name}`);
     await waitFor(() => [...document.querySelectorAll('[data-wuu-component="web-workspace"]')].some(node => node.getBoundingClientRect().width > 0));
@@ -218,6 +262,132 @@ async function runWebsiteAcceptance(h, fixture) {
     }
   });
   let alphaID, savedOrder;
+
+  await testNative('bundled Notion ribbon resolves its setting and creates the native website', async () => {
+    const diagnostic = report.notionPlugin = {
+      entry: 'notion-workspace:website', requestedURL: 'https://www.notion.so/',
+      externalAccount: false, samples: [], events: [], networkStatus: 'pending',
+    };
+    const created = [];
+    const observe = (_event, wc) => {
+      if (wc === win.webContents) return;
+      created.push(wc);
+      const record = (event, detail = {}) => {
+        diagnostic.events.push({ atMs: Date.now() - started, id: wc.id, event, ...detail }); save();
+      };
+      record('created');
+      for (const event of ['did-start-loading', 'did-stop-loading', 'dom-ready', 'did-finish-load']) {
+        wc.on(event, () => record(event, { url: wc.getURL(), loading: wc.isLoading() }));
+      }
+      wc.on('did-start-navigation', (_event, url, inPlace, mainFrame) => {
+        if (mainFrame) record('did-start-navigation', { url, inPlace });
+      });
+      wc.on('did-redirect-navigation', (_event, url, inPlace, mainFrame) => {
+        if (mainFrame) record('did-redirect-navigation', { url, inPlace });
+      });
+      wc.on('did-navigate', (_event, url, statusCode, statusText) => record('did-navigate', { url, statusCode, statusText }));
+      wc.on('did-fail-load', (_event, code, description, url, mainFrame) => {
+        if (mainFrame) record('did-fail-load', { code, description, url });
+      });
+      wc.on('console-message', event => {
+        if (event.level === 'error' && diagnostic.events.filter(item => item.event === 'console-error').length < 20) {
+          record('console-error', { message: event.message.slice(0, 1800), source: event.sourceId, line: event.lineNumber });
+        }
+      });
+      wc.on('render-process-gone', (_event, detail) => record('render-process-gone', detail));
+      wc.on('destroyed', () => record('destroyed'));
+    };
+    app.on('web-contents-created', observe);
+    const pluginRow = '.plugin-row[data-plugin="notion-workspace"]';
+    try {
+      await click(plugins, 'notion-open-extension-inventory');
+      await click(pick('.sidebar-section-item', 'Plugins'), 'notion-plugin-list');
+      await waitFor(selector => document.querySelector(selector), pluginRow);
+      await click(`${pluginRow} [role="switch"]`, 'enable-bundled-notion');
+      await waitFor(() => document.querySelector('.sidebar-ribbon-main button[aria-label="Notion"]'), undefined, 'bundled Notion ribbon activation', 20000);
+      diagnostic.ribbonID = await evaluate(() => document.querySelector('.sidebar-ribbon-main button[aria-label="Notion"]').dataset.ribbonId);
+      assert.ok(diagnostic.ribbonID.startsWith('plugin:'), 'Notion is a registered plugin destination, not a website shortcut');
+      const [registeredPluginID] = JSON.parse(diagnostic.ribbonID.slice('plugin:'.length));
+      diagnostic.registeredPluginID = registeredPluginID;
+      const selectedAt = Date.now();
+      await click(ribbon('Notion'), 'actual-bundled-notion-ribbon');
+      for (const elapsed of [0, 3000, 10000, 20000]) {
+        await delay(Math.max(0, selectedAt + elapsed - Date.now()));
+        const shell = await evaluate(registeredPluginID => {
+          const root = [...document.querySelectorAll('.plugin-workbench-view, [data-wuu-component="plugin-view-content"]')]
+            .find(node => (node.dataset.pluginId || node.dataset.wuuPlugin) === registeredPluginID
+              && node.getBoundingClientRect().width > 0 && node.getBoundingClientRect().height > 0);
+          return { mounted: Boolean(root), text: root?.innerText.slice(0, 1600) || '',
+            nativeHost: root?.querySelector('[data-wuu-component="web-workspace"]')?.getAttribute('data-website-id') || null,
+            alert: root?.querySelector('[role="alert"]')?.textContent || null };
+        }, registeredPluginID);
+        const native = [];
+        for (const view of win.contentView.children) {
+          const wc = view.webContents;
+          if (!wc || wc.isDestroyed() || !created.includes(wc)) continue;
+          const state = { id: wc.id, url: wc.getURL(), visible: view.getVisible(), loading: wc.isLoading(), bounds: view.getBounds() };
+          if (!wc.isLoadingMainFrame() && /^https:\/\//.test(state.url)) {
+            state.document = await Promise.race([
+              wc.executeJavaScript('({title:document.title,ready:document.readyState,userAgent:navigator.userAgent,text:document.body?.innerText.slice(0,1800)||"",visibleInputs:Array.from(document.querySelectorAll("input")).filter(e=>e.getBoundingClientRect().width>0).map(e=>({type:e.type,placeholder:e.placeholder}))})').catch(error => ({ error: String(error) })),
+              delay(1500).then(() => ({ unavailable: 'document observation timed out' })),
+            ]);
+          }
+          native.push(state);
+        }
+        diagnostic.samples.push({ elapsedMs: Date.now() - selectedAt, shell, native });
+        save(); await capture(`notion-plugin-${elapsed}ms`);
+      }
+      const last = diagnostic.samples.at(-1);
+      diagnostic.networkStatus = last.native.some(page => !page.loading && page.document?.text)
+        ? 'document-rendered' : diagnostic.events.some(event => event.event === 'did-fail-load') ? 'navigation-failed' : 'unsettled-after-20s';
+      diagnostic.createdContents = created.length;
+      save();
+      assert.ok(last.shell.nativeHost, `Bundled Notion must leave its plugin loading state: ${JSON.stringify(last.shell)}`);
+      assert.ok(diagnostic.events.some(event => event.event === 'did-start-navigation' && event.url === diagnostic.requestedURL), 'The actual plugin requests its default notion.so URL');
+      assert.ok(last.native.some(page => page.visible), 'The Notion plugin presents its native page, independent of external network availability');
+      assert.ok(created.length <= 2, `Plugin renders must not recreate native pages repeatedly: ${created.length}`);
+      // Anonymous notion.so can redirect to marketing. Follow its real public
+      // login link to observe the application, without entering any account data.
+      const page = created.find(wc => !wc.isDestroyed() && /^https:\/\/(?:www\.)?notion\.(?:com|so)\//.test(wc.getURL()));
+      const existingLogin = last.native.find(page => /^https:\/\/(?:app\.|www\.)?notion\.(?:com|so)\/login/.test(page.url) && page.document?.visibleInputs?.length);
+      diagnostic.publicLogin = existingLogin ? { status: 'login-form-visible', ...existingLogin } : { status: 'not-offered' };
+      if (existingLogin) { save(); await capture('notion-public-application-login'); }
+      else if (page && !page.isLoadingMainFrame()) {
+        const href = await Promise.race([
+          page.executeJavaScript(`Array.from(document.querySelectorAll('a[href]')).find(a => /^(log in|登录)$/i.test(a.textContent.trim()))?.getAttribute('href') || ''`),
+          delay(1500).then(() => ''),
+        ]);
+        const destination = href ? new URL(href, page.getURL()) : null;
+        if (destination?.protocol === 'https:' && /(^|\.)notion\.(com|so)$/.test(destination.hostname) && destination.pathname.startsWith('/login')) {
+          diagnostic.publicLogin = { requestedURL: destination.href, status: 'observing' }; save();
+          await pageClick(page, `a[href=${JSON.stringify(href)}]`, 'notion-public-login-link');
+          await delay(10000);
+          const live = created.filter(wc => !wc.isDestroyed()).map(wc => ({ id: wc.id, url: wc.getURL(), loading: wc.isLoading() }));
+          diagnostic.publicLogin.pages = live;
+          const login = created.find(wc => !wc.isDestroyed() && /^https:\/\/(?:app\.|www\.)?notion\.(?:com|so)\/login/.test(wc.getURL()));
+          if (login && !login.isLoadingMainFrame()) {
+            diagnostic.publicLogin.document = await Promise.race([
+              login.executeJavaScript('({title:document.title,ready:document.readyState,userAgent:navigator.userAgent,text:document.body?.innerText.slice(0,2400)||"",visibleInputs:Array.from(document.querySelectorAll("input")).filter(e=>e.getBoundingClientRect().width>0).map(e=>({type:e.type,placeholder:e.placeholder}))})'),
+              delay(1500).then(() => ({ unavailable: 'document observation timed out' })),
+            ]);
+          }
+          diagnostic.publicLogin.status = diagnostic.publicLogin.document?.visibleInputs?.length ? 'login-form-visible' : 'unsettled-after-10s';
+          save(); await capture('notion-public-application-login');
+        }
+      }
+      return { requestedURL: diagnostic.requestedURL, networkStatus: diagnostic.networkStatus, createdContents: created.length, final: last };
+    } finally {
+      app.removeListener('web-contents-created', observe);
+      // Return the isolated profile to its original optional-plugin state so
+      // external activity cannot contaminate unrelated local fixture journeys.
+      await click(plugins, 'notion-diagnostic-return-to-inventory');
+      await click(pick('.sidebar-section-item', 'Plugins'), 'notion-diagnostic-plugin-list');
+      if (await evaluate(selector => document.querySelector(`${selector} [role="switch"]`)?.getAttribute('aria-checked') === 'true', pluginRow)) {
+        await click(`${pluginRow} [role="switch"]`, 'disable-diagnostic-notion');
+      }
+      await goConversations();
+    }
+  });
 
   await testNative('optional websites add safely and stay lazy until selected', async () => {
     assert.equal(await evaluate(() => document.querySelectorAll('[data-wuu-component="website-navigation-item"]').length), 0, 'No websites are added by default');
@@ -396,6 +566,15 @@ async function runWebsiteAcceptance(h, fixture) {
           }
         }
         await capture(`bounds-${theme}-${width}-zoom-${zoom}`);
+        if (width === 440 || theme === 'dark') {
+          await click('.web-workspace-stage:not([hidden]) .web-workspace-new-tab', `new-tab-${theme}-${width}`);
+          await waitFor(selector => document.activeElement?.matches(selector), startInput);
+          await hidden('new-tab start page');
+          await capture(`new-tab-${theme}-${width}-font-${size}`);
+          if (width === 440) await profileMenu('narrow-new-tab');
+          await click('.web-workspace-stage:not([hidden]) .web-workspace-tab[data-active] .web-workspace-tab-close', 'return-from-visual-new-tab');
+          await until(() => nativeView('/alpha')?.getVisible(), 'Closing visual new tab restores website');
+        }
         samples.push({ theme, size, width, zoom, bounds, chrome });
       }
     } finally { win.webContents.setZoomFactor(1); await appearance('light', 15, 1280); }
@@ -467,9 +646,12 @@ async function runWebsiteAcceptance(h, fixture) {
       { stage: liveStage, count: before });
     await until(() => nativeView('/alpha')?.getVisible(), 'Native tab buttons remain clickable inside the draggable strip');
     await pageClick(wc, '#draft', 'native-tab-shortcut-focus'); xinput(['key', '--clearmodifiers', 'ctrl+t']);
-    await waitFor(({ stage, count }) => document.querySelectorAll(`${stage} [role=tab]`).length === count && document.activeElement?.matches('.workspace-browser-url-input'), { stage: liveStage, count: before + 1 });
+    await waitFor(({ stage, count, input }) => document.querySelectorAll(`${stage} [role=tab]`).length === count && document.activeElement?.matches(input), { stage: liveStage, count: before + 1, input: startInput });
     await hidden('new blank tab');
-    await navigateAddress('/tab-two', 'new-tab'); wc = nativeView('/tab-two').webContents;
+    await fill(startInput, origin + '/tab-two');
+    await capture('new-tab-central-address'); xinput(['key', '--clearmodifiers', 'Return']);
+    await until(() => nativeView('/tab-two')?.getVisible() && !nativeView('/tab-two').webContents.isLoading(), 'Central new-tab input navigates on native Return');
+    wc = nativeView('/tab-two').webContents;
     report.nativeFindEvents ||= [];
     wc.on('found-in-page', (_event, result) => { report.nativeFindEvents.push({ contentsID: wc.id, result, atMs: Date.now() - started }); save(); });
     await pageClick(wc, '#draft', 'native-find-shortcut-focus'); xinput(['key', '--clearmodifiers', 'ctrl+f']);
@@ -541,6 +723,51 @@ async function runWebsiteAcceptance(h, fixture) {
     await click('[data-browser-bookmark-current]', 'bookmark-local-page');
     await waitFor(() => document.querySelector('[data-browser-bookmark-current]')?.getAttribute('aria-pressed') === 'true');
     await navigateAddress('/history-target', 'history-page');
+    const tabsBeforeStart = (await readSite()).tabs.length;
+    await click(`${liveStage} .web-workspace-new-tab`, 'saved-history-new-tab');
+    await waitFor(selector => document.activeElement?.matches(selector), startInput);
+    await waitFor(() => {
+      const mascot = document.querySelector('.web-workspace-start-mascot');
+      return mascot?.getBoundingClientRect().width > 0 && (!(mascot instanceof HTMLImageElement) || mascot.complete && mascot.naturalWidth > 0);
+    });
+    await capture('mascot-new-tab-ready');
+    await fill(startInput, 'fixture');
+    const suggestion = url => `[data-address-suggestion-url="${url}"]`;
+    await waitFor(({ alpha, history }) => document.querySelector(`[data-address-suggestion-url="${alpha}"]`)?.dataset.addressSuggestionSource === 'bookmark'
+      && document.querySelector(`[data-address-suggestion-url="${history}"]`)?.dataset.addressSuggestionSource === 'history', { alpha: origin + '/alpha', history: origin + '/history-target' });
+    await capture('central-history-and-bookmark-suggestions');
+    xinput(['key', '--clearmodifiers', 'Escape']);
+    await waitFor(selector => !document.querySelector('[data-web-workspace-address-suggestions]') && document.activeElement?.matches(selector) && document.activeElement.value === 'fixture', startInput);
+    await fill(startInput, 'alpha');
+    await waitFor(selector => document.querySelector(selector), suggestion(origin + '/alpha'));
+    xinput(['key', '--clearmodifiers', 'Down']);
+    await waitFor(url => document.querySelector(`[data-address-suggestion-url="${url}"]`)?.getAttribute('aria-selected') === 'true', origin + '/alpha');
+    xinput(['key', '--clearmodifiers', 'Return']);
+    await until(() => nativeView('/alpha')?.getVisible() && !nativeView('/alpha').webContents.isLoading(), 'Keyboard selection opens the saved bookmark');
+    // The page now owns native focus. A renderer-only sendInputEvent can edit
+    // its DOM address field without moving OS focus from the WebContentsView.
+    // Exercise the real user's click and typing before judging autocomplete.
+    await click(address, 'focus-toolbar-history-suggestions');
+    await until(() => win.webContents.isFocused(), 'Native toolbar click transfers keyboard focus to the shell');
+    xinput(['key', '--clearmodifiers', 'ctrl+a']);
+    xinput(['type', '--clearmodifiers', '--delay', '0', 'history-target']);
+    await waitFor(selector => document.activeElement?.matches(selector) && document.activeElement.value === 'history-target', address);
+    await waitFor(selector => document.querySelector(selector), suggestion(origin + '/history-target'));
+    await assertMenuBackdrop('toolbar-address-suggestions');
+    await capture('toolbar-history-suggestion-over-page');
+    xinput(['key', '--clearmodifiers', 'Escape']);
+    await waitFor(selector => !document.querySelector('[data-web-workspace-address-suggestions]') && document.activeElement?.matches(selector) && document.activeElement.value === 'history-target', address);
+    await until(() => nativeView('/alpha')?.getVisible(), 'Escape restores native page while retaining address draft');
+    xinput(['key', '--clearmodifiers', 'Down']);
+    await waitFor(selector => document.querySelector(selector), suggestion(origin + '/history-target'));
+    await click(suggestion(origin + '/history-target'), 'choose-history-with-pointer');
+    await until(() => nativeView('/history-target')?.getVisible() && !nativeView('/history-target').webContents.isLoading(), 'Pointer selection opens stored history URL');
+    const selectedPage = nativeView('/history-target').webContents;
+    const profile = await profileMenu('live-website', selectedPage);
+    assert.equal(selectedPage.getURL(), origin + '/history-target');
+    await capture('profile-dismissed-native-page-restored');
+    await click(`${liveStage} .web-workspace-tab[data-active] .web-workspace-tab-close`, 'close-suggestion-journey-tab');
+    await until(async () => (await readSite()).tabs.length === tabsBeforeStart && nativeView('/history-target')?.getVisible(), 'Close journey tab restores original browsing state');
     await click('[data-browser-library-trigger]', 'open-browser-library'); await assertMenuBackdrop('browser library');
     await fill('[data-browser-library] input[type=search]', 'history-target');
     await waitFor(url => document.querySelector(`[data-library-url="${url}"]`), origin + '/history-target');
@@ -559,7 +786,7 @@ async function runWebsiteAcceptance(h, fixture) {
     assert.ok(state.bookmarks.some(bookmark => bookmark.url === origin + '/alpha'), 'Clearing history retains bookmarks');
     clearedHistoryURL = origin + '/history-target';
     await capture('cleared-history-retained-bookmark'); xinput(['key', 'Escape']);
-    return { history: state.history.length, bookmarks: state.bookmarks.length };
+    return { history: state.history.length, bookmarks: state.bookmarks.length, keyboardAndPointerSuggestions: true, profile };
   });
 
   await testNative('failed website navigation retries requested destination', async () => {

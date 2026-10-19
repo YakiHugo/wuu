@@ -72,7 +72,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
 
   constructor(
     private readonly onState: (owner: BrowserWindow, state: WebWorkspaceState) => void,
-    private readonly onFocusAddress: (owner: BrowserWindow, id: string) => void,
+    private readonly onFocusAddress: (owner: BrowserWindow, id: string, newTabId?: string) => void,
     private readonly options: {
       onReveal?: (owner: BrowserWindow, id: string) => void;
       onFocusFind?: (owner: BrowserWindow, id: string) => void;
@@ -752,9 +752,9 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     } else if (key === "t" && group.tabbed) {
       event.preventDefault();
       if (group.tabs.length >= WEB_WORKSPACE_TAB_LIMIT) return;
-      if (input.shift) this.reopenTab(page.owner, group.id); else this.createTab(page.owner, group.id);
+      const next = input.shift ? this.reopenTab(page.owner, group.id) : this.createTab(page.owner, group.id);
       page.owner.webContents.focus();
-      this.onFocusAddress(page.owner, group.id);
+      this.onFocusAddress(page.owner, group.id, input.shift ? undefined : next.activeTabId);
     } else if (key === "w" && !input.shift && group.tabbed) {
       event.preventDefault();
       void this.closeTab(page.owner, group.id, group.activeTabId).then(() => {

@@ -441,12 +441,6 @@ html:not([data-app-background]) .navigation-ribbon-layout:has(.sidebar-ribbon) :
   flex-basis: var(--sidebar-ribbon-icon-size);
 }
 
-.sidebar-account-compact .sidebar-account-menu {
-  inset-inline: 0 auto;
-  width: max(240px, 15em);
-  max-width: calc(100vw - var(--space-4));
-}
-
 .sidebar-account-compact .desktop-update {
   inset: auto 0 80px;
   display: grid;

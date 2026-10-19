@@ -97,8 +97,19 @@ ipcMain.handle = (channel, handler) => originalHandle(channel, async (...args) =
   }
   const entry = { channel, completed: false, ...(channel === 'wuu:browser-pip-host-layout' ? { payload: args[1] } : {}) };
   rpc.push(entry);
-  try { const value = await handler(...args); entry.completed = true; return value; }
-  catch (error) { entry.error = String(error); throw error; }
+  // Diagnose the public website setting only, never credential settings.
+  const websiteSetting = channel === 'wuu:plugin-setting-get' && args[1]?.key === 'website-url'
+    ? { id: args[1].id, key: args[1].key, startedAtMs: Date.now() - started } : undefined;
+  if (websiteSetting) (report.websiteSettingReads ||= []).push(websiteSetting);
+  try {
+    const value = await handler(...args); entry.completed = true;
+    if (websiteSetting) Object.assign(websiteSetting, { completedAtMs: Date.now() - started, value: value.value });
+    return value;
+  } catch (error) {
+    entry.error = String(error);
+    if (websiteSetting) websiteSetting.error = String(error);
+    throw error;
+  }
 });
 let win;
 let websiteFixture;

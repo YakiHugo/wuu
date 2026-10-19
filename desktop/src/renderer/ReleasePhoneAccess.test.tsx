@@ -50,7 +50,7 @@ describe.each([undefined, "true"])("production phone access (build override: %s)
       </PhoneNavigationContext.Provider>,
     ));
     await act(async () => container!.querySelector<HTMLButtonElement>(".sidebar-account-trigger")!.click());
-    const menuItems = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'));
+    const menuItems = Array.from(document.querySelectorAll<HTMLButtonElement>('.sidebar-account-menu [role="menuitem"]'));
     expect(menuItems.map(item => item.textContent)).toEqual([t("settings.usage"), t("sidebar.settings")]);
     expect(remoteAccount).not.toHaveBeenCalled();
     await act(async () => menuItems.find(item => item.textContent === t("sidebar.settings"))!.click());

@@ -59,7 +59,8 @@ export type WebWorkspaceApi = {
   close: (id: string) => Promise<void>;
   onState: (handler: (state: WebWorkspaceState) => void) => () => void;
   onReveal: (handler: (id: string) => void) => () => void;
-  onFocusAddress: (handler: (id: string) => void) => () => void;
+  /** A new-tab target focuses its central field after the matching state renders. */
+  onFocusAddress: (handler: (id: string, newTabId?: string) => void) => () => void;
   onFocusFind: (handler: (id: string) => void) => () => void;
   listDownloads: () => Promise<WebWorkspaceDownloadState[]>;
   downloadCommand: (id: string, command: WebWorkspaceDownloadCommand) => Promise<WebWorkspaceDownloadState[]>;

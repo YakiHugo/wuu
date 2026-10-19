@@ -354,7 +354,7 @@ const webWorkspaceDownloads = new WebWorkspaceDownloads(
 );
 const webWorkspaceHost = new WebWorkspaceHost(
   (owner, state) => sendToWindow(owner, "wuu:web-workspace-state", state),
-  (owner, id) => sendToWindow(owner, "wuu:web-workspace-focus-address", id),
+  (owner, id, newTabId) => sendToWindow(owner, "wuu:web-workspace-focus-address", { id, newTabId }),
   {
     library: webWorkspaceLibrary, downloads: webWorkspaceDownloads,
     onReveal: (owner, id) => sendToWindow(owner, "wuu:web-workspace-reveal", id),
