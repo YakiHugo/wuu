@@ -56,7 +56,7 @@ jobs:
           node-version-file: .node-version
 
       - name: Verify CI selection contracts
-        run: node --test .github/scripts/select-ci.test.mjs
+        run: node --test .github/scripts/select-ci.test.mjs .github/scripts/workflow-context.test.mjs
 
       - name: Check repository metadata
         run: make repository-check
@@ -952,7 +952,6 @@ jobs:
       WUU_RELEASE: '0'
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       WUU_TITLEBAR_FOCUSED_CONTROLS: '1'
-      WUU_TITLEBAR_OUTPUT: ${{ runner.temp }}/wuu-macos-focused-controls
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -980,6 +979,8 @@ jobs:
       - name: Exercise sandboxed narrow header and notification controls
         timeout-minutes: 3
         shell: bash
+        env:
+          WUU_TITLEBAR_OUTPUT: ${{ runner.temp }}/wuu-macos-focused-controls
         run: |
           mkdir -p "$WUU_TITLEBAR_OUTPUT"
           git rev-parse HEAD > "$WUU_TITLEBAR_OUTPUT/source-commit.txt"
