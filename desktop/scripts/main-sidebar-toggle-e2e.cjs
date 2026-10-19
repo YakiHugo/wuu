@@ -32,6 +32,10 @@ app.whenReady().then(async () => {
     const button = document.querySelector('${toggle}');
     const rect = button?.getBoundingClientRect();
     const group = button?.parentElement;
+    const chrome = document.querySelector('[data-wuu-component="window-chrome"]');
+    const lowerBoxes = [...document.querySelectorAll('.app-shell, .sidebar, .sidebar-hover-zone, .sidebar-resizer, .workspace-right-panel, .workspace-right-panel-resizer')]
+      .map(element => ({ target: element.className, bounds: element.getBoundingClientRect().toJSON() }))
+      .filter(element => element.bounds.height > 0);
     const historyControls = [...group.querySelectorAll('button')].map(control => {
       const bounds = control.getBoundingClientRect();
       const target = document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
@@ -49,11 +53,12 @@ app.whenReady().then(async () => {
       focusVisible: button?.matches(':focus-visible'), focused: document.activeElement === button,
       sameButton: button === window.sidebarToggleUnderTest,
       buttonCount: document.querySelectorAll('${toggle}').length,
-      shellOwned: group?.matches('.shell-page-history-controls') && group.parentElement === shell,
+      chrome: chrome?.getBoundingClientRect().toJSON(), lowerBoxes,
+      shellOwned: !!chrome && chrome.contains(group) && chrome.parentElement === shell.parentElement && !shell.contains(chrome),
       sameGroup: group === window.pageHistoryGroupUnderTest,
       historyControls,
       groupDraggable: getComputedStyle(group).getPropertyValue('-webkit-app-region') === 'drag',
-      outsideHiddenContent: !button?.closest('aside, [inert], .conversation-pane'),
+      outsideHiddenContent: !button?.closest('aside, [inert], .app-shell, .conversation-pane'),
       sidebarVisible: document.querySelector('.sidebar').checkVisibility({ checkVisibilityCSS: true, checkOpacity: true }),
       titlebar: !!document.querySelector('[data-wuu-component="conversation-titlebar"]') };
   })()`);
@@ -61,10 +66,14 @@ app.whenReady().then(async () => {
     const details = JSON.stringify(state);
     assert.deepEqual(state.historyControls.map(control => control.id), ['page-history-back', 'page-history-forward', 'sidebar-toggle']);
     assert(state.shellOwned && state.outsideHiddenContent && state.sameGroup && state.groupDraggable, details);
+    assert(state.chrome && Math.abs(state.chrome.left) < 0.1 && Math.abs(state.chrome.right - state.width) < 0.1
+      && Math.abs(state.chrome.top) < 0.1 && state.chrome.height > 0, `Chrome must span the window above content: ${details}`);
+    for (const layer of state.lowerBoxes) assert(layer.bounds.top >= state.chrome.bottom - 0.1,
+      `Content, drawer, hover and resize boxes must begin below chrome: ${details}`);
     for (const [index, control] of state.historyControls.entries()) {
       const box = control.bounds;
       assert(control.hit && control.noDrag && control.visible && box.width > 0 && box.height > 0, details);
-      assert(box.left >= 0 && box.right <= state.width && box.top >= 0, details);
+      assert(box.left >= 0 && box.right <= state.width && box.top >= state.chrome.top && box.bottom <= state.chrome.bottom + 0.1, details);
       if (index > 0) assert(state.historyControls[index - 1].bounds.right <= box.left, details);
       if (original) for (const axis of ['x', 'y']) {
         assert(Math.abs(box[axis] - original.historyControls[index].bounds[axis]) < 0.1, `History controls moved: ${details}`);
@@ -135,14 +144,30 @@ app.whenReady().then(async () => {
       assert(current.sidebar.right <= 0 || !current.sidebarVisible,
         `Collapsed sidebar must be fully hidden: ${JSON.stringify(current)}`);
       assert.equal(current.savedCollapsed, "true");
+      if (width === 440 || width === 1200) fs.writeFileSync(path.join(output, `${theme}-${font}-${width}-collapsed.png`),
+        (await win.webContents.capturePage()).toPNG());
       report.push({ theme, font, ...current });
     }
     const beforeHover = await measure();
     win.webContents.sendInputEvent({ type: "mouseMove", x: Math.round(beforeHover.button.x + beforeHover.button.width / 2), y: Math.round(beforeHover.button.y + beforeHover.button.height / 2) });
+    // Observe longer than the hover-reveal delay: toolbar hover must never reveal content.
+    for (let sample = 0; sample < 12; sample++) {
+      await new Promise(resolve => setTimeout(resolve, 40));
+      assert(!(await js(drawerOpen)), "Hovering the top toolbar must not reveal the drawer");
+    }
+    win.webContents.sendInputEvent({ type: "mouseMove", x: 1, y: Math.round(beforeHover.chrome.bottom / 2) });
+    for (let sample = 0; sample < 12; sample++) {
+      await new Promise(resolve => setTimeout(resolve, 40));
+      assert(!(await js(drawerOpen)), "The window edge above the sidebar must not reveal the drawer");
+    }
+    const edge = await js(`(() => { const box = document.querySelector('.sidebar-hover-zone').getBoundingClientRect();
+      return { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + Math.min(20, box.height / 2)) }; })()`);
+    win.webContents.sendInputEvent({ type: "mouseMove", ...edge });
     await wait(drawerOpen); await settled();
     const hover = await measure();
     assertHistoryControls(hover, original);
     assert(hover.hitsButton, JSON.stringify(hover));
+    fs.writeFileSync(path.join(output, `${theme}-${font}-below-chrome-drawer.png`), (await win.webContents.capturePage()).toPNG());
     await clickToggle(); await wait(`!(${collapsed})`); await settled();
     away(); await js(`document.querySelector('${toggle}').focus()`);
     key("Enter"); await wait(collapsed); await settled();
@@ -165,6 +190,40 @@ app.whenReady().then(async () => {
     report.push({ theme, font, keyboardCollapsed, keyboardDocked });
     report.push({ theme, font, hover, keyboard: await measure() });
   }
+  // Globalized tools retain drawer-only navigation, underneath the independent chrome.
+  await resize(1200);
+  await js(`document.querySelector('[data-wuu-component="right-sidebar-toggle"]').click()`);
+  await wait(`!!document.querySelector('.workspace-panel-globalize')`);
+  await js(`document.querySelector('.workspace-panel-globalize').click()`);
+  await wait(`document.querySelector('.app-shell').classList.contains('right-panel-globalized')`);
+  await settled();
+  if (!(await js(collapsed))) {
+    await clickToggle(); await wait(collapsed); await settled();
+  }
+  const globalized = await measure();
+  assertHistoryControls(globalized);
+  await clickToggle(); await wait(drawerOpen); await settled();
+  const globalizedDrawer = await measure();
+  assertHistoryControls(globalizedDrawer, globalized);
+  assert(await js(collapsed), "Globalized navigation must remain drawer-only");
+  win.webContents.sendInputEvent({ type: "mouseMove", x: Math.round(globalizedDrawer.button.x + globalizedDrawer.button.width / 2),
+    y: Math.round(globalizedDrawer.button.y + globalizedDrawer.button.height / 2) });
+  for (let sample = 0; sample < 12; sample++) {
+    await new Promise(resolve => setTimeout(resolve, 40));
+    assert(await js(drawerOpen), "A click-opened globalized drawer must survive pointer movement over its toggle");
+  }
+  win.webContents.sendInputEvent({ type: "mouseMove", x: Math.round(globalizedDrawer.button.x + globalizedDrawer.button.width / 2),
+    y: Math.round(globalizedDrawer.chrome.bottom - 1) });
+  await js(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
+  assert(await js(drawerOpen), "Crossing the vertical chrome gap above the rail must preserve the click-opened drawer");
+  win.webContents.sendInputEvent({ type: "mouseMove", x: Math.round(globalizedDrawer.sidebar.x + 50),
+    y: Math.round(globalizedDrawer.sidebar.top + 80) });
+  await js(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
+  assert(await js(drawerOpen), "Moving from the clicked toggle into its drawer must preserve navigation");
+  fs.writeFileSync(path.join(output, "globalized-below-chrome-drawer.png"), (await win.webContents.capturePage()).toPNG());
+  win.webContents.sendInputEvent({ type: "mouseMove", x: 600, y: Math.round(globalizedDrawer.chrome.bottom / 2) });
+  await wait(`!(${drawerOpen})`); await settled();
+  report.push({ globalized, globalizedDrawer });
   assert.equal(errors.length, 0, errors.join("\n"));
   fs.writeFileSync(path.join(output, "results.json"), JSON.stringify({ report, errors }, null, 2));
   console.log(`PASS: sidebar preference, rendered width, pointer and keyboard controls across ${report.length} scenarios. Evidence: ${output}`);

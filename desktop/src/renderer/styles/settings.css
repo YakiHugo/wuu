@@ -279,7 +279,7 @@
   align-items: center;
   /* Right side clears the Windows controls overlay; a no-op elsewhere
    * (the inset is 0 and max() collapses to the neutral padding). */
-  padding: var(--conversation-pane-inset) max(var(--window-titlebar-padding-inline), var(--window-controls-inset-right)) 0 var(--window-titlebar-padding-inline);
+  padding: var(--conversation-pane-inset) var(--window-titlebar-padding-inline) 0;
   -webkit-app-region: drag;
 }
 
@@ -308,12 +308,7 @@
   }
 }
 
-/* Once the settings rail is collapsed, the titlebar starts at the window
- * edge. Keep the toggle clear of the macOS traffic lights, matching the
- * main conversation titlebar reservation. */
-.settings-shell.sidebar-collapsed .settings-titlebar {
-  padding-left: calc(var(--window-titlebar-leading-inset) - var(--conversation-pane-inset) + var(--page-history-controls-width) + var(--control-toolbar-gap));
-}
+
 
 /* Column direction is load-bearing, not cosmetic: .settings-page carries
  * `flex: 1` (to fill the viewport height) alongside `width: min(…)`
@@ -363,7 +358,7 @@
   animation: content-swap-enter var(--content-swap-duration) var(--content-swap-easing) both;
 }
 
-/* The current page title and actions share the window strip. */
+/* The current page title and actions share the content header. */
 .settings-titlebar {
   gap: var(--space-2);
 }

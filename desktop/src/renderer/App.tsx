@@ -5671,6 +5671,7 @@ export function App(): JSX.Element {
       <ProjectActionsProvider value={projectAgentEnabled ? projectActions : null}>
       <WorkspaceBrowserOpenContext.Provider value={poppedOutMode || isTouchWebShell() ? undefined : openWorkspaceBrowserURL}>
       <ArtifactPreviewContext.Provider value={poppedOutMode || isTouchWebShell() ? undefined : openWorkspaceArtifactTab}>
+        <div className={`window-frame${poppedOutMode ? " popped-out-frame" : ""}`}>
         <div
           ref={appShellRef}
           className={shellClassName}
@@ -6291,8 +6292,10 @@ export function App(): JSX.Element {
           },
         }}
       />
-      {/* macOS applies app regions in DOM order, so a later drag titlebar would
-        * cover these no-drag controls. Keep them after the shell content. */}
+      </div>
+      {/* Native app regions follow DOM order. Chrome is visually first but
+          follows content so its controls remain outside every content drag region. */}
+      <header className="window-chrome" data-wuu-component="window-chrome" hidden={poppedOutMode}>
       {!poppedOutMode && sidebarToggleVisible ? (
         <PageHistoryControls {...pageHistory}>
         <button
@@ -6304,8 +6307,6 @@ export function App(): JSX.Element {
           onClick={rightPanelGlobalized && sidebarDrawerMode
             ? sidebarDrawerVisible ? closeSidebarDrawer : openSidebarDrawerNow
             : toggleSidebar}
-          onPointerEnter={scheduleSidebarDrawerOpen}
-          onPointerLeave={(event) => scheduleSidebarDrawerCloseFromPointerLeave(event.nativeEvent)}
         >
           <SidePanelToggleIcon side="left" open={!sidebarCollapsed || sidebarDrawerVisible} />
         </button>
@@ -6324,6 +6325,7 @@ export function App(): JSX.Element {
           <SidePanelToggleIcon side="right" open={rightPanelOpen} />
         </button>
       ) : null}
+      </header>
       </div>
     </ArtifactPreviewContext.Provider>
     </WorkspaceBrowserOpenContext.Provider>

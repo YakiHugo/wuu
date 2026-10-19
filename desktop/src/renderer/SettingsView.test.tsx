@@ -327,88 +327,40 @@ describe("SettingsView shell", () => {
     expect(onToggleSidebar).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the drawer open while the pointer crosses onto the shell-level toggle", () => {
+  it("does not reveal navigation when the independent window toggle is hovered", () => {
     vi.useFakeTimers();
-    installBuildInfoStub({
-      core: undefined,
-      desktop: { version: "0.0.0-test", date: "1970-01-01T00:00:00Z" },
-    });
+    installBuildInfoStub({ core: undefined, desktop: { version: "test", date: "today" } });
     renderSettings({ initialized: baseInitialized(), sidebarCollapsed: true });
-
-    const shell = container.querySelector<HTMLElement>(".settings-shell");
-    const sidebar = container.querySelector<HTMLElement>(".settings-sidebar");
-    const toggle = container.querySelector<HTMLElement>(
-      ".settings-shell > .shell-page-history-controls > .settings-sidebar-toggle",
-    );
-    expect(sidebar).not.toBeNull();
+    const toggle = container.querySelector<HTMLElement>(".settings-sidebar-toggle");
     expect(toggle).not.toBeNull();
-
-    Object.defineProperty(document, "elementFromPoint", {
-      configurable: true,
-      value: vi.fn(() => toggle),
-    });
+    Object.defineProperty(document, "elementFromPoint", { configurable: true, value: vi.fn(() => toggle) });
     act(() => {
       toggle?.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
-      vi.advanceTimersByTime(240);
+      vi.advanceTimersByTime(480);
     });
-    expect(shell?.classList.contains("sidebar-drawer-open")).toBe(true);
-
-    act(() => {
-      sidebar?.dispatchEvent(
-        new MouseEvent("pointerout", {
-          bubbles: true,
-          clientX: 80,
-          clientY: 24,
-          relatedTarget: toggle,
-        }),
-      );
-      vi.advanceTimersByTime(1);
-    });
-
-    expect(shell?.classList.contains("sidebar-drawer-open")).toBe(true);
-    expect(shell?.classList.contains("sidebar-drawer-closing")).toBe(false);
+    expect(container.querySelector(".sidebar-drawer-open")).toBeNull();
   });
 
-  it("closes the drawer when the pointer leaves the shell-level toggle for a non-hover target", () => {
+  it("reveals navigation at the lower edge and closes it when the pointer enters blank window chrome", () => {
     vi.useFakeTimers();
-    installBuildInfoStub({
-      core: undefined,
-      desktop: { version: "0.0.0-test", date: "1970-01-01T00:00:00Z" },
-    });
+    installBuildInfoStub({ core: undefined, desktop: { version: "test", date: "today" } });
     renderSettings({ initialized: baseInitialized(), sidebarCollapsed: true });
-
     const shell = container.querySelector<HTMLElement>(".settings-shell");
-    const toggle = container.querySelector<HTMLElement>(
-      ".settings-shell > .shell-page-history-controls > .settings-sidebar-toggle",
-    );
-    expect(toggle).not.toBeNull();
-
-    Object.defineProperty(document, "elementFromPoint", {
-      configurable: true,
-      value: vi.fn(() => toggle),
-    });
+    const edge = container.querySelector<HTMLElement>(".sidebar-hover-zone");
+    const chrome = container.querySelector<HTMLElement>('[data-wuu-component="window-chrome"]');
+    expect(edge).not.toBeNull();
+    expect(chrome).not.toBeNull();
+    Object.defineProperty(document, "elementFromPoint", { configurable: true, value: vi.fn(() => edge) });
     act(() => {
-      toggle?.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
+      edge?.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, clientX: 1, clientY: 80 }));
       vi.advanceTimersByTime(240);
     });
     expect(shell?.classList.contains("sidebar-drawer-open")).toBe(true);
-
-    Object.defineProperty(document, "elementFromPoint", {
-      configurable: true,
-      value: vi.fn(() => document.body),
-    });
+    Object.defineProperty(document, "elementFromPoint", { configurable: true, value: vi.fn(() => chrome) });
     act(() => {
-      toggle?.dispatchEvent(
-        new MouseEvent("pointerout", {
-          bubbles: true,
-          clientX: 320,
-          clientY: 24,
-          relatedTarget: document.body,
-        }),
-      );
+      window.dispatchEvent(new MouseEvent("pointermove", { bubbles: true, clientX: 600, clientY: 24 }));
       vi.advanceTimersByTime(1);
     });
-
     expect(shell?.classList.contains("sidebar-drawer-open")).toBe(false);
     expect(shell?.classList.contains("sidebar-drawer-closing")).toBe(true);
   });

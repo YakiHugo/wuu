@@ -1751,7 +1751,6 @@ export function AppSidebar({
   const nativeSidebar = (
     <>
       <div className="sidebar-content">
-        <div className="traffic-spacer" />
         <SidebarBrand
           unreadViewOpen={unreadViewOpen}
           attentionCount={attentionCount}

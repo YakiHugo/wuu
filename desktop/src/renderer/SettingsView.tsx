@@ -738,16 +738,13 @@ export function SettingsView({
       aria-label={sidebarCollapsed ? t("settings.expandSidebar") : t("settings.collapseSidebar")}
       aria-pressed={!sidebarCollapsed}
       onClick={onToggleSidebar}
-      onPointerEnter={scheduleSidebarDrawerOpen}
-      onPointerLeave={(event) =>
-        scheduleSidebarDrawerCloseFromPointerLeave(event.nativeEvent)
-      }
     >
       <SidePanelToggleIcon side="left" open={!sidebarCollapsed} />
     </button>
   );
 
   const nativeSettings = (
+    <div className="window-frame">
     <div ref={effectiveShellRef} className={shellClassName} style={shellStyle} data-wuu-component="settings-shell">
       <div
         ref={sidebarHoverZoneRef}
@@ -770,7 +767,6 @@ export function SettingsView({
           * 淡出/位移也复用 sidebar.css 里同一组规则。
           */}
         <div className="sidebar-content">
-          <div className="traffic-spacer" />
           <button className="settings-back-button" type="button" onClick={onBack}>
             <ArrowLeft className="icon" />
             <span>{t("settings.backToApp")}</span>
@@ -1006,10 +1002,12 @@ export function SettingsView({
           </div>
         </SettingsTitlebarSlot.Provider>
       </main>
-      {/* Keep native no-drag hit testing after every window drag strip. */}
+      </div>
+      <header className="window-chrome" data-wuu-component="window-chrome">
       {pageHistory ? (
         <PageHistoryControls {...pageHistory}>{sidebarToggle}</PageHistoryControls>
       ) : sidebarToggle}
+      </header>
     </div>
   );
   return (

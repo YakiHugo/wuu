@@ -42,6 +42,40 @@
   --sidebar-edge-shadow: 0 0 0 0 transparent;
 }
 
+/* Window chrome owns a real row. Every content surface, hover edge and resize
+ * target belongs to the lower shell, never the native titlebar's hit region. */
+.window-frame {
+  display: grid;
+  grid-template-rows: var(--window-titlebar-height) minmax(0, 1fr);
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  isolation: isolate;
+  background: var(--sidebar-material-fill);
+}
+
+.window-frame > :is(.app-shell, .settings-shell) {
+  grid-row: 2;
+  grid-column: 1;
+}
+
+.window-chrome {
+  grid-row: 1;
+  grid-column: 1;
+  position: relative;
+  min-width: 0;
+  z-index: 151;
+  -webkit-app-region: drag;
+}
+
+.window-chrome[hidden] {
+  display: none;
+}
+
+.popped-out-frame {
+  grid-template-rows: 0 minmax(0, 1fr);
+}
+
 .app-shell {
   display: grid;
   position: relative;
@@ -78,7 +112,7 @@
 .shell-right-sidebar-toggle {
   position: absolute;
   top: calc((var(--window-titlebar-height) - var(--control-size-toolbar)) / 2);
-  right: calc(var(--conversation-pane-inset) + max(var(--control-toolbar-inset), var(--window-controls-inset-right)));
+  right: max(var(--control-toolbar-inset), var(--window-controls-inset-right));
   z-index: 151;
   -webkit-app-region: no-drag;
 }
@@ -118,7 +152,7 @@
 .app-shell .workspace-right-panel[data-sheet="open"],
 .app-shell .workspace-right-panel[data-sheet="parked"] {
   position: fixed;
-  inset: 0 var(--conversation-pane-inset) 0 calc(var(--workspace-sheet-left, 0px) + var(--conversation-pane-inset));
+  inset: var(--window-titlebar-height) var(--conversation-pane-inset) 0 calc(var(--workspace-sheet-left, 0px) + var(--conversation-pane-inset));
   clip-path: inset(var(--conversation-pane-inset) 0 0 round var(--conversation-canvas-radius));
   /* Above the conversation, below an open sidebar drawer. A docked sidebar
    * remains outside the sheet's left edge and stays interactive. */
@@ -231,49 +265,6 @@
 
 .shell-left-sidebar-toggle * {
   -webkit-app-region: no-drag;
-}
-
-/* When the navigation sidebar is collapsed, the right panel starts at x=0;
- * reserve room on the left of its tabbar so the macOS traffic lights
- * (trafficLightPosition 18, 21) don't sit on top of the tabs. Mirrors the
- * popped-out titlebar reservation. The main titlebar (which normally
- * provides the window drag region) lives inside the now-hidden
- * conversation-pane, so the tabbar itself takes over as the drag handle.
- * Tabs + the tab strip stay part of the drag region (matching the docked
- * mode behavior) so opening a tab does not shrink the drag strip; only
- * the tabbar's buttons opt out via the `.workspace-panel-tabbar button`
- * rule in workspace.css. */
-.app-shell.right-panel-globalized.sidebar-collapsed .workspace-panel-tabbar {
-  padding-left: calc(var(--window-titlebar-leading-inset) - var(--conversation-pane-inset));
-  -webkit-app-region: drag;
-}
-
-.workspace-panel-sidebar-hit-hole {
-  width: var(--page-history-controls-width);
-  height: 100%;
-  flex: 0 0 var(--page-history-controls-width);
-  pointer-events: none;
-  -webkit-app-region: no-drag;
-}
-
-/* The panel already starts after the docked navigation sidebar when that
- * sidebar is visible. The hit-hole is only needed when the globalized panel
- * reaches the window's left edge and has to avoid the traffic lights. */
-.app-shell.right-panel-globalized:not(.sidebar-collapsed)
-  .workspace-panel-sidebar-hit-hole {
-  display: none;
-}
-
-.app-shell.sidebar-collapsed.right-panel-open:not(.right-panel-globalized) .workspace-panel-tabbar {
-  /* Expand only when the right panel's left edge enters the traffic-light zone. */
-  padding-left: clamp(
-    10px,
-    calc(
-      var(--window-controls-inset-left) -
-        (100vw - var(--conversation-pane-inset) - var(--workspace-right-panel-width, 360px))
-    ),
-    max(10px, var(--window-controls-inset-left))
-  );
 }
 
 /* Rail surface — shared between the main sidebar (`<aside class="sidebar">`)
@@ -401,7 +392,7 @@
   min-height: 0;
   height: 100%;
   flex-direction: column;
-  padding: 0 var(--sidebar-content-pad-x) var(--space-2);
+  padding: var(--space-2) var(--sidebar-content-pad-x);
   transform: translate3d(0, 0, 0) scale(1);
   transform-origin: left center;
   opacity: 1;
@@ -784,29 +775,6 @@
 
 .resizing-right-panel .workspace-right-panel-resizer {
   transition: none;
-}
-
-.sidebar-collapsed .titlebar {
-  /* Keep a product-owned visual gutter after the macOS traffic-light
-   * exclusion zone. Themes may decorate the first control, but they cannot
-   * shrink this window-chrome boundary. */
-  padding-left: var(--window-titlebar-leading-inset);
-}
-
-.traffic-spacer {
-  /* Match the conversation/settings row, including its zoom-aware minimum
-   * height, so sidebar controls never outgrow their reserved chrome. It
-   * keeps that height while empty: a drawer slides under the titlebar's
-   * lifted toggle, which would otherwise cover the wordmark. */
-  position: relative;
-  display: flex;
-  height: var(--window-titlebar-height);
-  flex-shrink: 0;
-  align-items: center;
-  justify-content: flex-end;
-  /* Preserve the sidebar accessory center while using the top-row hit size. */
-  padding-right: calc(var(--sidebar-row-pad-x) + (var(--sidebar-row-action-size) - var(--control-size-toolbar)) / 2);
-  -webkit-app-region: drag;
 }
 
 .sidebar-brand {
