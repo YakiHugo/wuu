@@ -564,6 +564,7 @@ export function App(): JSX.Element {
   const settingsShellRef = useRef<HTMLDivElement>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [nativeRibbonPresent, setNativeRibbonPresent] = useState(false);
+  const [nativeRibbonExpanded, setNativeRibbonExpanded] = useState(false);
   const embeddedSettings = !poppedOutMode && nativeRibbonPresent;
   const [mainComposerFocusRequest, setMainComposerFocusRequest] =
     useState<MainComposerFocusRequest | null>(null);
@@ -5727,6 +5728,7 @@ export function App(): JSX.Element {
               settingsActive={settingsOpen}
               onLeaveSettings={() => { setSettingsOpen(false); setActiveWebsiteID(undefined); }}
               onRibbonPresenceChange={setNativeRibbonPresent}
+              onRibbonExpandedChange={setNativeRibbonExpanded}
               catalogSection={catalogSection}
               onSelectCatalogSection={setCatalogSection}
               sidebarCollapsed={sidebarCollapsed}
@@ -6422,7 +6424,12 @@ export function App(): JSX.Element {
         }}
       />
       {!poppedOutMode && !isTouchWebShell() ? <PageHistoryControls {...pageHistory}
-        hidden={window.wuu.platform === "darwin" && nativeRibbonPresent && !(showingWebsite && !settingsOpen) && sidebarDrawerPhase !== "closed"}
+        hidden={window.wuu.platform === "darwin" && nativeRibbonPresent && (
+          (!(showingWebsite && !settingsOpen) && sidebarDrawerPhase !== "closed")
+          // The expanded ribbon covers the collapsed and browser header lanes.
+          // Docked content starts beyond it, so its history remains available.
+          || (nativeRibbonExpanded && (sidebarCollapsed || (showingWebsite && !settingsOpen)))
+        )}
       /> : null}
       {/* macOS applies app regions in DOM order, so a later drag titlebar would
         * cover this no-drag control. Keep it as the shell's last child. */}

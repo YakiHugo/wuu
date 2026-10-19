@@ -7,8 +7,8 @@
 }
 
 :root:has(.app-shell.navigation-ribbon-layout:not(.popped-out-shell)) {
-  /* This icon-only strip shares the native controls' fixed 22-DIP axis.
-     Keep page zoom out of its geometry, including Linux caption buttons. */
+  /* Window chrome shares the native controls' fixed 22-DIP axis. Keep page
+     zoom out of its geometry, including Linux caption buttons. */
   --window-titlebar-height: calc(44px / var(--desktop-page-zoom, 1));
 }
 
@@ -89,8 +89,8 @@ html[data-app-background] .app-shell.navigation-ribbon-layout:has(.sidebar-ribbo
   -webkit-app-region: drag;
 }
 
-/* The saved sidebar width includes both navigation levels. Collapsing hides
-   only the secondary pane, leaving global destinations in a stable rail. */
+/* The saved sidebar width includes the fixed icon rail. Hovering expands only
+   its overlay, so neither the secondary pane nor the page changes geometry. */
 .navigation-ribbon-layout:has(.sidebar-ribbon) .sidebar {
   grid-column: 1;
   overflow: visible;
@@ -228,24 +228,41 @@ html:not([data-app-background]) .navigation-ribbon-layout:has(.sidebar-ribbon) :
   inset: 0 auto 0 0;
   z-index: 126;
   display: flex;
-  width: var(--sidebar-ribbon-width, 48px);
+  width: var(--sidebar-ribbon-width);
   min-height: 0;
   flex-direction: column;
   align-items: center;
-  padding: calc(var(--workbench-top) + var(--space-2)) 6px var(--space-2);
+  padding: calc(var(--workbench-top) + var(--space-2)) 0 var(--space-2);
   background: transparent;
   pointer-events: auto;
   -webkit-app-region: no-drag;
 }
 
+/* The rail always occupies its original grid track. Expansion is an opaque
+   overlay; changing the shared width would reflow native browser contents.
+   Keep width immediate so native occlusion is resolved before it can paint. */
+.sidebar-ribbon[data-expanded="true"] {
+  width: min(200px, calc(100vw - var(--space-4)));
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  background: var(--sidebar-material-fill);
+  box-shadow: var(--shadow-drawer-right);
+}
+
+.navigation-ribbon-layout:has(.sidebar-ribbon[data-expanded="true"]) > .sidebar {
+  z-index: 132;
+}
+
 .sidebar-ribbon-main,
 .sidebar-ribbon-footer {
+  --sidebar-row-pad-x: max(0px, calc((var(--sidebar-ribbon-width) - var(--sidebar-ribbon-icon-size)) / 2 - var(--space-2)));
+  --sidebar-nav-column-gap: var(--space-2);
   display: flex;
   width: 100%;
   min-height: 0;
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;
   gap: var(--space-1);
+  padding-inline: var(--space-2);
 }
 
 .sidebar-ribbon-main {
@@ -257,41 +274,71 @@ html:not([data-app-background]) .navigation-ribbon-layout:has(.sidebar-ribbon) :
 .sidebar-ribbon-footer {
   position: relative;
   flex-shrink: 0;
-  padding-top: 40px;
+  padding-top: var(--space-3);
+}
+
+.sidebar-ribbon-tab-row {
+  position: relative;
+  min-width: 0;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
 }
 
 .sidebar-ribbon-button,
-.sidebar-account-compact .sidebar-account-trigger {
-  display: grid;
-  flex: 0 0 36px;
-  width: 36px;
-  height: 36px;
-  min-height: 36px;
-  padding: 0;
-  place-items: center;
+.sidebar-ribbon .sidebar-account-trigger {
+  position: relative;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: max(36px, 2.4em);
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--sidebar-row-pad-x);
   border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--ink-tertiary);
+  color: var(--ink-secondary);
+  font-size: var(--font-ui);
+  font-weight: var(--weight-regular);
+  line-height: 1.4;
+  text-align: left;
 }
 
 .sidebar-ribbon .sidebar-ribbon-button > :is(svg, .plugin-icon-asset, .plugin-icon-themed) {
   width: var(--sidebar-ribbon-icon-size);
   height: var(--sidebar-ribbon-icon-size);
+  flex-shrink: 0;
 }
 
+.sidebar-ribbon-label {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-ribbon-tab-row.closable .sidebar-ribbon-button {
+  /* Keep the title and pin stable when the close action appears. */
+  padding-inline-end: calc(var(--sidebar-row-action-size) + var(--space-1) * 2);
+}
+
+.sidebar-ribbon-tab-row:hover .sidebar-ribbon-button,
 .sidebar-ribbon-button:hover,
-.sidebar-account-compact .sidebar-account-trigger:hover {
+.sidebar-ribbon .sidebar-account-trigger:hover {
   background: var(--wuu-nav-item-hover-background, var(--ink-overlay-6));
   color: var(--ink);
 }
 
 .sidebar-ribbon-button:is([aria-current="page"], [aria-pressed="true"], [aria-expanded="true"]),
-.sidebar-account-compact .sidebar-account-trigger[aria-expanded="true"] {
+.sidebar-ribbon-tab-row.active .sidebar-ribbon-button,
+.sidebar-ribbon .sidebar-account-trigger[aria-expanded="true"] {
   background: var(--wuu-nav-item-active-background, var(--ink-overlay-8));
   color: var(--ink-strong);
 }
 
-.sidebar-ribbon-button:focus-visible {
+.sidebar-ribbon-button:focus-visible,
+.sidebar-ribbon-close:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
@@ -305,17 +352,60 @@ html:not([data-app-background]) .navigation-ribbon-layout:has(.sidebar-ribbon) :
   opacity: 0.45;
 }
 
-.sidebar-ribbon-button[data-dragging="true"] {
+.sidebar-ribbon-tab-row[data-dragging="true"] {
   z-index: 1;
   background: var(--workbench-canvas-bg);
   box-shadow: var(--shadow-card);
+}
+
+.sidebar-ribbon-button[data-dragging="true"] {
   cursor: grabbing;
+}
+
+.sidebar-ribbon-close {
+  position: absolute;
+  inset-inline-end: var(--space-1);
+  top: 50%;
+  display: grid;
+  width: var(--sidebar-row-action-size);
+  height: var(--sidebar-row-action-size);
+  padding: 0;
+  place-items: center;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--ink-secondary);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.sidebar-ribbon-close > svg {
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+}
+
+.sidebar-ribbon-tab-row:is(:hover, :focus-within, .active):not([data-dragging="true"]) .sidebar-ribbon-close {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.sidebar-ribbon-close:hover {
+  background: var(--ink-overlay-8);
+  color: var(--ink-strong);
+}
+
+@media (hover: none) {
+  .sidebar-ribbon-tab-row:not([data-dragging="true"]) .sidebar-ribbon-close {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 .sidebar-ribbon-website-icon {
   display: grid;
   width: var(--sidebar-ribbon-icon-size, var(--icon-size-xl));
   height: var(--sidebar-ribbon-icon-size, var(--icon-size-xl));
+  flex-shrink: 0;
   place-items: center;
   font-size: var(--font-ui);
   font-weight: var(--weight-medium);
@@ -327,23 +417,16 @@ html:not([data-app-background]) .navigation-ribbon-layout:has(.sidebar-ribbon) :
 }
 
 /* Pinning marks a persistent browser destination without adding another tier. */
-.sidebar-ribbon-button { position: relative; }
-
 .sidebar-ribbon .sidebar-ribbon-button > .sidebar-ribbon-pin {
-  position: absolute;
-  right: 1px;
-  bottom: 1px;
-  width: 10px;
-  height: 10px;
-  padding: 1px;
-  border-radius: 50%;
-  background: var(--workbench-canvas-bg);
+  width: var(--icon-size-xs);
+  height: var(--icon-size-xs);
   color: var(--ink-secondary);
 }
 
 .sidebar-ribbon-favicon {
   width: var(--sidebar-ribbon-icon-size, var(--icon-size-xl));
   height: var(--sidebar-ribbon-icon-size, var(--icon-size-xl));
+  flex-shrink: 0;
   object-fit: contain;
 }
 
@@ -354,33 +437,45 @@ html:not([data-app-background]) .navigation-ribbon-layout:has(.sidebar-ribbon) :
 }
 
 .sidebar-ribbon-divider {
-  width: 20px;
   height: 1px;
   flex-shrink: 0;
-  margin-block: var(--space-2);
+  margin: var(--space-2) var(--sidebar-row-pad-x);
   background: var(--hairline);
 }
 
-.sidebar-account-compact .sidebar-account-trigger {
-  grid-template-columns: 1fr;
+.sidebar-ribbon .sidebar-account-trigger {
+  display: grid;
+  grid-template-columns: var(--sidebar-ribbon-icon-size) minmax(0, 1fr) var(--sidebar-row-action-size);
 }
 
-.sidebar-account-compact .sidebar-account-name,
-.sidebar-account-compact .sidebar-account-trigger > svg {
-  display: none;
-}
-
-.sidebar-account-compact .sidebar-account-avatar {
+.sidebar-ribbon .sidebar-account-trigger .sidebar-account-avatar {
   width: var(--sidebar-ribbon-icon-size);
   height: var(--sidebar-ribbon-icon-size);
   flex-basis: var(--sidebar-ribbon-icon-size);
 }
 
-.sidebar-account-compact .desktop-update {
-  inset: auto 0 80px;
-  display: grid;
-  place-items: center;
-  transform: none;
+.sidebar-ribbon .sidebar-account-name {
+  font-weight: var(--weight-regular);
+}
+
+/* Collapsed destinations retain their original icon axis and hit area.
+   Labels and close controls become keyboard-accessible with the expanded rail. */
+.sidebar-ribbon:not([data-expanded="true"]) :is(.sidebar-ribbon-label, .sidebar-ribbon-close, .sidebar-account-name, .sidebar-account-trigger > svg) {
+  display: none;
+}
+
+.sidebar-ribbon:not([data-expanded="true"]) :is(.sidebar-ribbon-button, .sidebar-account-trigger) {
+  display: flex;
+  justify-content: center;
+  gap: 0;
+  padding-inline: 0;
+}
+
+.sidebar-ribbon:not([data-expanded="true"]) .sidebar-ribbon-pin {
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  pointer-events: none;
 }
 
 .navigation-ribbon-layout:has(.sidebar-ribbon) .sidebar-settings:empty {

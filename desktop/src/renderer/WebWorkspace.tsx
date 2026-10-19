@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { WEB_WORKSPACE_ZOOM_MIN, WEB_WORKSPACE_ZOOM_MAX, WEB_WORKSPACE_TAB_LIMIT, type WebWorkspaceApi, type WebWorkspaceBounds, type WebWorkspaceCommand, type WebWorkspaceState } from "../shared/webWorkspace";
-import { ArrowLeft, ArrowRight, ArrowUpRight, ChevronDown, ChevronUp, Ellipsis, Globe, Hand, Minus, Plus, RotateCcw, RotateCw, Search, X } from "./WuuIcons";
+import { ArrowLeft, ArrowRight, ChevronDown, ChevronUp, Ellipsis, Globe, Hand, RotateCw, Search, X } from "./WuuIcons";
 import { useI18n } from "./i18n";
 import { normalizeWebsiteURL } from "./NavigationRibbonPreferences";
 import { rawErrorMessage } from "./UserFacingErrors";
@@ -9,7 +9,7 @@ import { WebWorkspaceDownloadsMenu } from "./WebWorkspaceDownloadsMenu";
 import { BrowserLibrary } from "./BrowserLibrary";
 import { WebWorkspaceAddress } from "./WebWorkspaceAddress";
 import { WebWorkspaceStartPage } from "./WebWorkspaceStartPage";
-import { composerMenuWidth, FloatingMenuPortal, handleFloatingMenuKeyDown, menuOpeningKey, useFloatingMenuFocus } from "./ComposerFloatingMenu";
+import { menuOpeningKey } from "./ComposerFloatingMenu";
 import "./styles/web-workspace.css";
 
 export interface WebWorkspaceSite {
@@ -38,7 +38,6 @@ export function WebWorkspacePanel({
   const startInputRef = useRef<HTMLInputElement>(null);
   const [focusNewTab, setFocusNewTab] = useState<string>();
   const findInputRef = useRef<HTMLInputElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const [page, setPage] = useState<WebWorkspaceState>();
   const [failure, setFailure] = useState<{ id: string; message: string }>();
@@ -231,6 +230,8 @@ export function WebWorkspacePanel({
   }, [update]);
 
   useLayoutEffect(() => {
+    // Tabs share this host. Replacing its observer on tab selection would hide
+    // the native page that the main process has just selected, then show it again.
     const host = hostRef.current;
     const id = site?.id;
     if (!api || !id || !host || !current) return;
@@ -249,20 +250,22 @@ export function WebWorkspacePanel({
     // Keep rectangle reports until its matching preload has been restarted.
     const stop = observeWebWorkspaceBounds(host, resizeWithWindow && api.supportsWindowInsets === true, (bounds) => {
       if (disposed) return;
-      setOccluded(bounds === null);
-      if (bounds) { wasVisible = true; report(bounds); return; }
+      setOccluded(bounds === null || bounds.occluded === true);
+      if (bounds && !bounds.occluded) { wasVisible = true; report(bounds); return; }
+      // Keep the hidden viewport current, including a first selected tab under
+      // an already expanded rail. Native capture does not make that tab visible.
+      report(bounds);
       // Keep a still image under renderer menus instead of replacing the whole
       // site with empty canvas. Capture once per occlusion, never per frame.
       if (wasVisible) void captureBackdrop();
       wasVisible = false;
-      report(null);
     });
     return () => {
       disposed = true;
       stop();
       report(null);
     };
-  }, [api, site?.id, active, resizeWithWindow, Boolean(current), current?.activeTabId, error, blank, captureBackdrop]);
+  }, [api, site?.id, active, resizeWithWindow, Boolean(current), error, blank, captureBackdrop]);
 
   useEffect(() => {
     if (!api || !site || !active) return;
@@ -343,17 +346,6 @@ export function WebWorkspacePanel({
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [active, site?.id, tabs, current?.activeTabId, pageTabs, focusAddress, openFind, run, update, addTab, changeZoom, zoomFactor]);
 
-  useFloatingMenuFocus(menuRef, "browser-options", menuOpen && active);
-
-  useEffect(() => {
-    if (!menuOpen) return;
-    const pointerDown = (event: PointerEvent) => {
-      if (event.target instanceof Node && !menuRef.current?.contains(event.target) && !menuButtonRef.current?.contains(event.target)) setMenuOpen(false);
-    };
-    window.addEventListener("pointerdown", pointerDown);
-    return () => window.removeEventListener("pointerdown", pointerDown);
-  }, [menuOpen]);
-
   const changeAddress = (value: string): void => {
     addressEdited.current = true;
     setAddress(value);
@@ -386,6 +378,27 @@ export function WebWorkspacePanel({
     if (url) void window.wuu.openExternal(url).catch((cause: unknown) => showActionErrorToast(rawErrorMessage(cause)));
   };
 
+  const openOptions = async (): Promise<void> => {
+    if (!api || !site || menuOpen || !menuButtonRef.current) return;
+    const key = snapshotKeyRef.current;
+    const rect = menuButtonRef.current.getBoundingClientRect();
+    setMenuOpen(true);
+    try {
+      const action = await api.showOptions(site.id, { x: rect.left, y: rect.bottom, labels: {
+        find: t("webWorkspace.find"), zoomOut: t("webWorkspace.zoomOut"), resetZoom: t("webWorkspace.resetZoom"),
+        zoomIn: t("webWorkspace.zoomIn"), reopenTab: t("webWorkspace.reopenTab"), openExternal: t("webWorkspace.openExternal"),
+      } });
+      if (snapshotKeyRef.current !== key) return;
+      if (action === "find") openFind();
+      else if (action === "zoomOut") changeZoom(zoomFactor - 0.1);
+      else if (action === "resetZoom") changeZoom(1);
+      else if (action === "zoomIn") changeZoom(zoomFactor + 0.1);
+      else if (action === "reopenTab") void update((browser, id) => browser.reopenTab(id));
+      else if (action === "openExternal") openExternal();
+    } catch (cause) { showActionErrorToast(rawErrorMessage(cause)); }
+    finally { setMenuOpen(false); }
+  };
+
   return (
     <div ref={panelRef} className="web-workspace-panel" data-wuu-component="web-workspace" data-website-id={site?.id}>
       <div className="workspace-browser-toolbar web-workspace-toolbar" role="toolbar" aria-label={site?.title || t("webWorkspace.address")}>
@@ -403,23 +416,9 @@ export function WebWorkspacePanel({
           {current?.agentControlled ? <button type="button" className="icon-button workspace-browser-nav" aria-label={t("webWorkspace.takeOver")} title={t("webWorkspace.takeOver")} onClick={() => void run("takeOver")}><Hand className="icon" aria-hidden="true" /></button> : null}
           <BrowserLibrary api={api} destinationId={site?.id} currentURL={currentURL} currentTitle={current?.title || site?.title || ""} onOpen={(url) => void run("navigate", url)} active={active} />
           <WebWorkspaceDownloadsMenu api={api} active={active} destinationId={site?.id} />
-          <button ref={menuButtonRef} type="button" className="icon-button workspace-browser-nav" aria-label={t("webWorkspace.options")} title={t("webWorkspace.options")} aria-expanded={menuOpen} aria-haspopup="dialog" disabled={!api || !site} onClick={() => setMenuOpen((open) => !open)} onKeyDown={(event) => { if (menuOpeningKey(event)) setMenuOpen(true); }}><Ellipsis className="icon" aria-hidden="true" /></button>
+          <button ref={menuButtonRef} type="button" className="icon-button workspace-browser-nav" aria-label={t("webWorkspace.options")} title={t("webWorkspace.options")} aria-expanded={menuOpen} aria-haspopup="menu" disabled={!api || !site} onClick={() => void openOptions()} onKeyDown={(event) => { if (menuOpeningKey(event)) void openOptions(); }}><Ellipsis className="icon" aria-hidden="true" /></button>
         </div>
-        {menuOpen && active ? <FloatingMenuPortal anchorRef={menuButtonRef} owner="web-workspace-options" placement="below" align="right" width={composerMenuWidth(300)} flip><div ref={menuRef} className="web-workspace-menu" role="dialog" aria-label={t("webWorkspace.options")} data-wuu-layer="popover" data-web-workspace-owner={site?.id} onKeyDown={(event) => handleFloatingMenuKeyDown(event, () => setMenuOpen(false), menuButtonRef.current)} onBlur={(event) => {
-          if (event.relatedTarget instanceof Node && !event.currentTarget.contains(event.relatedTarget) && !menuButtonRef.current?.contains(event.relatedTarget)) setMenuOpen(false);
-        }}>
-          <button type="button" className="web-workspace-menu-item" onClick={openFind}><Search className="icon" aria-hidden="true" /><span>{t("webWorkspace.find")}</span></button>
-          <div className="web-workspace-menu-zoom" role="group" aria-label={t("webWorkspace.zoom")}>
-            <span>{t("webWorkspace.zoom")}</span>
-            <button type="button" className="icon-button workspace-browser-nav" aria-label={t("webWorkspace.zoomOut")} disabled={zoomFactor <= WEB_WORKSPACE_ZOOM_MIN} onClick={() => changeZoom(zoomFactor - 0.1)}><Minus className="icon" aria-hidden="true" /></button>
-            <button type="button" className="web-workspace-zoom-badge" title={t("webWorkspace.resetZoom")} aria-label={t("webWorkspace.resetZoom")} onClick={() => changeZoom(1)}>{Math.round(zoomFactor * 100)}%</button>
-            <button type="button" className="icon-button workspace-browser-nav" aria-label={t("webWorkspace.zoomIn")} disabled={zoomFactor >= WEB_WORKSPACE_ZOOM_MAX} onClick={() => changeZoom(zoomFactor + 0.1)}><Plus className="icon" aria-hidden="true" /></button>
-          </div>
-          {tabs ? <button type="button" className="web-workspace-menu-item" disabled={!current?.canReopenTab || pageTabs.length >= WEB_WORKSPACE_TAB_LIMIT} onClick={() => { setMenuOpen(false); void update((browser, id) => browser.reopenTab(id)); }}><RotateCcw className="icon" aria-hidden="true" /><span>{t("webWorkspace.reopenTab")}</span></button> : null}
-          <button type="button" className="web-workspace-menu-item" disabled={blank || !currentURL} onClick={openExternal}><ArrowUpRight className="icon" aria-hidden="true" /><span>{t("webWorkspace.openExternal")}</span></button>
-        </div></FloatingMenuPortal> : null}
         {addressError ? <p className="web-workspace-address-error" id={addressErrorID} role="alert">{addressError}</p> : null}
-        <div className="workspace-browser-loading-bar" data-active={current?.loading ? "true" : "false"} aria-hidden="true" />
       </div>
       {findOpen ? <div className="web-workspace-findbar" role="search" aria-label={t("webWorkspace.find")}>
         <Search className="icon" aria-hidden="true" />
@@ -445,7 +444,7 @@ export function WebWorkspacePanel({
               <button type="button" className="settings-button settings-button-ghost" disabled={blank} onClick={openExternal}>{t("webWorkspace.openExternal")}</button>
             </div>
           </div>
-        ) : blank ? <WebWorkspaceStartPage searchField={
+        ) : blank ? <WebWorkspaceStartPage active={active} searchField={
           <WebWorkspaceAddress className="web-workspace-start-address" api={api} destinationId={site?.id} pageKey={`${site?.id}/${current?.activeTabId}`} active={active}
             inputRef={startInputRef} value={address} disabled={!site || !api} invalid={Boolean(addressError)} errorID={addressErrorID}
             onChange={changeAddress} onSubmit={openAddress} onEscape={restoreAddress} leading={<Search className="icon" aria-hidden="true" />}>
@@ -516,6 +515,7 @@ function observeWebWorkspaceBounds(host: HTMLElement, resizeWithWindow: boolean,
     let bounds: HostRect | null = rect && document.visibilityState !== "hidden" ? {
       x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height),
     } : null;
+    let occluded = false;
     if (bounds) {
       if (overlaysDirty) {
         // Resizing changes geometry, not membership. Reuse the candidate list
@@ -538,7 +538,7 @@ function observeWebWorkspaceBounds(host: HTMLElement, resizeWithWindow: boolean,
           if (bounds.height > 0) continue;
         }
         if (overlay.matches(MODALS) || overlaps) {
-          bounds = null;
+          occluded = true;
           break;
         }
       }
@@ -551,6 +551,8 @@ function observeWebWorkspaceBounds(host: HTMLElement, resizeWithWindow: boolean,
       right: window.innerWidth - bounds.x - bounds.width,
       bottom: window.innerHeight - bounds.y - bounds.height,
     } : bounds;
+    if (geometry) geometry.borderRadius = Number.parseFloat(getComputedStyle(host).borderBottomLeftRadius);
+    if (geometry && occluded) geometry.occluded = true;
     // Page zoom changes the native scale even when CSS insets stay identical.
     const key = JSON.stringify([geometry, window.devicePixelRatio]);
     if (key !== last) { last = key; report(geometry); }

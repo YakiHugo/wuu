@@ -490,6 +490,7 @@ describe("session tab switch latency", () => {
 
   it("app history replays ribbon destinations without driving website navigation and skips a removed website", async () => {
     installWuuApi();
+    Object.defineProperty(window.wuu, "platform", { configurable: true, value: "darwin" });
     let nativeState: WebWorkspaceState = { id: WEB_WORKSPACE_RIBBON_ID, url: "https://example.com/", title: "History site", loading: false, canGoBack: true, canGoForward: false,
       activeTabId: "website:history", tabs: [{ id: "website:history", url: "https://example.com/", title: "History site", loading: false, canGoBack: true, canGoForward: false, zoomFactor: 1 }] };
     const listeners = new Set<(state: WebWorkspaceState) => void>();
@@ -506,6 +507,15 @@ describe("session tab switch latency", () => {
     await act(async () => { setMainComposerPrompt("retained behind website"); });
     await clickPageHistoryTarget(container.querySelector('[data-wuu-component="website-navigation-item"]'));
     expect(container.querySelector('[data-wuu-component="app-shell"]')?.hasAttribute("data-web-workspace-open")).toBe(true);
+    const history = container.querySelector<HTMLElement>('[data-wuu-component="page-history-controls"]')!;
+    const ribbon = container.querySelector<HTMLElement>(".sidebar-ribbon")!;
+    expect(history.hidden).toBe(false);
+    await act(async () => ribbon.dispatchEvent(new MouseEvent("pointerover", { bubbles: true })));
+    expect(history.hidden).toBe(true);
+    expect(history.hasAttribute("inert")).toBe(true);
+    await act(async () => ribbon.dispatchEvent(new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body })));
+    expect(history.hidden).toBe(false);
+    expect(history.hasAttribute("inert")).toBe(false);
     // Native webpage navigation changes URL/history state, not the app route.
     await act(async () => {
       nativeState = { ...nativeState, url: "https://example.com/previous", canGoBack: false,

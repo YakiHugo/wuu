@@ -37,6 +37,9 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Changed
 
+- Expand the vertical browser tab rail with readable titles and direct close controls for web tabs, while keeping built-in destinations permanent and preserving sidebar content widths.
+
+- Remove the redundant full-width browser loading line while retaining ribbon tab loading feedback and Stop/Reload controls.
 - Represent each browser page as one ribbon tab, with direct new-tab creation, drag ordering, and a compact pin/close menu instead of nested tab rows and navigation management.
 
 - Refine browser tab sizing, selection surfaces, and close/new-tab alignment across font sizes.
@@ -54,10 +57,14 @@ Versioning rules are documented in [the release guide](docs/en/project/release.m
 
 ### Fixed
 
+- Preserve native browser text and image sharpness behind account and browser menus on high-density displays.
+- Restore window dragging from empty browser toolbar space while keeping its address field and buttons interactive.
+- Center the compact account control with settings and the other ribbon icons.
+- Restore pointer-following eyes on the browser start page without background animation work.
 - Avoid remeasuring covered conversation inputs during website window resizing, and refit retained drafts when their workspace becomes visible again.
 - Keep full-workspace websites attached to the native window edges during live resizing, including when the shell renderer is busy.
 - Keep explicit workbench sidebar collapse separate from hover previews, and remove the redundant settings breadcrumb root.
-- Reserve app-history controls in the existing content header so narrow Mac sidebars keep notification and search hit areas clear, including zoomed layouts and hover previews.
+- Reserve app-history controls in the existing content header so narrow Mac sidebars keep notification and search hit areas clear, including zoomed layouts, hover previews, and the expanded navigation ribbon.
 - Stabilize PDF fit-width layout when a non-overlay scrollbar would otherwise alternate between appearing and disappearing.
 
 - Keep the account menu above browser pages while preserving native website visibility on dismissal.

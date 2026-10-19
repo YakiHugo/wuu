@@ -191,6 +191,7 @@ async function verifyNarrowSidebarControls(win) {
         win.webContents.setZoomFactor(zoom);
         await evaluate(win, value => document.documentElement.style.setProperty("--desktop-page-zoom", String(value)), zoom);
         await settleChrome(win);
+        await preparePointerInput(win);
         await verifyNotificationClick(win, zoom);
       }
       win.setContentSize(900, 675);
@@ -198,6 +199,7 @@ async function verifyNarrowSidebarControls(win) {
       await evaluate(win, () => document.documentElement.style.setProperty("--desktop-page-zoom", "0.75"));
       await settleChrome(win);
     }
+    if (fixturePlatform === "darwin" && totalWidth === 240) await verifyRibbonHistoryOcclusion(win);
     let collapsedGeometry;
     for (const layout of ["docked", "collapsed", "drawer"]) {
       if (layout === "collapsed") {
@@ -248,6 +250,64 @@ async function verifyNarrowSidebarControls(win) {
   await waitFor(win, () => !!document.querySelector(".conversation-pane"), 5000);
 }
 
+async function verifyRibbonHistoryOcclusion(win) {
+  const savedSize = win.getContentSize();
+  const savedZoom = win.webContents.getZoomFactor();
+  win.setContentSize(2400, 1200);
+  win.webContents.setZoomFactor(2);
+  await evaluate(win, () => document.documentElement.style.setProperty('--desktop-page-zoom', '2'));
+  await preparePointerInput(win);
+  await settleChrome(win);
+  const snapshot = () => evaluate(win, () => {
+    const history = document.querySelector('.shell-page-history-controls');
+    return { history: { hidden: history.hidden, inert: history.inert, bounds: history.getBoundingClientRect().toJSON() },
+      ribbon: document.querySelector('.sidebar-ribbon').getBoundingClientRect().toJSON(),
+      title: document.querySelector('.conversation-title-heading').getBoundingClientRect().toJSON(),
+      content: document.querySelector('.conversation-pane').getBoundingClientRect().toJSON() };
+  });
+  for (const collapsed of [false, true]) {
+    await evaluate(win, collapsed => {
+      const shell = document.querySelector('.app-shell');
+      if (shell.classList.contains('sidebar-collapsed') !== collapsed) document.querySelector('.section-sidebar-toggle').click();
+    }, collapsed);
+    await settleChrome(win);
+    const before = await snapshot();
+    assert.equal(before.history.hidden, false, 'History starts visible with the ribbon closed');
+    const point = await evaluate(win, () => {
+      const ribbon = document.querySelector('.sidebar-ribbon').getBoundingClientRect();
+      const item = document.querySelector('.sidebar-ribbon-main .sidebar-ribbon-button').getBoundingClientRect();
+      return { x: ribbon.left + Math.min(12, ribbon.width / 2), y: item.top + item.height / 2 };
+    });
+    win.webContents.sendInputEvent({ type: 'mouseMove', x: Math.round(point.x * 2), y: Math.round(point.y * 2) });
+    await waitFor(win, () => !!document.querySelector('.sidebar-ribbon[data-expanded="true"]'), 3000);
+    await evaluate(win, () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const expanded = await snapshot();
+    const a = before.history.bounds, b = expanded.ribbon;
+    const overlaps = Math.min(a.right, b.right) > Math.max(a.left, b.left) &&
+      Math.min(a.bottom, b.bottom) > Math.max(a.top, b.top);
+    assert.equal(overlaps, collapsed, 'The expanded ribbon covers the collapsed history lane but not the docked240 lane');
+    assert.equal(expanded.history.hidden, overlaps, 'History hides only in the covered lane');
+    assert.equal(expanded.history.inert, overlaps, 'Covered history cannot receive keyboard input');
+    assert.deepEqual(expanded.title, before.title, 'Ribbon expansion does not shift the title');
+    assert.deepEqual(expanded.content, before.content, 'Ribbon expansion does not shift the content');
+    results.push({ scenario: `ribbon-history-240-20px-2-${collapsed ? 'collapsed' : 'docked'}`, before, expanded, overlaps });
+    saveResults();
+    await capture(win, `ribbon-history-240-20px-2-${collapsed ? 'collapsed' : 'docked'}.png`);
+    await preparePointerInput(win);
+    await waitFor(win, () => !document.querySelector('.shell-page-history-controls').hidden, 3000);
+    const restored = await snapshot();
+    assert.equal(restored.history.inert, false, 'History regains keyboard access after ribbon leaves');
+    assert.deepEqual(restored.title, before.title, 'Closing ribbon preserves title geometry');
+    assert.deepEqual(restored.content, before.content, 'Closing ribbon preserves content geometry');
+  }
+  await evaluate(win, () => document.querySelector('.section-sidebar-toggle').click());
+  win.setContentSize(...savedSize);
+  win.webContents.setZoomFactor(savedZoom);
+  await evaluate(win, zoom => document.documentElement.style.setProperty('--desktop-page-zoom', String(zoom)), savedZoom);
+  await preparePointerInput(win);
+  await settleChrome(win);
+}
+
 async function notificationRouteState(win) {
   return evaluate(win, () => ({
     title: document.querySelector('.conversation-title-heading h1')?.textContent,
@@ -259,7 +319,30 @@ async function notificationRouteState(win) {
   }));
 }
 
+async function preparePointerInput(win) {
+  // These interactions run in the CI-owned Electron window. CDP focus
+  // emulation alone does not satisfy sendInputEvent's native-window contract.
+  win.show();
+  win.focus();
+  const started = Date.now();
+  while (!win.isFocused() && Date.now() - started < 3000) await delay(40);
+  assert.ok(win.isFocused(), "The fixture window must own focus before physical input");
+  const point = await evaluate(win, () => ({ x: innerWidth - 30, y: innerHeight - 30 }));
+  const zoom = win.webContents.getZoomFactor();
+  win.webContents.sendInputEvent({ type: "mouseMove", x: Math.round(point.x * zoom), y: Math.round(point.y * zoom) });
+  await evaluate(win, () => new Promise(requestAnimationFrame));
+  const state = await evaluate(win, () => ({
+    ribbonExpanded: !!document.querySelector('.sidebar-ribbon[data-expanded="true"]'),
+    activeElement: { tag: document.activeElement?.tagName, className: document.activeElement?.getAttribute("class"),
+      component: document.activeElement?.getAttribute("data-wuu-component") },
+  }));
+  results.push({ scenario: "neutral-pointer-precondition", zoom, point, focused: win.isFocused(), state });
+  saveResults();
+  await waitFor(win, () => !document.querySelector('.sidebar-ribbon[data-expanded="true"]'), 3000);
+}
+
 async function pointerClick(win, selector) {
+  await preparePointerInput(win);
   const point = await evaluate(win, selector => {
     const target = document.querySelector(selector);
     const box = target.getBoundingClientRect();
@@ -268,8 +351,48 @@ async function pointerClick(win, selector) {
   const zoom = win.webContents.getZoomFactor();
   const position = { x: Math.round(point.x * zoom), y: Math.round(point.y * zoom) };
   win.webContents.sendInputEvent({ type: "mouseMove", ...position });
+  await evaluate(win, () => new Promise(requestAnimationFrame));
+  const before = await evaluate(win, ({ selector, position, zoom }) => {
+    const target = document.querySelector(selector);
+    const x = position.x / zoom, y = position.y / zoom;
+    const hit = document.elementFromPoint(x, y);
+    return { x, y, owned: hit === target || target.contains(hit),
+      targetBounds: target.getBoundingClientRect().toJSON(),
+      hit: { tag: hit?.tagName, className: hit?.getAttribute('class'),
+        component: hit?.closest('button')?.getAttribute('data-wuu-component'),
+        bounds: hit?.getBoundingClientRect().toJSON() },
+      ribbonExpanded: !!document.querySelector('.sidebar-ribbon[data-expanded="true"]') };
+  }, { selector, position, zoom });
+  results.push({ scenario: "physical-click-precondition", selector, zoom, focused: win.isFocused(), before });
+  saveResults();
+  assert.ok(before.owned, `The intended button must own the actual rounded input point before clicking: ${JSON.stringify(before)}`);
+  await evaluate(win, selector => {
+    const intended = document.querySelector(selector);
+    window.__titlebarInputTrace = [];
+    window.__titlebarInputObserver = event => {
+      const target = event.target instanceof Element ? event.target.closest('button') || event.target : null;
+      window.__titlebarInputTrace.push({ type: event.type, x: event.clientX, y: event.clientY,
+        target: target?.getAttribute('data-wuu-component') || target?.getAttribute('class'),
+        trusted: event.isTrusted, owned: event.target === intended || intended.contains(event.target) });
+    };
+    for (const type of ['pointerdown', 'pointerup', 'click']) document.addEventListener(type, window.__titlebarInputObserver, true);
+  }, selector);
   win.webContents.sendInputEvent({ type: "mouseDown", button: "left", clickCount: 1, ...position });
   win.webContents.sendInputEvent({ type: "mouseUp", button: "left", clickCount: 1, ...position });
+  const events = await evaluate(win, async () => {
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    for (const type of ['pointerdown', 'pointerup', 'click']) document.removeEventListener(type, window.__titlebarInputObserver, true);
+    const events = window.__titlebarInputTrace;
+    delete window.__titlebarInputObserver;
+    delete window.__titlebarInputTrace;
+    return events;
+  });
+  results.push({ scenario: "physical-click-delivery", selector, zoom, position, events });
+  saveResults();
+  for (const type of ['pointerdown', 'pointerup', 'click']) {
+    assert.ok(events.some(event => event.type === type && event.trusted && event.owned),
+      `Electron must deliver ${type} to the intended control: ${JSON.stringify(events)}`);
+  }
 }
 
 async function verifyNotificationClick(win, zoom) {
@@ -285,7 +408,13 @@ async function verifyNotificationClick(win, zoom) {
   await evaluate(win, () => document.querySelector('[data-settings-page="providers"]').click());
   await waitFor(win, () => !!document.querySelector('.settings-shell'), 3000);
   await waitFor(win, () => !document.querySelector('[data-wuu-component="page-history-back"]').disabled, 3000);
-  await evaluate(win, () => document.querySelector('[data-wuu-component="page-history-back"]').click());
+  await evaluate(win, () => {
+    const back = document.querySelector('[data-wuu-component="page-history-back"]');
+    // Match keyboard activation's focus transfer instead of retaining focus in
+    // the account menu's ribbon anchor after a programmatic click.
+    back.focus();
+    back.click();
+  });
   await waitFor(win, () => !document.querySelector('.app-shell[data-settings-open]') &&
     !document.querySelector('[data-wuu-component="page-history-forward"]').disabled, 3000);
   await settleChrome(win);
@@ -446,9 +575,11 @@ async function chromeToggleGeometry(win) {
       });
     const shell = document.querySelector('.app-shell');
     const historyGroup = document.querySelector('.shell-page-history-controls');
-    const historySuppressed = !!document.querySelector('.mac-window-controls') &&
-      !shell.hasAttribute('data-web-workspace-open') &&
+    const ribbonCoversHistory = !!document.querySelector('.sidebar-ribbon[data-expanded="true"]') &&
+      (shell.classList.contains('sidebar-collapsed') || (shell.hasAttribute('data-web-workspace-open') && !settingsOpen));
+    const drawerCoversHistory = !shell.hasAttribute('data-web-workspace-open') &&
       ['sidebar-drawer-open', 'sidebar-drawer-closing', 'sidebar-drawer-docking'].some(name => shell.classList.contains(name));
+    const historySuppressed = !!document.querySelector('.mac-window-controls') && (ribbonCoversHistory || drawerCoversHistory);
     const historyState = { expectedSuppressed: historySuppressed, hidden: historyGroup.hidden, inert: historyGroup.inert };
     const visible = element => element.checkVisibility({ checkVisibilityCSS: true, checkOpacity: true });
     const guardElements = [...new Set([

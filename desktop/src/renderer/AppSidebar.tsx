@@ -460,6 +460,7 @@ export function AppSidebar({
   settingsActive = false,
   onLeaveSettings,
   onRibbonPresenceChange,
+  onRibbonExpandedChange,
   catalogSection = "plugins",
   onSelectCatalogSection,
   activeWebsiteId,
@@ -547,6 +548,7 @@ export function AppSidebar({
   settingsActive?: boolean;
   onLeaveSettings?: () => void;
   onRibbonPresenceChange?: (present: boolean) => void;
+  onRibbonExpandedChange?: (expanded: boolean) => void;
   catalogSection?: SkillsCatalogSection;
   onSelectCatalogSection?: (section: SkillsCatalogSection) => void;
   activeWebsiteId?: string | null;
@@ -1791,6 +1793,7 @@ export function AppSidebar({
       <HoverRevealScopeContext.Provider value={null}>
       <NavigationRibbon
         ribbonRef={ribbonRef}
+        onExpandedChange={onRibbonExpandedChange}
         websites={websites}
         onNewTab={onNewTab ? () => activateNative(onNewTab) : undefined}
         onCloseTab={onCloseTab}
@@ -1836,11 +1839,12 @@ export function AppSidebar({
               onClick={() => activateNative(onOpenSettings)}
             >
               <Settings aria-hidden="true" />
+              <span className="sidebar-ribbon-label">{t("sidebar.settings")}</span>
             </button>
           </Tooltip>
           <SidebarAccountMenu
             key={sidebarCollapsed ? "collapsed" : "docked"}
-            compact
+            matchTriggerWidth={false}
             disabled={!state.initialized}
             onOpenAccount={onOpenAccount ? () => activateNative(onOpenAccount) : undefined}
             onOpenSettings={(page) => activateNative(() => onOpenSettings(page))}

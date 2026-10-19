@@ -478,31 +478,6 @@ jobs:
           set -o pipefail
           xvfb-run --auto-servernum desktop/node_modules/.bin/electron --no-sandbox desktop/scripts/settings-sidebar-hit-e2e.cjs 2>&1 | tee desktop/out/e2e/settings-titlebar/run.log
 
-      - name: Guard Mac-renderer-simulation narrow header controls
-        if: ${{ matrix.suite == 'shell' && (!cancelled() && steps.build-renderer.outcome == 'success') }}
-        timeout-minutes: 3
-        shell: bash
-        env:
-          WUU_TITLEBAR_FIXTURE_PLATFORM: darwin
-          WUU_TITLEBAR_FOCUSED_CONTROLS: "1"
-          WUU_TITLEBAR_OUTPUT: desktop/out/e2e/settings-titlebar-mac-simulation
-        run: |
-          mkdir -p "$WUU_TITLEBAR_OUTPUT"
-          set -o pipefail
-          xvfb-run --auto-servernum desktop/node_modules/.bin/electron desktop/scripts/settings-sidebar-hit-e2e.cjs 2>&1 | tee "$WUU_TITLEBAR_OUTPUT/run.log"
-
-      - name: Upload Mac-renderer-simulation evidence
-        if: ${{ matrix.suite == 'shell' && (always()) }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: titlebar-mac-renderer-simulation-evidence
-          path: |
-            desktop/out/e2e/settings-titlebar-mac-simulation/*.png
-            desktop/out/e2e/settings-titlebar-mac-simulation/*.json
-            desktop/out/e2e/settings-titlebar-mac-simulation/*.log
-          if-no-files-found: ignore
-          retention-days: 14
-
       - name: Upload titlebar alignment evidence
         if: ${{ matrix.suite == 'shell' && (always()) }}
         uses: actions/upload-artifact@v4
@@ -965,6 +940,60 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  desktop-macos-controls:
+    name: Desktop / macOS focused controls
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true' && contains(fromJSON(needs.changes.outputs.desktop_suites), 'shell')
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      VITE_ENABLE_ACCOUNT: 'false'
+      VITE_ENABLE_REMOTE_CONTROL: 'false'
+      WUU_RELEASE: '0'
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      WUU_TITLEBAR_FOCUSED_CONTROLS: '1'
+      WUU_TITLEBAR_OUTPUT: ${{ runner.temp }}/wuu-macos-focused-controls
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: |
+            desktop/package-lock.json
+            clients/core/package-lock.json
+            clients/mobile-web/package-lock.json
+            plugins/package-lock.json
+      - name: Install locked renderer dependencies
+        timeout-minutes: 10
+        run: |
+          for workspace in desktop clients/core clients/mobile-web plugins; do
+            npm ci --prefix "$workspace"
+          done
+          node desktop/node_modules/electron/install.js
+          node -e 'require("./desktop/node_modules/electron")'
+      - name: Build production renderer
+        timeout-minutes: 6
+        # Same renderer build as Linux shell fixtures; synthetic preload does
+        # not require native core packaging or bundled plugin execution.
+        run: cd desktop && node_modules/.bin/electron-vite build
+      - name: Exercise sandboxed narrow header and notification controls
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          mkdir -p "$WUU_TITLEBAR_OUTPUT"
+          git rev-parse HEAD > "$WUU_TITLEBAR_OUTPUT/source-commit.txt"
+          set -o pipefail
+          desktop/node_modules/.bin/electron desktop/scripts/settings-sidebar-hit-e2e.cjs 2>&1 | tee "$WUU_TITLEBAR_OUTPUT/run.log"
+      - name: Upload hosted macOS control evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: titlebar-hosted-macos-controls-evidence
+          path: ${{ runner.temp }}/wuu-macos-focused-controls
+          if-no-files-found: warn
+          retention-days: 14
+
   desktop-check:
     name: Desktop check
     needs: [changes, desktop-suite]
@@ -1291,7 +1320,7 @@ jobs:
   ci-check:
     name: CI check
     runs-on: ubuntu-latest
-    needs: [changes, repository-check, go-check, desktop-check, clients-check, macos-check, linux-check, windows-check]
+    needs: [changes, repository-check, go-check, desktop-check, desktop-macos-controls, clients-check, macos-check, linux-check, windows-check]
     if: always()
     steps:
       - name: Require successful selection and all selected jobs
@@ -1308,6 +1337,7 @@ jobs:
               'repository-check': os.environ['EVENT'] != 'push',
               'go-check': True,
               'desktop-check': True,
+              'desktop-macos-controls': selected.get('desktop') == 'true' and 'shell' in json.loads(selected.get('desktop_suites', '[]')),
               'clients-check': selected.get('clients') == 'true',
               'macos-check': selected.get('native') == 'true',
               'windows-check': selected.get('native') == 'true',

@@ -47,6 +47,20 @@
   -webkit-app-region: no-drag;
 }
 
+/* Narrow pages keep one toolbar row. Secondary actions move into More;
+   reserve actual input space instead of shrinking text or action hitboxes. */
+.workspace-browser-toolbar.web-workspace-toolbar[data-compact] {
+  grid-template-columns: auto minmax(calc(80px + var(--space-2) * 2), 1fr) auto;
+  column-gap: var(--space-1);
+  padding-inline: var(--space-1);
+}
+
+/* Only the full-workspace browser is window chrome; embedded plugin pages
+   retain ordinary pointer behavior. Controls below carve out the drag region. */
+.web-workspace-stage .workspace-browser-toolbar.web-workspace-toolbar {
+  -webkit-app-region: drag;
+}
+
 .workspace-browser-url-form.web-workspace-address {
   justify-self: stretch;
   width: 100%;
@@ -137,6 +151,12 @@
   inset: 0;
 }
 
+/* Native views cannot inherit the stage's DOM clip. Report this resolved
+   radius to Electron and use the same contour for an occlusion backdrop. */
+.web-workspace-stage :is(.web-workspace-host, .web-workspace-backdrop) {
+  border-radius: var(--conversation-canvas-radius);
+}
+
 .web-workspace-message {
   position: absolute;
   inset: 0;
@@ -168,13 +188,7 @@
   gap: var(--space-2);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .web-workspace-toolbar .workspace-browser-loading-bar[data-active="true"] {
-    animation: none;
-  }
-}
-
-.web-workspace-toolbar :is(button, input) {
+.web-workspace-toolbar :is(button, input, .web-workspace-address) {
   -webkit-app-region: no-drag;
 }
 
@@ -207,62 +221,6 @@
 .web-workspace-zoom-badge:hover {
   background: var(--surface-3);
   color: var(--ink);
-}
-
-.web-workspace-menu {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  max-height: min(65vh, 420px);
-  overflow-y: auto;
-  padding: var(--space-1);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-md);
-  background: var(--surface-1);
-  box-shadow: var(--shadow-card);
-}
-
-.web-workspace-menu-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: calc(var(--control-size-toolbar) + var(--space-2));
-  padding: var(--space-1) var(--space-2);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--ink);
-  font: inherit;
-  font-size: var(--font-ui);
-  text-align: left;
-  cursor: pointer;
-}
-
-.web-workspace-menu-item > .icon {
-  flex: none;
-  color: var(--ink-tertiary);
-}
-
-.web-workspace-menu-item:hover:not(:disabled) {
-  background: var(--surface-3);
-}
-
-.web-workspace-menu-item:disabled {
-  color: var(--ink-faint);
-  cursor: default;
-}
-
-.web-workspace-menu-zoom {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  padding: var(--space-1) var(--space-2);
-  font-size: var(--font-ui);
-}
-
-.web-workspace-menu-zoom > span {
-  flex: 1;
-  margin-right: var(--space-3);
 }
 
 .web-workspace-findbar {

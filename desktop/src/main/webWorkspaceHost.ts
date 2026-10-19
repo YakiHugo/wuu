@@ -1,7 +1,7 @@
 import { BrowserWindow, Menu, clipboard, dialog, shell, type DownloadItem, type WebContents, type WebContentsView, type WebContentsViewConstructorOptions } from "electron";
 import { randomUUID } from "node:crypto";
 import { WEB_WORKSPACE_ZOOM_MIN, WEB_WORKSPACE_ZOOM_MAX, WEB_WORKSPACE_TAB_LIMIT, WEB_WORKSPACE_RIBBON_ID } from "../shared/webWorkspace";
-import type { WebWorkspaceBounds, WebWorkspaceCommand, WebWorkspaceDestination, WebWorkspaceLegacyDestination, WebWorkspaceInitializationState, WebWorkspaceFindOptions, WebWorkspaceFindResult, WebWorkspaceState, WebWorkspaceTabState } from "../shared/webWorkspace";
+import type { WebWorkspaceMenuAction, WebWorkspaceMenuRequest, WebWorkspaceBounds, WebWorkspaceCommand, WebWorkspaceDestination, WebWorkspaceLegacyDestination, WebWorkspaceInitializationState, WebWorkspaceFindOptions, WebWorkspaceFindResult, WebWorkspaceState, WebWorkspaceTabState } from "../shared/webWorkspace";
 import { BROWSER_PARTITION, BROWSER_WORKSPACE_TAB_PREFIX, type BrowserWorkspaceSource, type BrowserWorkspaceAttachment, type BrowserViewHandle, type BrowserParentWindowHandle, type BrowserPermissionRequestDetails, type BrowserSessionPermissionDelegate } from "./browserHostWindows";
 import { createBrowserView } from "./browserView";
 import type { WebWorkspaceLibrary } from "./webWorkspaceLibrary";
@@ -18,6 +18,7 @@ type WorkspaceGroup = {
   tabs: WorkspaceTab[];
   activeTabId: string;
   bounds: WebWorkspaceBounds | null;
+  lastBounds?: WebWorkspaceBounds;
   closedTabs: { url: string; title: string; zoomFactor: number; pinned?: boolean }[];
   migratedTabGroups?: Record<string, string[]>;
 };
@@ -30,6 +31,7 @@ type WorkspacePage = {
   view: WebContentsView;
   contents: WebContents;
   bounds: WebWorkspaceBounds | null;
+  borderRadius: number;
   htmlFullscreen?: boolean;
   requestedURL: string;
   navigationGeneration: number;
@@ -48,6 +50,10 @@ type PermissionOwner = { page: WorkspacePage; grants: Set<string>; navigationGen
 // owner, and this shared profile cannot safely grant unattributed access.
 const TAB_PERMISSIONS = new Set(["geolocation", "geolocation-approximate", "fullscreen", "screen-wake-lock", "persistent-storage"]);
 const ZOOM_LEVELS = [0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3];
+// Preserve Retina/5K page pixels without allowing an unusually large display
+// or high-entropy page to create an unbounded encode or renderer IPC payload.
+const MAX_BACKDROP_PIXELS = 16 * 1024 * 1024;
+const MAX_BACKDROP_BYTES = 12 * 1024 * 1024;
 
 function websiteURL(value: string): string {
   const url = new URL(value);
@@ -103,7 +109,15 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
           view: page.view as unknown as BrowserViewHandle,
           parent: page.owner as unknown as BrowserParentWindowHandle,
           visible,
-          setExternalPresentation: external => { automation.external = external; },
+          setExternalPresentation: external => {
+            automation.external = external;
+            // An observation window owns its own outline. Never carry the
+            // workspace canvas's clipping into the borrowed page's PiP surface.
+            if (external && page.borderRadius !== 0) {
+              page.view.setBorderRadius(0);
+              page.borderRadius = 0;
+            }
+          },
           restore: () => this.layout(page),
           reveal: () => {
             if (this.groups.get(page.group.id) !== page.group || page.contents.isDestroyed()) return;
@@ -207,18 +221,54 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     return this.state(group);
   }
 
+  showOptions(owner: BrowserWindow, id: string, request: WebWorkspaceMenuRequest): Promise<WebWorkspaceMenuAction | null> {
+    const group = this.group(owner, id), tab = this.activeTab(group);
+    if (!tab || !owner.isVisible() || owner.isMinimized()) return Promise.resolve(null);
+    if (![request.x, request.y].every(Number.isFinite)) throw new Error("Menu coordinates must be finite numbers.");
+    const state = this.tabState(tab), labels = request.labels;
+    const blank = state.url === "about:blank" && state.startPage !== false;
+    return new Promise(resolve => {
+      let selected: WebWorkspaceMenuAction | null = null;
+      const item = (action: WebWorkspaceMenuAction, enabled = true) => ({
+        label: action === "resetZoom" ? `${labels[action]} (${Math.round(tab.zoomFactor * 100)}%)` : labels[action],
+        enabled, click: () => { selected = action; },
+      });
+      const menu = Menu.buildFromTemplate([
+        item("find", !blank),
+        { type: "separator" },
+        item("zoomOut", tab.zoomFactor > WEB_WORKSPACE_ZOOM_MIN),
+        item("resetZoom"),
+        item("zoomIn", tab.zoomFactor < WEB_WORKSPACE_ZOOM_MAX),
+        { type: "separator" },
+        ...(group.tabbed ? [item("reopenTab", group.closedTabs.length > 0 && group.tabs.length < WEB_WORKSPACE_TAB_LIMIT)] : []),
+        item("openExternal", !blank),
+      ]);
+      const zoom = owner.webContents.getZoomFactor();
+      // Menu coordinates are relative to the owner's content view, in DIPs.
+      menu.popup({ window: owner, x: Math.round(request.x * zoom), y: Math.round(request.y * zoom),
+        callback: () => resolve(this.groups.get(id) === group && this.activeTab(group) === tab ? selected : null) });
+    });
+  }
+
   /** One bounded, in-memory backdrop for chrome overlays; no capture subscription. */
   async capture(owner: BrowserWindow, id: string): Promise<string | null> {
     const group = this.group(owner, id);
     const page = this.activeTab(group)?.page;
-    if (!page || !page.bounds || page.automation?.external || page.contents.isDestroyed() || !owner.isVisible() || owner.isMinimized()) return null;
+    if (!page || (!page.bounds && !group.lastBounds) || page.automation?.external || page.contents.isDestroyed() || !owner.isVisible() || owner.isMinimized()) return null;
+    // An expanded tab rail can select a different page while the native layer
+    // remains occluded. Size that page for this one capture without showing it
+    // or changing the visibility used by automation and ownership handoff.
+    if (!page.bounds) this.layout(page, group.lastBounds);
     const generation = page.navigationGeneration;
     const image = await page.contents.capturePage(undefined, { stayHidden: true });
     if (this.groups.get(id) !== group || this.activeTab(group)?.page !== page || page.contents.isDestroyed() || page.navigationGeneration !== generation || image.isEmpty()) return null;
+    // capturePage already returns device pixels (including Retina) in a 1x
+    // bitmap. Keep them intact: a thumbnail would be enlarged to fill the
+    // native viewport. PNG also preserves fine strokes lost by JPEG.
     const size = image.getSize();
-    const scale = Math.min(1, 1280 / Math.max(size.width, size.height));
-    const jpeg = image.resize({ width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)) }).toJPEG(65);
-    return jpeg.length <= 1024 * 1024 ? `data:image/jpeg;base64,${jpeg.toString("base64")}` : null;
+    if (size.width * size.height > MAX_BACKDROP_PIXELS) return null;
+    const png = image.toPNG();
+    return png.length > 0 && png.length <= MAX_BACKDROP_BYTES ? `data:image/png;base64,${png.toString("base64")}` : null;
   }
 
   reportBounds(owner: BrowserWindow, id: string, bounds: WebWorkspaceBounds | null): void {
@@ -226,9 +276,10 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     const group = this.group(owner, id);
     if (bounds !== null) {
       const dimensions = "right" in bounds ? [bounds.right, bounds.bottom] : [bounds.width, bounds.height];
-      if (![bounds.x, bounds.y, ...dimensions].every(Number.isFinite)) throw new Error("Website bounds must be finite numbers.");
+      if (![bounds.x, bounds.y, bounds.borderRadius ?? 0, ...dimensions].every(Number.isFinite)) throw new Error("Website bounds must be finite numbers.");
     }
-    group.bounds = bounds;
+    group.lastBounds = bounds ?? undefined;
+    group.bounds = bounds?.occluded ? null : bounds;
     this.layoutGroup(group);
   }
 
@@ -559,7 +610,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
   private attachPage(group: WorkspaceGroup, tab: WorkspaceTab, view: WebContentsView, inheritedAutomation?: readonly AutomationRestriction[]): WorkspacePage {
     const page: WorkspacePage = {
       id: randomUUID(), group, tab, owner: group.owner, view, contents: view.webContents,
-      bounds: null, requestedURL: tab.url, navigationGeneration: 0, popups: new Set(), inheritedAutomation,
+      bounds: null, borderRadius: 0, requestedURL: tab.url, navigationGeneration: 0, popups: new Set(), inheritedAutomation,
     };
     tab.page = page;
     this.pages.set(page.id, page);
@@ -724,10 +775,11 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     }
   }
 
-  private layout(page: WorkspacePage): void {
+  private layout(page: WorkspacePage, captureBounds?: WebWorkspaceBounds): void {
     const { owner, view } = page;
     if (owner.isDestroyed() || page.contents.isDestroyed() || page.automation?.external) return;
-    if (!page.bounds || owner.isMinimized() || !owner.isVisible()) {
+    const reportedBounds = page.bounds ?? captureBounds;
+    if (!reportedBounds || owner.isMinimized() || !owner.isVisible()) {
       if (page.contents.isFocused()) owner.webContents.focus();
       if (view.getVisible()) view.setVisible(false);
       return;
@@ -738,7 +790,7 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     if (Math.abs(page.contents.getZoomFactor() - page.tab.zoomFactor) > 1e-6) page.contents.setZoomFactor(page.tab.zoomFactor);
     const [width, height] = owner.getContentSize();
     const htmlFullscreen = page.htmlFullscreen && page.group.activeTabId === page.tab.id;
-    const bounds = htmlFullscreen ? { x: 0, y: 0, width, height } : page.bounds;
+    const bounds = htmlFullscreen ? { x: 0, y: 0, width, height } : reportedBounds;
     const zoom = htmlFullscreen ? 1 : owner.webContents.getZoomFactor();
     const x = Math.max(0, Math.min(width, Math.round(bounds.x * zoom)));
     const y = Math.max(0, Math.min(height, Math.round(bounds.y * zoom)));
@@ -752,7 +804,15 @@ export class WebWorkspaceHost implements BrowserSessionPermissionDelegate {
     if (current.x !== x || current.y !== y || current.width !== right - x || current.height !== bottom - y) {
       view.setBounds({ x, y, width: right - x, height: bottom - y });
     }
-    const visible = right > x && bottom > y;
+    // View radii use native DIPs, like bounds. Shell zoom converts CSS pixels;
+    // Electron applies display scaling itself, so multiplying DPR again would
+    // over-round Retina corners. HTML fullscreen has no workspace canvas.
+    const borderRadius = htmlFullscreen ? 0 : Math.max(0, Math.round((reportedBounds.borderRadius ?? 0) * zoom));
+    if (page.borderRadius !== borderRadius) {
+      view.setBorderRadius(borderRadius);
+      page.borderRadius = borderRadius;
+    }
+    const visible = Boolean(page.bounds) && right > x && bottom > y;
     if (view.getVisible() !== visible) {
       view.setVisible(visible);
       if (visible && htmlFullscreen) page.contents.focus();

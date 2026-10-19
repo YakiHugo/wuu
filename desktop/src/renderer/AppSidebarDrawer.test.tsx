@@ -429,6 +429,31 @@ describe("collapsed sidebar hover drawer", () => {
     expect(history.hasAttribute("inert")).toBe(false);
   });
 
+  it.each([true, false])("occludes expanded Mac ribbon history only in its narrow lane (collapsed=%s)", async (collapsed) => {
+    Object.defineProperty(window.wuu, "platform", { configurable: true, value: "darwin" });
+    await renderCollapsedApp();
+    if (!collapsed) {
+      await act(async () => container.querySelector<HTMLButtonElement>(".section-sidebar-toggle")!.click());
+      await act(async () => { vi.advanceTimersByTime(400); });
+    }
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-ribbon-id="catalog"]')!.click());
+    const history = container.querySelector<HTMLElement>('[data-wuu-component="page-history-controls"]')!;
+    const back = history.querySelector<HTMLButtonElement>('[data-wuu-component="page-history-back"]')!;
+    expect(back.disabled).toBe(false);
+    await act(async () => back.focus());
+    const ribbon = container.querySelector<HTMLElement>(".sidebar-ribbon")!;
+    await act(async () => ribbon.dispatchEvent(new MouseEvent("pointerover", { bubbles: true })));
+    expect(ribbon.dataset.expanded).toBe("true");
+    expect(history.hidden).toBe(collapsed);
+    expect(history.hasAttribute("inert")).toBe(collapsed);
+    expect(document.activeElement).toBe(collapsed ? container.querySelector(".section-sidebar-toggle") : back);
+    await act(async () => ribbon.dispatchEvent(new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body })));
+    expect(ribbon.dataset.expanded).toBeUndefined();
+    expect(history.hidden).toBe(false);
+    expect(history.hasAttribute("inert")).toBe(false);
+    expect(container.querySelector('[data-wuu-component="page-history-controls"]')).toBe(history);
+  });
+
   it("retains an edge-opened drawer while the pointer travels over its persistent toggle", async () => {
     window.innerWidth = 820;
     await renderCollapsedApp();

@@ -8,15 +8,16 @@ let container: HTMLDivElement;
 afterEach(() => { act(() => root?.unmount()); container?.remove(); });
 
 describe("page history drawer occlusion", () => {
-  it.each([true, false])("preserves controls and returns only owned focus when covered (owned=%s)", async (owned) => {
+  it.each([[true, false], [false, false], [true, true], [false, true]])("preserves controls and returns only owned focus when covered (owned=%s, browser=%s)", async (owned, browser) => {
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
     const back = vi.fn();
     const render = (hidden: boolean) => root.render(
-      <div className="app-shell">
+      <div className="app-shell" data-web-workspace-open={browser || undefined}>
         <PageHistoryControls canGoBack canGoForward={false} onBack={back} onForward={vi.fn()} hidden={hidden} />
-        <button className="section-sidebar-toggle">Toggle</button>
+        <button className="section-sidebar-toggle" hidden={browser}>Toggle</button>
+        <nav className="sidebar-ribbon"><button aria-current="page">Active website</button></nav>
         <button className="other-control">Other</button>
       </div>,
     );
@@ -25,16 +26,17 @@ describe("page history drawer occlusion", () => {
     const historyBack = controls.querySelector<HTMLButtonElement>("button")!;
     const toggle = container.querySelector<HTMLButtonElement>(".section-sidebar-toggle")!;
     const other = container.querySelector<HTMLButtonElement>(".other-control")!;
+    const focusTarget = browser ? container.querySelector<HTMLButtonElement>('.sidebar-ribbon [aria-current="page"]')! : toggle;
     (owned ? historyBack : other).focus();
     await act(async () => render(true));
     expect(controls.hidden).toBe(true);
     expect(controls.hasAttribute("inert")).toBe(true);
-    expect(document.activeElement).toBe(owned ? toggle : other);
+    expect(document.activeElement).toBe(owned ? focusTarget : other);
     await act(async () => render(false));
     expect(container.querySelector(".shell-page-history-controls")).toBe(controls);
     expect(controls.hidden).toBe(false);
     expect(controls.hasAttribute("inert")).toBe(false);
-    expect(document.activeElement).toBe(owned ? toggle : other);
+    expect(document.activeElement).toBe(owned ? focusTarget : other);
     await act(async () => historyBack.click());
     expect(back).toHaveBeenCalledOnce();
   });

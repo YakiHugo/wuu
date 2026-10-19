@@ -97,6 +97,9 @@ ipcMain.handle = (channel, handler) => originalHandle(channel, async (...args) =
   }
   const entry = { channel, completed: false, ...(channel === 'wuu:browser-pip-host-layout' ? { payload: args[1] } : {}) };
   rpc.push(entry);
+  if (channel === 'wuu:web-workspace-bounds' && report.activeTabSwitchTrace) {
+    report.activeTabSwitchTrace.boundsIPC.push({ id: args[1], bounds: args[2], atMs: Date.now() - started });
+  }
   // Diagnose the public website setting only, never credential settings.
   const websiteSetting = channel === 'wuu:plugin-setting-get' && args[1]?.key === 'website-url'
     ? { id: args[1].id, key: args[1].key, startedAtMs: Date.now() - started } : undefined;

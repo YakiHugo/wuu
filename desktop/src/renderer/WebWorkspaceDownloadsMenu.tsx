@@ -8,7 +8,7 @@ import { rawErrorMessage } from "./UserFacingErrors";
 import "./styles/web-workspace-downloads.css";
 
 /** Window-owned history stays available when the initiating website is closed. */
-export function WebWorkspaceDownloadsMenu({ api, active = true, destinationId }: { api?: WebWorkspaceApi; active?: boolean; destinationId?: string }): JSX.Element {
+export function WebWorkspaceDownloadsMenu({ api, active = true, destinationId, presentation = "toolbar" }: { api?: WebWorkspaceApi; active?: boolean; destinationId?: string; presentation?: "toolbar" | "menu" }): JSX.Element {
   const { t, formatNumber } = useI18n();
   const [items, setItems] = useState<WebWorkspaceDownloadState[]>([]);
   const [open, setOpen] = useState(false);
@@ -85,14 +85,14 @@ export function WebWorkspaceDownloadsMenu({ api, active = true, destinationId }:
   );
 
   return <>
-    <button ref={trigger} type="button" className="icon-button workspace-browser-nav web-workspace-downloads-trigger"
+    <button ref={trigger} type="button" className={presentation === "menu" ? "web-workspace-menu-item" : "icon-button workspace-browser-nav web-workspace-downloads-trigger"}
       data-web-workspace-downloads-trigger="" disabled={!api} aria-label={title} title={title}
       aria-haspopup="dialog" aria-expanded={open && active} aria-controls={open && active ? panelId : undefined}
       onClick={() => setOpen(value => !value)} onKeyDown={event => {
         if (menuOpeningKey(event)) setOpen(true);
       }}>
       <Download className="icon" aria-hidden="true" />
-      {activeCount ? <span className="web-workspace-download-count" aria-hidden="true">{formatNumber(activeCount)}</span> : null}
+      {presentation === "menu" ? <span>{title}</span> : activeCount ? <span className="web-workspace-download-count" aria-hidden="true">{formatNumber(activeCount)}</span> : null}
     </button>
     {open && active ? <FloatingMenuPortal anchorRef={trigger} owner="web-workspace-downloads" placement="below" align="right" width={composerMenuWidth(400)} flip>
       <div ref={panel} id={panelId} className="web-workspace-downloads" data-web-workspace-downloads="" data-wuu-layer="popover" data-web-workspace-owner={destinationId}
