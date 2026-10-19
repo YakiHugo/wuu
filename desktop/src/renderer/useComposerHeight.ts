@@ -8,6 +8,9 @@ export function useComposerHeight(ref: RefObject<HTMLTextAreaElement | null>, ex
     const composer = input?.closest<HTMLElement>(".composer");
     const stack = input?.closest<HTMLElement>(".composer-stack");
     if (!input || !composer || !stack) return;
+    // Covered workspaces keep their draft mounted. Measuring a hidden textarea
+    // still forces layout twice, even though none of its pixels can be shown.
+    if (input.checkVisibility && !input.checkVisibility({ checkVisibilityCSS: true })) return;
     if (!input.offsetWidth) {
       stack.style.removeProperty("--composer-input-growth");
       return;
@@ -63,6 +66,11 @@ export function useComposerHeight(ref: RefObject<HTMLTextAreaElement | null>, ex
     const preferences = new MutationObserver(scheduleResize);
     preferences.observe(document.documentElement, { attributes: true, attributeFilter: ["style", "class"] });
     preferences.observe(document.body, { attributes: true, attributeFilter: ["style", "class"] });
+    // Visibility-only switches do not deliver ResizeObserver entries. Refit on
+    // reveal, including a draft or viewport that changed while covered.
+    for (let ancestor = input.parentElement; ancestor && ancestor !== document.body; ancestor = ancestor.parentElement) {
+      preferences.observe(ancestor, { attributes: true, attributeFilter: ["hidden", "inert"] });
+    }
     window.addEventListener("resize", scheduleResize);
     window.visualViewport?.addEventListener("resize", scheduleResize);
     document.fonts?.addEventListener("loadingdone", scheduleResize);

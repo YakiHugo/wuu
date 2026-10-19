@@ -133,6 +133,32 @@ async function run() {
       await setDraft(win, "");
     }
   }
+  // A retained draft can change wrapping while a different workspace covers it.
+  // Revealing it must remeasure even when visibility itself does not resize it.
+  phase = "covered workspace draft recovery";
+  win.setContentSize(1200, 820);
+  await evaluate(win, () => document.documentElement.style.setProperty("--conversation-message-font-size", "15px"));
+  const retainedDraft = "Retain the draft and recompute soft wrapping after returning from settings. ".repeat(6);
+  await setDraft(win, retainedDraft);
+  await geometry(win);
+  await evaluate(win, () => document.querySelector('.sidebar-ribbon button[aria-label="Settings"], .sidebar-ribbon button[aria-label="设置"]').click());
+  await waitFor(win, () => !!document.querySelector(".settings-embedded"));
+  win.setContentSize(600, 820);
+  await evaluate(win, () => document.documentElement.style.setProperty("--conversation-message-font-size", "20px"));
+  await evaluate(win, () => document.querySelector('[data-wuu-component="conversations-section"]').click());
+  await waitFor(win, () => !document.querySelector(".settings-embedded"));
+  const revealed = await geometry(win);
+  assert.equal(await evaluate(win, () => document.querySelector('[data-main-conversation-composer] textarea').value), retainedDraft);
+  // Compare with the same visible draft measured through ordinary editing.
+  await setDraft(win, "");
+  await geometry(win);
+  await setDraft(win, retainedDraft);
+  const edited = await geometry(win);
+  near(revealed.inputHeight, edited.inputHeight, "Revealed draft uses the current width and font without another keystroke");
+  const evidence = path.join(desktopRoot, "out/e2e/composer-height");
+  fs.mkdirSync(evidence, { recursive: true });
+  fs.writeFileSync(path.join(evidence, "covered-draft.json"), JSON.stringify({ revealed, edited, draftRetained: true }, null, 2));
+  fs.writeFileSync(path.join(evidence, "covered-draft.png"), (await win.webContents.capturePage()).toPNG());
   assert.deepEqual(errors, [], "Resizing must settle without ResizeObserver loops");
   console.log("Composer height verified with actual Chromium layout.");
   if (process.env.WUU_E2E_KEEP_OPEN === "true") {
