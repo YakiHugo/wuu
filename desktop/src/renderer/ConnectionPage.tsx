@@ -72,7 +72,7 @@ export function ConnectionPage({
     aria-label={ariaLabel}
     aria-labelledby={ariaLabel ? undefined : titleId}
   >
-    {icon ? <div className="connection-page-watermark" aria-hidden="true">{icon}</div> : null}
+    {icon ? <div className="connection-page-watermark-clip" aria-hidden="true"><div className="connection-page-watermark">{icon}</div></div> : null}
     {asForm ? <form className="connection-page-form" onSubmit={event => {
       event.preventDefault();
       onSubmit?.(event);

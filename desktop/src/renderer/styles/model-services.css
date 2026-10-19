@@ -876,7 +876,9 @@
 .connection-page-actions { margin-inline-start: auto; align-self: flex-start; }
 .connection-page-body { max-width: 820px; }
 .connection-page-body, .connection-detail-body { gap: var(--space-7); }
-.connection-page-watermark { position: fixed; inset-inline-end: -130px; bottom: -160px; width: 600px; max-width: 75vw; opacity: .055; filter: none; }
+/* Clip only decoration, never forms, menus or the settings scrollport. */
+.connection-page-watermark-clip { position: fixed; inset: 0; overflow: hidden; pointer-events: none; z-index: -1; }
+.connection-page-watermark { position: absolute; inset-inline-end: -130px; bottom: -160px; width: 600px; max-width: 75vw; opacity: .055; filter: none; }
 .connection-page .settings-section-header { justify-content: space-between; }
 .connection-page .settings-section-actions { margin-inline-start: auto; }
 .connection-title-edit { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
@@ -901,6 +903,8 @@
 .connection-page .connection-model-row .model-choice-main { min-width: 0; padding-block: var(--space-2); }
 .connection-model-id { min-width: 0; overflow-wrap: anywhere; font-size: var(--font-sm); color: var(--ink-soft); }
 .connection-model-name { min-width: 0; overflow-wrap: anywhere; }
+.connection-page .connection-model-row > .connection-model-enabled { order: 0; grid-column: 3; grid-row: 1; }
+.connection-page .connection-model-row > .connection-model-order { order: 0; grid-column: 4; grid-row: 1; }
 .connection-model-order { display: flex; align-items: center; gap: 0; color: var(--ink-tertiary); }
 .connection-model-order > .icon { width: 14px; }
 .connection-model-order button { padding: 4px; min-width: 28px; min-height: 28px; }
@@ -911,7 +915,7 @@
 @container settings-page (max-width: 42em) {
   .connection-page-header { margin-block-end: var(--space-5); }
   .connection-page-actions { margin-inline-start: 0; width: 100%; }
-  .connection-credential-panel { inset-inline-start: 0; inset-inline-end: auto; }
+  .connection-credential-panel { inset-inline-start: 0; inset-inline-end: auto; width: min(460px, 100cqw); }
   .connection-model-head, .connection-model-table-heading, .connection-page .connection-model-row { grid-template-columns: minmax(90px, 1fr) minmax(100px, 1fr) 40px 80px; gap: var(--space-2); }
   .connection-detail-quota .connection-usage-window { grid-template-columns: 120px minmax(80px, 1fr); }
   .connection-detail-quota .connection-usage-reset { grid-column: 2; text-align: start; }
