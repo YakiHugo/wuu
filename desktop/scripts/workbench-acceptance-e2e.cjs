@@ -527,9 +527,24 @@ db.commit()
     const before = await evaluate(selector => { const s = document.querySelector(selector); return { top: s.scrollTop, max: s.scrollHeight - s.clientHeight }; }, scroller);
     assert.ok(before.max > 500 && before.top < before.max - 200, 'Native wheel input leaves the reading tail');
     await capture('reading-anchor-before-navigation');
-    await click(plugins, 'draft-to-plugins');
     await goSettings('General');
+    await click(plugins, 'draft-to-plugins');
     await goConversations();
+    const back = '[data-wuu-component="page-history-back"]';
+    const forward = '[data-wuu-component="page-history-forward"]';
+    await click(back, 'history-back-to-extensions');
+    await waitFor(() => !!document.querySelector('.catalog-section-pane:not([hidden]) .skills-catalog')
+      && !document.querySelector('.app-shell').hasAttribute('data-settings-open'));
+    await click(back, 'history-back-to-settings');
+    await waitFor(() => document.querySelector('.app-shell').hasAttribute('data-settings-open')
+      && document.querySelector('[data-wuu-component="settings-page"]')?.dataset.wuuPage === 'general');
+    await click(forward, 'history-forward-to-extensions');
+    await waitFor(() => !!document.querySelector('.catalog-section-pane:not([hidden]) .skills-catalog')
+      && !document.querySelector('.app-shell').hasAttribute('data-settings-open'));
+    await click(forward, 'history-forward-to-conversation');
+    await waitFor(() => !document.querySelector('.app-shell').hasAttribute('data-settings-open')
+      && !document.querySelector('.catalog-section-pane:not([hidden])')
+      && document.querySelector('.cached-conversation-pane[data-active="true"]')?.dataset.threadId === 'acceptance-reading');
     const after = await evaluate(({ selector, input }) => ({ top: document.querySelector(selector).scrollTop, draft: document.querySelector(input).value }), { selector: scroller, input: composer });
     assert.equal(after.draft, 'Unsent acceptance draft: keep this exactly.');
     assert.ok(Math.abs(after.top - before.top) <= 8, `Reading position moved ${before.top} -> ${after.top}`);
@@ -537,7 +552,7 @@ db.commit()
     assert.equal(await evaluate(selector => document.querySelector(selector).value, composer), '');
     await selectThread('acceptance-reading');
     assert.equal(await evaluate(selector => document.querySelector(selector).value, composer), after.draft);
-    return { before, after };
+    return { before, after, history: ['conversation', 'extensions', 'settings:general', 'extensions', 'conversation'] };
   });
 
   await test('search opens by mouse, selects by Enter, and restores focus', async () => {
@@ -639,6 +654,7 @@ db.commit()
         return true;
       });
       assert.ok(toggleStayedClosed, 'Hovering the persistent toggle keeps the secondary pane collapsed');
+      await capture(`${section}-collapsed-toggle-hover`);
       const edge = await point('.app-shell > .sidebar-hover-zone', false);
       moveNativePointer(edge.x, edge.y);
       await waitFor(() => document.querySelector('.app-shell').classList.contains('sidebar-drawer-open'));
