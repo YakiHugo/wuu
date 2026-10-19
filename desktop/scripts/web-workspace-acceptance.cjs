@@ -281,7 +281,14 @@ async function runWebsiteAcceptance(h, fixture) {
     // Native chrome has a 120ms pointer-exit grace. Shell rAFs alone do not
     // acknowledge its dismissal; never replace this with Escape or forced blur.
     if (waitForCollapse) await until(async () => !chromeView('ribbon')?.getVisible()
-      && await evaluate(() => document.querySelector('.sidebar-ribbon')?.dataset.expanded !== 'true'), 'Native hover rail acknowledges pointer leave', 4000);
+      && await evaluate(() => {
+        const ribbon = document.querySelector('.sidebar-ribbon');
+        if (!ribbon || ribbon.dataset.expanded === 'true') return false;
+        // The marker clears before the closing width transition. A shell-only
+        // hit test cannot see the live native page covering a moving target.
+        ribbon.getBoundingClientRect();
+        return ribbon.getAnimations().every(animation => !animation.pending && animation.playState !== 'running');
+      }), 'Native hover rail acknowledges pointer leave and finishes motion', 4000);
   }
   async function hoverTab(id) {
     const p = await chromePoint(tabButton(id)), outer = win.getContentBounds(), zoom = win.webContents.getZoomFactor();
@@ -410,6 +417,19 @@ async function runWebsiteAcceptance(h, fixture) {
     const p = await chromePoint(target);
     const inRail = p.nativeChrome === 'ribbon' || await evaluate(p => Boolean(document.elementFromPoint(p.x, p.y)?.closest('.sidebar-ribbon')), p);
     const bounds = win.getContentBounds(), zoom = win.webContents.getZoomFactor();
+    if (inRail && !p.nativeChrome) {
+      const input = { x: Math.round(bounds.x + p.x * zoom) - bounds.x, y: Math.round(bounds.y + p.y * zoom) - bounds.y };
+      const coveringPages = views().filter(view => {
+        const rect = view.getBounds();
+        return view.getVisible() && input.x >= rect.x && input.x < rect.x + rect.width
+          && input.y >= rect.y && input.y < rect.y + rect.height;
+      }).map(view => ({ contentsID: view.webContents.id, bounds: view.getBounds() }));
+      if (coveringPages.length) {
+        report.actions.push({ label: `web-${label}-occluded-shell-target`, point: p, input, coveringPages });
+        save();
+      }
+      assert.equal(coveringPages.length, 0, `Shell ribbon target must not be covered by a live native page: ${JSON.stringify({ point: p, input, coveringPages })}`);
+    }
     xinput(['mousemove', String(Math.round(bounds.x + p.x * zoom)), String(Math.round(bounds.y + p.y * zoom)), 'click', '1']);
     report.actions.push({ label: `web-${label}`, input: 'native-x11', atMs: Date.now() - started, point: p });
     await settle();
