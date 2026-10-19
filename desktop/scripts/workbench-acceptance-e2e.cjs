@@ -138,6 +138,13 @@ function key(keyCode, modifiers = []) {
   win.webContents.sendInputEvent({ type: 'keyDown', keyCode, modifiers });
   win.webContents.sendInputEvent({ type: 'keyUp', keyCode, modifiers });
 }
+function moveNativePointer(x, y) {
+  const bounds = win.getContentBounds();
+  const zoom = win.webContents.getZoomFactor();
+  const moved = spawnSync('xdotool', ['mousemove', '--sync',
+    String(Math.round(bounds.x + x * zoom)), String(Math.round(bounds.y + y * zoom))], { encoding: 'utf8' });
+  assert.equal(moved.status, 0, moved.stderr || String(moved.error));
+}
 const activePane = '.cached-conversation-pane[data-active="true"]';
 const composer = '.conversation-pane .composer textarea';
 const scroller = '.conversation-pane > .scroll-region';
@@ -539,27 +546,31 @@ db.commit()
       if (section === 'settings') await goSettings('Appearance');
       const before = await point(leftToggle, false);
       await click(leftToggle, `collapse-${section}`);
-      win.webContents.sendInputEvent({ type: 'mouseMove', x: 800, y: 500 });
+      moveNativePointer(800, 500);
       await waitFor(() => document.querySelector('.app-shell').classList.contains('sidebar-collapsed')
         && !document.querySelector('.app-shell').classList.contains('sidebar-drawer-open'));
       const collapsed = await point(leftToggle, false);
       assert.equal(collapsed.x, before.x); assert.equal(collapsed.y, before.y);
       assert.ok(await point(conversations, false), 'Ribbon remains interactive when context is collapsed');
-      win.webContents.sendInputEvent({ type: 'mouseMove', x: collapsed.x, y: collapsed.y });
+      moveNativePointer(collapsed.x, collapsed.y);
       await waitFor(() => document.querySelector('.app-shell').classList.contains('sidebar-drawer-open'));
       await capture(`${section}-hover-drawer`);
       const hovered = await point(leftToggle, false);
       assert.equal(hovered.x, before.x); assert.equal(hovered.y, before.y);
       const focusTarget = section === 'settings' ? '.settings-search input' : '.conversation-search-trigger';
-      // Traverse with real keyboard input without activating Search, whose
-      // click correctly transfers focus into a separate modal instead.
-      for (let step = 0; step < 32; step++) {
-        if (await evaluate(selector => document.activeElement === document.querySelector(selector), focusTarget)) break;
-        key('Tab');
-        await delay(40);
-      }
+      // Start at an adjacent drawer control, then require native keyboard
+      // traversal into Search. The outer chrome toggle is last in DOM order
+      // for native drag-region safety, not the start of the sidebar tab order.
+      const focusAnchor = section === 'settings' ? '.settings-nav-item' : '.sidebar-notifications-button';
+      const anchorPoint = await point(focusAnchor, false);
+      moveNativePointer(anchorPoint.x, anchorPoint.y);
+      await evaluate(selector => document.querySelector(selector).focus(), focusAnchor);
+      await waitFor(selector => document.activeElement === document.querySelector(selector), focusAnchor);
+      key('Tab', section === 'settings' ? ['shift'] : []);
       await waitFor(selector => document.activeElement === document.querySelector(selector), focusTarget);
-      win.webContents.sendInputEvent({ type: 'mouseMove', x: 800, y: 500 });
+      assert.equal(await evaluate(() => document.documentElement.dataset.focusModality), 'keyboard');
+      await capture(`${section}-keyboard-focused-drawer`);
+      moveNativePointer(800, 500);
       await settle();
       await delay(400);
       assert.ok(await evaluate(selector => document.activeElement === document.querySelector(selector) && !document.activeElement.closest('[inert]'), focusTarget), 'Focused drawer contents remain reachable after pointer leaves');
@@ -574,7 +585,7 @@ db.commit()
       key('Left');
       await waitFor(({ selector, width }) => Number(document.querySelector(selector).getAttribute('aria-valuenow')) === width, { selector: resize, width });
       await capture(`${section}-keyboard-resized`);
-      runs.push({ section, before, collapsed, hovered, width, grown });
+      runs.push({ section, before, collapsed, hovered, focusAnchor, focusTarget, width, grown });
     }
     await goConversations(); return runs;
   });
